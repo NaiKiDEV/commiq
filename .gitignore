@@ -1,10 +1,30 @@
 node_modules
 dist
-.turbo
+build
 
 *.tsbuildinfo
-*.txt
+*.log
+
+.docusaurus
+.cache-loader
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+.idea
 
 .claude
 spec.md
 tech.md
+resume_seesion.txt
