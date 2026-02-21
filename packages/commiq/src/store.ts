@@ -17,7 +17,7 @@ export const builtinEventDefs = {
   commandStarted: createEvent<{ command: Command }>("commandStarted"),
   invalidCommand: createEvent<{ command: Command }>("invalidCommand"),
   commandHandlingError: createEvent<{ command: Command; error: unknown }>(
-    "commandHandlingError"
+    "commandHandlingError",
   ),
   stateReset: createEvent("stateReset"),
 } as const;
@@ -29,7 +29,6 @@ interface HandlerEntry<S> {
 
 export class StoreImpl<S> {
   private _state: S;
-  private _initialState: S;
   private _commandHandlers = new Map<string, HandlerEntry<S>>();
   private _eventHandlers = new Map<symbol, EventHandler<S, any>[]>();
   private _streamListeners = new Set<StreamListener>();
@@ -39,7 +38,6 @@ export class StoreImpl<S> {
 
   constructor(initialState: S) {
     this._state = initialState;
-    this._initialState = initialState;
   }
 
   get state(): S {
@@ -49,7 +47,7 @@ export class StoreImpl<S> {
   addCommandHandler<D = unknown>(
     name: string,
     handler: CommandHandler<S, D>,
-    options?: CommandHandlerOptions
+    options?: CommandHandlerOptions,
   ): this {
     this._commandHandlers.set(name, {
       handler: handler as CommandHandler<S>,
@@ -58,10 +56,7 @@ export class StoreImpl<S> {
     return this;
   }
 
-  addEventHandler<D>(
-    eventDef: EventDef<D>,
-    handler: EventHandler<S, D>
-  ): this {
+  addEventHandler<D>(eventDef: EventDef<D>, handler: EventHandler<S, D>): this {
     const handlers = this._eventHandlers.get(eventDef.id) ?? [];
     handlers.push(handler);
     this._eventHandlers.set(eventDef.id, handlers);

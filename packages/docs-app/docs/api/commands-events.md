@@ -1,0 +1,110 @@
+---
+sidebar_position: 2
+sidebar_label: Commands & Events
+---
+
+# Commands & Events
+
+## `createCommand(name, data)`
+
+Creates a command object to be queued on a store.
+
+```ts
+import { createCommand } from "@naikidev/commiq";
+
+const cmd = createCommand("addTodo", { text: "Buy milk" });
+// { name: "addTodo", data: { text: "Buy milk" } }
+```
+
+Tip: wrap in factory functions for a clean API:
+
+```ts
+export const addTodo = (text: string) => createCommand("addTodo", text);
+export const toggleTodo = (id: number) => createCommand("toggleTodo", id);
+```
+
+## `createEvent<D>(name)`
+
+Creates an event definition. The returned object contains a unique `symbol` id — this ensures events are matched by identity, not string comparison.
+
+```ts
+import { createEvent } from "@naikidev/commiq";
+
+const userCreated = createEvent<{ name: string }>("userCreated");
+```
+
+Use it to emit from a handler:
+
+```ts
+store.addCommandHandler("createUser", (ctx, cmd) => {
+  ctx.setState({ user: cmd.data });
+  ctx.emit(userCreated, { name: cmd.data.name });
+});
+```
+
+And to listen:
+
+```ts
+store.addEventHandler(userCreated, (ctx, event) => {
+  ctx.queue(createCommand("sendEmail", { to: event.data.name }));
+});
+```
+
+## `handledEvent(commandName)`
+
+Creates an event definition matching the auto-notify naming convention (`<commandName>:handled`). Useful when subscribing to auto-notified command events.
+
+```ts
+import { handledEvent } from "@naikidev/commiq";
+
+const incHandled = handledEvent("increment");
+// { id: Symbol("increment:handled"), name: "increment:handled" }
+```
+
+To auto-notify, set `notify: true` on the handler:
+
+```ts
+store.addCommandHandler("increment", handler, { notify: true });
+```
+
+## `sealStore(store)`
+
+Wraps a store in a read-only proxy that only exposes:
+
+- `state` — current state (getter)
+- `queue(command)` — dispatch a command
+- `openStream(listener)` / `closeStream(listener)` — subscribe to events
+
+```ts
+import { sealStore } from "@naikidev/commiq";
+
+const sealed = sealStore(store);
+sealed.state;           // ✅
+sealed.queue(cmd);      // ✅
+sealed.addCommandHandler; // ❌ undefined
+```
+
+## `createEventBus()`
+
+Creates a bus that routes events between multiple stores.
+
+```ts
+import { createEventBus } from "@naikidev/commiq";
+
+const bus = createEventBus();
+bus.connect(storeA);
+bus.connect(storeB);
+
+bus.on(userCreated, (event) => {
+  storeB.queue(createCommand("greet", { name: event.data.name }));
+});
+
+// Later, disconnect:
+bus.disconnect(storeA);
+```
+
+| Method        | Description                              |
+| ------------- | ---------------------------------------- |
+| `connect`     | Subscribe the bus to a store's stream    |
+| `disconnect`  | Unsubscribe from a store's stream        |
+| `on`          | Register a handler for a specific event  |
