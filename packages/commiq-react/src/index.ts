@@ -16,8 +16,6 @@ import type {
 } from "@naikidev/commiq";
 import { builtinEvents } from "@naikidev/commiq";
 
-// --- Context / Provider ---
-
 interface CommiqContextValue {
   stores: Record<string, SealedStore<any>>;
 }
@@ -30,18 +28,12 @@ export interface CommiqProviderProps {
 }
 
 export function CommiqProvider({ stores, children }: CommiqProviderProps) {
-  return createElement(
-    CommiqContext.Provider,
-    { value: { stores } },
-    children
-  );
+  return createElement(CommiqContext.Provider, { value: { stores } }, children);
 }
-
-// --- useSelector ---
 
 export function useSelector<S, T>(
   store: SealedStore<S>,
-  selector: (state: S) => T
+  selector: (state: S) => T,
 ): T {
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
@@ -56,7 +48,7 @@ export function useSelector<S, T>(
       store.openStream(listener);
       return () => store.closeStream(listener);
     },
-    [store]
+    [store],
   );
 
   const getSnapshot = useCallback(() => {
@@ -66,25 +58,19 @@ export function useSelector<S, T>(
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-// --- useQueue ---
-
-export function useQueue<S>(
-  store: SealedStore<S>
-): (command: Command) => void {
+export function useQueue<S>(store: SealedStore<S>): (command: Command) => void {
   return useCallback(
     (command: Command) => {
       store.queue(command);
     },
-    [store]
+    [store],
   );
 }
-
-// --- useEvent ---
 
 export function useEvent<D>(
   store: SealedStore<any>,
   eventDef: EventDef<D>,
-  handler: (event: StoreEvent<D>) => void
+  handler: (event: StoreEvent<D>) => void,
 ): void {
   const handlerRef = useRef(handler);
   handlerRef.current = handler;

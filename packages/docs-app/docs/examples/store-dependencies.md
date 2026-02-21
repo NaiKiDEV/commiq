@@ -30,11 +30,16 @@ The inventory store doesn't know about the cart. The cart store doesn't know abo
 
 ```ts
 import {
-  createStore, createCommand, createEvent, sealStore,
+  createStore,
+  createCommand,
+  createEvent,
+  sealStore,
 } from "@naikidev/commiq";
 
 // Events shared between stores
-const stockReserved = createEvent<{ productId: number; qty: number }>("stockReserved");
+const stockReserved = createEvent<{ productId: number; qty: number }>(
+  "stockReserved",
+);
 const outOfStock = createEvent<{ productId: number }>("outOfStock");
 
 // ── Inventory Store ──
@@ -58,11 +63,11 @@ _inventoryStore.addCommandHandler<{ productId: number; qty: number }>(
 
     ctx.setState({
       products: ctx.state.products.map((p) =>
-        p.id === productId ? { ...p, stock: p.stock - qty } : p
+        p.id === productId ? { ...p, stock: p.stock - qty } : p,
       ),
     });
     ctx.emit(stockReserved, { productId, qty });
-  }
+  },
 );
 
 export const inventoryStore = sealStore(_inventoryStore);
@@ -70,16 +75,16 @@ export const inventoryStore = sealStore(_inventoryStore);
 // ── Cart Store ──
 const _cartStore = createStore<CartState>({ items: [], lastError: "" });
 
-_cartStore
-  .addCommandHandler<{ productId: number; name: string; price: number }>(
-    "addToCart",
-    (ctx, cmd) => {
-      ctx.setState({
-        ...ctx.state,
-        items: [...ctx.state.items, { ...cmd.data, qty: 1 }],
-      });
-    }
-  );
+_cartStore.addCommandHandler<{
+  productId: number;
+  name: string;
+  price: number;
+}>("addToCart", (ctx, cmd) => {
+  ctx.setState({
+    ...ctx.state,
+    items: [...ctx.state.items, { ...cmd.data, qty: 1 }],
+  });
+});
 
 export const cartStore = sealStore(_cartStore);
 ```
@@ -96,7 +101,7 @@ bus.connect(_cartStore);
 // When stock is reserved → add item to cart
 bus.on(stockReserved, (event) => {
   const product = _inventoryStore.state.products.find(
-    (p) => p.id === event.data.productId
+    (p) => p.id === event.data.productId,
   );
   if (product) {
     _cartStore.queue(
@@ -104,7 +109,7 @@ bus.on(stockReserved, (event) => {
         productId: product.id,
         name: product.name,
         price: product.price,
-      })
+      }),
     );
   }
 });
@@ -130,7 +135,9 @@ function ShopPage() {
           key={p.id}
           disabled={p.stock === 0}
           onClick={() =>
-            queueInventory(createCommand("reserveStock", { productId: p.id, qty: 1 }))
+            queueInventory(
+              createCommand("reserveStock", { productId: p.id, qty: 1 }),
+            )
           }
         >
           {p.name} ({p.stock} left)

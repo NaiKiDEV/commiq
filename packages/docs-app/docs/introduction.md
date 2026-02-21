@@ -11,14 +11,14 @@ Instead of directly mutating state, you describe _what should happen_ via **comm
 
 ## Key Concepts
 
-| Concept         | Description                                                    |
-| --------------- | -------------------------------------------------------------- |
-| **Command**     | A request to do something — dispatched via `queue()`           |
-| **Handler**     | A function that processes a command and updates state           |
-| **Event**       | A notification that something happened — emitted by handlers   |
-| **Store**       | Holds state, routes commands to handlers, broadcasts events    |
-| **Sealed Store**| A read-only proxy exposing only `state`, `queue`, and streams  |
-| **Event Bus**   | Routes events between multiple stores                          |
+| Concept          | Description                                                   |
+| ---------------- | ------------------------------------------------------------- |
+| **Command**      | A request to do something — dispatched via `queue()`          |
+| **Handler**      | A function that processes a command and updates state         |
+| **Event**        | A notification that something happened — emitted by handlers  |
+| **Store**        | Holds state, routes commands to handlers, broadcasts events   |
+| **Sealed Store** | A read-only proxy exposing only `state`, `queue`, and streams |
+| **Event Bus**    | Routes events between multiple stores                         |
 
 ## Packages
 

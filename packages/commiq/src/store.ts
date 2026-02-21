@@ -103,14 +103,12 @@ export class StoreImpl<S> {
         continue;
       }
 
-      // Broadcast commandStarted
       await this._broadcast({
         id: builtinEventDefs.commandStarted.id,
         name: builtinEventDefs.commandStarted.name,
         data: { command },
       });
 
-      // Collect events emitted during handler execution
       const collectedEvents: StoreEvent[] = [];
       const prevState = this._state;
 
@@ -132,7 +130,6 @@ export class StoreImpl<S> {
       try {
         await entry.handler(ctx, command);
 
-        // Broadcast stateChanged if state changed
         if (this._state !== prevState) {
           await this._broadcast({
             id: builtinEventDefs.stateChanged.id,
@@ -141,19 +138,16 @@ export class StoreImpl<S> {
           });
         }
 
-        // Broadcast collected events
         for (const event of collectedEvents) {
           await this._broadcast(event);
         }
 
-        // Broadcast commandHandled
         await this._broadcast({
           id: builtinEventDefs.commandHandled.id,
           name: builtinEventDefs.commandHandled.name,
           data: { command },
         });
 
-        // Auto-notify if option set
         if (entry.options?.notify) {
           const notifyEvent = createEvent(`${command.name}:handled`);
           await this._broadcast({
@@ -173,7 +167,6 @@ export class StoreImpl<S> {
 
     this._processing = false;
 
-    // Resolve all flush promises
     const resolvers = this._flushResolvers.splice(0);
     for (const resolve of resolvers) {
       resolve();
@@ -181,12 +174,10 @@ export class StoreImpl<S> {
   }
 
   private async _broadcast(event: StoreEvent): Promise<void> {
-    // Notify stream listeners
     for (const listener of this._streamListeners) {
       listener(event);
     }
 
-    // Handle event handlers
     await this._handleEvent(event);
   }
 

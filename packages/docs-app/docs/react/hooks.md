@@ -42,6 +42,7 @@ function Counter() {
 ```
 
 **Key behaviors:**
+
 - Only re-renders when the selected value changes (referential equality)
 - Subscribes to `stateChanged` builtin events
 
@@ -65,6 +66,7 @@ function IncrementButton() {
 ```
 
 **Key behaviors:**
+
 - Returns a referentially stable function (safe in dependency arrays)
 
 ## `useEvent(store, eventDef, handler)`
@@ -90,5 +92,6 @@ function ResetNotifier() {
 ```
 
 **Key behaviors:**
+
 - Uses a ref for the handler so it always calls the latest version
 - Cleans up on unmount — no stale listeners

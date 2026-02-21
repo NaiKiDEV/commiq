@@ -9,14 +9,7 @@ import {
   clearError,
   outOfStock,
 } from "../stores/shop.store";
-import {
-  PageHeader,
-  Card,
-  CardHeader,
-  CardBody,
-  Button,
-  Badge,
-} from "./ui";
+import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
 
 export function StoreDepsPage() {
   const products = useSelector(inventoryStore, (s) => s.products);
@@ -25,7 +18,6 @@ export function StoreDepsPage() {
   const queueInventory = useQueue(inventoryStore);
   const queueCart = useQueue(cartStore);
 
-  // Auto-dismiss errors
   useEffect(() => {
     if (lastError) {
       const t = setTimeout(() => queueCart(clearError()), 3000);
@@ -42,18 +34,26 @@ export function StoreDepsPage() {
         description="Two stores (Inventory + Cart) communicate through an Event Bus. Adding to cart reserves stock via a command on the inventory store, which emits stockReserved — the bus then routes it to add the item to the cart store."
       />
 
-      {/* Error toast */}
       {lastError && (
         <div className="mb-6 flex items-center gap-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-700 dark:text-red-300">
-          <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <svg
+            className="w-4 h-4 shrink-0"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
           </svg>
           {lastError}
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-5">
-        {/* Inventory */}
         <div className="lg:col-span-3">
           <Card>
             <CardHeader title="Inventory" badge="inventoryStore" />
@@ -88,7 +88,6 @@ export function StoreDepsPage() {
           </Card>
         </div>
 
-        {/* Cart */}
         <div className="lg:col-span-2">
           <Card>
             <CardHeader title="Cart" badge="cartStore" />
@@ -116,9 +115,7 @@ export function StoreDepsPage() {
                       variant="danger"
                       onClick={() => {
                         queueCart(removeFromCart(item.productId));
-                        queueInventory(
-                          releaseStock(item.productId, item.qty)
-                        );
+                        queueInventory(releaseStock(item.productId, item.qty));
                       }}
                     >
                       Remove
@@ -135,7 +132,6 @@ export function StoreDepsPage() {
             </CardBody>
           </Card>
 
-          {/* Explainer */}
           <div className="mt-4 rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
             <p>flow: Add button → inventoryStore.queue(reserveStock)</p>
             <p>→ handler emits stockReserved event</p>

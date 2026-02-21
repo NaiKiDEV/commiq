@@ -1,4 +1,10 @@
 node_modules
 dist
 .turbo
+
 *.tsbuildinfo
+*.txt
+
+.claude
+spec.md
+tech.md

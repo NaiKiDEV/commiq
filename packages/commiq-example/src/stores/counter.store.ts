@@ -5,13 +5,9 @@ import {
   sealStore,
 } from "@naikidev/commiq";
 
-// --- State ---
-
 export interface CounterState {
   count: number;
 }
-
-// --- Events ---
 
 export const counterReset = createEvent("counter:reset");
 
@@ -22,8 +18,6 @@ export const decrement = () => createCommand("decrement", undefined);
 export const reset = () => createCommand("reset", undefined);
 export const incrementBy = (amount: number) =>
   createCommand("incrementBy", amount);
-
-// --- Store ---
 
 const _counterStore = createStore<CounterState>({ count: 0 });
 

@@ -2,15 +2,21 @@ import React from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 const nav = [
-  { label: "Basic", children: [
-    { to: "/", label: "Counter" },
-    { to: "/todos", label: "Todo List" },
-  ]},
-  { label: "Advanced", children: [
-    { to: "/store-deps", label: "Store Dependencies" },
-    { to: "/async", label: "Async Commands" },
-    { to: "/stream", label: "Event Stream" },
-  ]},
+  {
+    label: "Basic",
+    children: [
+      { to: "/", label: "Counter" },
+      { to: "/todos", label: "Todo List" },
+    ],
+  },
+  {
+    label: "Advanced",
+    children: [
+      { to: "/store-deps", label: "Store Dependencies" },
+      { to: "/async", label: "Async Commands" },
+      { to: "/stream", label: "Event Stream" },
+    ],
+  },
 ];
 
 function SidebarLink({ to, label }: { to: string; label: string }) {
@@ -34,7 +40,6 @@ function SidebarLink({ to, label }: { to: string; label: string }) {
 export function Layout() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      {/* Top bar */}
       <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
         <div className="max-w-7xl mx-auto flex items-center h-14 px-6">
           <span className="text-lg font-bold tracking-tight text-indigo-600 dark:text-indigo-400">
@@ -58,7 +63,6 @@ export function Layout() {
       </header>
 
       <div className="max-w-7xl mx-auto flex">
-        {/* Sidebar */}
         <aside className="hidden md:block w-56 shrink-0 border-r border-zinc-200 dark:border-zinc-800 py-6 pr-4 pl-6 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto">
           {nav.map((group) => (
             <div key={group.label} className="mb-5">
@@ -74,7 +78,6 @@ export function Layout() {
           ))}
         </aside>
 
-        {/* Main */}
         <main className="flex-1 min-w-0 px-6 py-8 md:px-10">
           <Outlet />
         </main>

@@ -6,8 +6,6 @@ import {
   sealStore,
 } from "@naikidev/commiq";
 
-// ── Product catalog (inventory store) ──
-
 export interface Product {
   id: number;
   name: string;
@@ -20,10 +18,10 @@ export interface InventoryState {
 }
 
 export const stockReserved = createEvent<{ productId: number; qty: number }>(
-  "stockReserved"
+  "stockReserved",
 );
 export const stockReleased = createEvent<{ productId: number; qty: number }>(
-  "stockReleased"
+  "stockReleased",
 );
 export const outOfStock = createEvent<{ productId: number }>("outOfStock");
 
@@ -48,11 +46,11 @@ _inventoryStore
       }
       ctx.setState({
         products: ctx.state.products.map((p) =>
-          p.id === productId ? { ...p, stock: p.stock - qty } : p
+          p.id === productId ? { ...p, stock: p.stock - qty } : p,
         ),
       });
       ctx.emit(stockReserved, { productId, qty });
-    }
+    },
   )
   .addCommandHandler<{ productId: number; qty: number }>(
     "releaseStock",
@@ -60,16 +58,14 @@ _inventoryStore
       const { productId, qty } = cmd.data;
       ctx.setState({
         products: ctx.state.products.map((p) =>
-          p.id === productId ? { ...p, stock: p.stock + qty } : p
+          p.id === productId ? { ...p, stock: p.stock + qty } : p,
         ),
       });
       ctx.emit(stockReleased, { productId, qty });
-    }
+    },
   );
 
 export const inventoryStore = sealStore(_inventoryStore);
-
-// ── Cart store ──
 
 export interface CartItem {
   productId: number;
@@ -95,7 +91,7 @@ _cartStore
         ctx.setState({
           ...ctx.state,
           items: ctx.state.items.map((i) =>
-            i.productId === productId ? { ...i, qty: i.qty + 1 } : i
+            i.productId === productId ? { ...i, qty: i.qty + 1 } : i,
           ),
         });
       } else {
@@ -104,18 +100,16 @@ _cartStore
           items: [...ctx.state.items, { productId, name, price, qty: 1 }],
         });
       }
-    }
+    },
   )
   .addCommandHandler<{ productId: number }>("removeFromCart", (ctx, cmd) => {
     const item = ctx.state.items.find(
-      (i) => i.productId === cmd.data.productId
+      (i) => i.productId === cmd.data.productId,
     );
     if (!item) return;
     ctx.setState({
       ...ctx.state,
-      items: ctx.state.items.filter(
-        (i) => i.productId !== cmd.data.productId
-      ),
+      items: ctx.state.items.filter((i) => i.productId !== cmd.data.productId),
     });
   })
   .addCommandHandler<string>("setError", (ctx, cmd) => {
@@ -127,16 +121,13 @@ _cartStore
 
 export const cartStore = sealStore(_cartStore);
 
-// ── Event bus wiring ──
-
 export const shopBus = createEventBus();
 shopBus.connect(_inventoryStore);
 shopBus.connect(_cartStore);
 
-// When stock is reserved → add item to cart
 shopBus.on(stockReserved, (event) => {
   const product = _inventoryStore.state.products.find(
-    (p) => p.id === event.data.productId
+    (p) => p.id === event.data.productId,
   );
   if (!product) return;
   _cartStore.queue(
@@ -144,24 +135,22 @@ shopBus.on(stockReserved, (event) => {
       productId: product.id,
       name: product.name,
       price: product.price,
-    })
+    }),
   );
 });
 
-// When out of stock → show error on cart
 shopBus.on(outOfStock, (event) => {
   const product = _inventoryStore.state.products.find(
-    (p) => p.id === event.data.productId
+    (p) => p.id === event.data.productId,
   );
   _cartStore.queue(
     createCommand(
       "setError",
-      `"${product?.name ?? "Product"}" is out of stock`
-    )
+      `"${product?.name ?? "Product"}" is out of stock`,
+    ),
   );
 });
 
-// Helper commands
 export const reserveStock = (productId: number) =>
   createCommand("reserveStock", { productId, qty: 1 });
 export const releaseStock = (productId: number, qty: number) =>

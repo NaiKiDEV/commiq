@@ -1,10 +1,4 @@
-import {
-  createStore,
-  createCommand,
-  sealStore,
-} from "@naikidev/commiq";
-
-// --- State ---
+import { createStore, createCommand, sealStore } from "@naikidev/commiq";
 
 export interface Todo {
   id: number;
@@ -17,13 +11,9 @@ export interface TodoState {
   nextId: number;
 }
 
-// --- Commands ---
-
 export const addTodo = (text: string) => createCommand("addTodo", text);
 export const toggleTodo = (id: number) => createCommand("toggleTodo", id);
 export const removeTodo = (id: number) => createCommand("removeTodo", id);
-
-// --- Store ---
 
 const _todoStore = createStore<TodoState>({ todos: [], nextId: 1 });
 
@@ -39,7 +29,7 @@ _todoStore
     ctx.setState({
       ...ctx.state,
       todos: ctx.state.todos.map((t) =>
-        t.id === cmd.data ? { ...t, done: !t.done } : t
+        t.id === cmd.data ? { ...t, done: !t.done } : t,
       ),
     });
   })

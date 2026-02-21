@@ -84,8 +84,7 @@ export function Button({
   const variants = {
     default:
       "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700",
-    primary:
-      "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm",
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm",
     danger:
       "bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900",
     ghost:
@@ -112,10 +111,12 @@ export function Badge({
 }) {
   const colors = {
     zinc: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400",
-    green: "bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400",
+    green:
+      "bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400",
     red: "bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400",
     amber: "bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400",
-    indigo: "bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400",
+    indigo:
+      "bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400",
   };
   return (
     <span

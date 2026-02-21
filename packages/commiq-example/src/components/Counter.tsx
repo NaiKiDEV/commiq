@@ -8,13 +8,7 @@ import {
   reset,
   incrementBy,
 } from "../stores/counter.store";
-import {
-  PageHeader,
-  Card,
-  CardHeader,
-  CardBody,
-  Button,
-} from "./ui";
+import { PageHeader, Card, CardHeader, CardBody, Button } from "./ui";
 
 export function CounterPage() {
   const count = useSelector(counterStore, (s) => s.count);
@@ -35,7 +29,6 @@ export function CounterPage() {
       />
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Counter display */}
         <Card>
           <CardHeader title="Value" badge="useSelector" />
           <CardBody className="flex flex-col items-center gap-4">
@@ -62,7 +55,6 @@ export function CounterPage() {
           </CardBody>
         </Card>
 
-        {/* Controls */}
         <Card>
           <CardHeader title="Options" />
           <CardBody className="space-y-4">
@@ -78,7 +70,9 @@ export function CounterPage() {
               />
             </label>
             <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
-              <p>store.state = {"{"} count: {count} {"}"}</p>
+              <p>
+                store.state = {"{"} count: {count} {"}"}
+              </p>
               <p>handlers: increment, decrement, incrementBy, reset</p>
               <p>events: counterReset (custom)</p>
             </div>

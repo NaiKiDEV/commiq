@@ -20,10 +20,9 @@ describe("useSelector", () => {
     const store = createStore({ count: 5 });
     const sealed = sealStore(store);
 
-    const { result } = renderHook(
-      () => useSelector(sealed, (s) => s.count),
-      { wrapper: createWrapper({ counter: sealed }) }
-    );
+    const { result } = renderHook(() => useSelector(sealed, (s) => s.count), {
+      wrapper: createWrapper({ counter: sealed }),
+    });
 
     expect(result.current).toBe(5);
   });
@@ -35,10 +34,9 @@ describe("useSelector", () => {
     });
     const sealed = sealStore(store);
 
-    const { result } = renderHook(
-      () => useSelector(sealed, (s) => s.count),
-      { wrapper: createWrapper({ counter: sealed }) }
-    );
+    const { result } = renderHook(() => useSelector(sealed, (s) => s.count), {
+      wrapper: createWrapper({ counter: sealed }),
+    });
 
     expect(result.current).toBe(0);
 
@@ -63,7 +61,7 @@ describe("useSelector", () => {
         renderCount();
         return useSelector(sealed, (s) => s.count);
       },
-      { wrapper: createWrapper({ user: sealed }) }
+      { wrapper: createWrapper({ user: sealed }) },
     );
 
     const initialRenderCount = renderCount.mock.calls.length;
@@ -133,7 +131,7 @@ describe("useEvent", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { name: "Alice" } })
+      expect.objectContaining({ data: { name: "Alice" } }),
     );
   });
 
@@ -146,10 +144,9 @@ describe("useEvent", () => {
     const sealed = sealStore(store);
     const handler = vi.fn();
 
-    const { unmount } = renderHook(
-      () => useEvent(sealed, evt, handler),
-      { wrapper: createWrapper({ s: sealed }) }
-    );
+    const { unmount } = renderHook(() => useEvent(sealed, evt, handler), {
+      wrapper: createWrapper({ s: sealed }),
+    });
 
     unmount();
 
@@ -167,10 +164,9 @@ describe("CommiqProvider", () => {
     const store = createStore({ value: 42 });
     const sealed = sealStore(store);
 
-    const { result } = renderHook(
-      () => useSelector(sealed, (s) => s.value),
-      { wrapper: createWrapper({ myStore: sealed }) }
-    );
+    const { result } = renderHook(() => useSelector(sealed, (s) => s.value), {
+      wrapper: createWrapper({ myStore: sealed }),
+    });
 
     expect(result.current).toBe(42);
   });

@@ -33,7 +33,6 @@ export function TodoPage() {
       <Card>
         <CardHeader title="Todos" badge={`${done}/${todos.length} done`} />
         <CardBody className="space-y-4">
-          {/* Add form */}
           <form onSubmit={handleSubmit} className="flex gap-2">
             <input
               value={text}
@@ -46,7 +45,6 @@ export function TodoPage() {
             </Button>
           </form>
 
-          {/* List */}
           <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
             {todos.map((todo) => (
               <li

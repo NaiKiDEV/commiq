@@ -30,12 +30,14 @@ _asyncStore
   .addCommandHandler("fetchUsers", async (ctx) => {
     ctx.setState({ ...ctx.state, loading: true, error: "" });
 
-    // Simulate network delay
     await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
 
-    // Simulate occasional failure
     if (Math.random() < 0.2) {
-      ctx.setState({ ...ctx.state, loading: false, error: "Network error — try again" });
+      ctx.setState({
+        ...ctx.state,
+        loading: false,
+        error: "Network error — try again",
+      });
       ctx.emit(fetchFailed, { error: "Network error" });
       return;
     }
@@ -67,7 +69,7 @@ _asyncStore
   });
 
 export const asyncStore = sealStore(_asyncStore);
-export const internalAsyncStore = _asyncStore; // for flush in UI
+export const internalAsyncStore = _asyncStore;
 
 export const fetchUsers = () => createCommand("fetchUsers", undefined);
 export const clearUsers = () => createCommand("clearUsers", undefined);

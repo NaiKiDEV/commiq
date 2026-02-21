@@ -29,17 +29,17 @@ store.addCommandHandler("increment", (ctx) => {
 
 ### Handler Context (`CommandContext<S>`)
 
-| Property   | Type                                  | Description                     |
-| ---------- | ------------------------------------- | ------------------------------- |
-| `state`    | `S`                                   | Current state (updated live)    |
-| `setState` | `(next: S) => void`                   | Replace the state               |
-| `emit`     | `(eventDef, data) => void`            | Emit a custom event             |
+| Property   | Type                       | Description                  |
+| ---------- | -------------------------- | ---------------------------- |
+| `state`    | `S`                        | Current state (updated live) |
+| `setState` | `(next: S) => void`        | Replace the state            |
+| `emit`     | `(eventDef, data) => void` | Emit a custom event          |
 
 ### Options
 
-| Option   | Type      | Default | Description                                      |
-| -------- | --------- | ------- | ------------------------------------------------ |
-| `notify` | `boolean` | `false` | Auto-emit a `<commandName>:handled` event        |
+| Option   | Type      | Default | Description                               |
+| -------- | --------- | ------- | ----------------------------------------- |
+| `notify` | `boolean` | `false` | Auto-emit a `<commandName>:handled` event |
 
 ## `store.addEventHandler(eventDef, handler)`
 
@@ -57,10 +57,10 @@ store.addEventHandler(userCreated, (ctx, event) => {
 
 ### Event Handler Context (`EventContext<S>`)
 
-| Property | Type                        | Description             |
-| -------- | --------------------------- | ----------------------- |
-| `state`  | `S`                         | Current state (readonly)|
-| `queue`  | `(command: Command) => void`| Queue a new command     |
+| Property | Type                         | Description              |
+| -------- | ---------------------------- | ------------------------ |
+| `state`  | `S`                          | Current state (readonly) |
+| `queue`  | `(command: Command) => void` | Queue a new command      |
 
 ## `store.queue(command)`
 
@@ -95,14 +95,14 @@ store.closeStream(listener);
 
 These events are emitted automatically by the store:
 
-| Event                    | Data                              | When                                    |
-| ------------------------ | --------------------------------- | --------------------------------------- |
-| `stateChanged`           | `{ prev, next }`                  | State was updated by a handler          |
-| `commandStarted`         | `{ command }`                     | A command is about to be handled        |
-| `commandHandled`         | `{ command }`                     | A command was successfully handled      |
-| `invalidCommand`         | `{ command }`                     | No handler registered for the command   |
-| `commandHandlingError`   | `{ command, error }`              | A handler threw an error                |
-| `stateReset`             | `void`                            | State was reset                         |
+| Event                  | Data                 | When                                  |
+| ---------------------- | -------------------- | ------------------------------------- |
+| `stateChanged`         | `{ prev, next }`     | State was updated by a handler        |
+| `commandStarted`       | `{ command }`        | A command is about to be handled      |
+| `commandHandled`       | `{ command }`        | A command was successfully handled    |
+| `invalidCommand`       | `{ command }`        | No handler registered for the command |
+| `commandHandlingError` | `{ command, error }` | A handler threw an error              |
+| `stateReset`           | `void`               | State was reset                       |
 
 Access them via:
 

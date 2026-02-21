@@ -79,8 +79,8 @@ Wraps a store in a read-only proxy that only exposes:
 import { sealStore } from "@naikidev/commiq";
 
 const sealed = sealStore(store);
-sealed.state;           // ✅
-sealed.queue(cmd);      // ✅
+sealed.state; // ✅
+sealed.queue(cmd); // ✅
 sealed.addCommandHandler; // ❌ undefined
 ```
 
@@ -103,8 +103,8 @@ bus.on(userCreated, (event) => {
 bus.disconnect(storeA);
 ```
 
-| Method        | Description                              |
-| ------------- | ---------------------------------------- |
-| `connect`     | Subscribe the bus to a store's stream    |
-| `disconnect`  | Unsubscribe from a store's stream        |
-| `on`          | Register a handler for a specific event  |
+| Method       | Description                             |
+| ------------ | --------------------------------------- |
+| `connect`    | Subscribe the bus to a store's stream   |
+| `disconnect` | Unsubscribe from a store's stream       |
+| `on`         | Register a handler for a specific event |

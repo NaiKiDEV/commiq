@@ -1,7 +1,7 @@
-import type {ReactNode} from 'react';
-import clsx from 'clsx';
-import Heading from '@theme/Heading';
-import styles from './styles.module.css';
+import type { ReactNode } from "react";
+import clsx from "clsx";
+import Heading from "@theme/Heading";
+import styles from "./styles.module.css";
 
 type FeatureItem = {
   title: string;
@@ -11,8 +11,8 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Command Driven',
-    emoji: '📨',
+    title: "Command Driven",
+    emoji: "📨",
     description: (
       <>
         Describe <em>what should happen</em> via commands. Handlers decide how
@@ -21,8 +21,8 @@ const FeatureList: FeatureItem[] = [
     ),
   },
   {
-    title: 'Event Based',
-    emoji: '⚡',
+    title: "Event Based",
+    emoji: "⚡",
     description: (
       <>
         Handlers emit events to notify other stores or UI. Built-in events like
@@ -32,11 +32,11 @@ const FeatureList: FeatureItem[] = [
     ),
   },
   {
-    title: 'React Ready',
-    emoji: '⚛️',
+    title: "React Ready",
+    emoji: "⚛️",
     description: (
       <>
-        First-class React bindings with <code>useSelector</code>,{' '}
+        First-class React bindings with <code>useSelector</code>,{" "}
         <code>useQueue</code>, and <code>useEvent</code> — powered by
         <code> useSyncExternalStore</code>.
       </>
@@ -44,10 +44,10 @@ const FeatureList: FeatureItem[] = [
   },
 ];
 
-function Feature({title, emoji, description}: FeatureItem) {
+function Feature({ title, emoji, description }: FeatureItem) {
   return (
-    <div className={clsx('col col--4')}>
-      <div className="text--center" style={{fontSize: '3rem'}}>
+    <div className={clsx("col col--4")}>
+      <div className="text--center" style={{ fontSize: "3rem" }}>
         {emoji}
       </div>
       <div className="text--center padding-horiz--md">

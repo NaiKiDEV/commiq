@@ -1,40 +1,40 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
-import type * as Preset from '@docusaurus/preset-classic';
+import { themes as prismThemes } from "prism-react-renderer";
+import type { Config } from "@docusaurus/types";
+import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: 'Commiq',
-  tagline: 'Command & event driven state management',
-  favicon: 'img/favicon.ico',
+  title: "Commiq",
+  tagline: "Command & event driven state management",
+  favicon: "img/favicon.ico",
 
   future: {
     v4: true,
   },
 
-  url: 'https://commiq.dev',
-  baseUrl: '/',
+  url: "https://commiq.dev",
+  baseUrl: "/",
 
-  organizationName: 'naikidev',
-  projectName: 'commiq',
+  organizationName: "naikidev",
+  projectName: "commiq",
 
-  onBrokenLinks: 'throw',
+  onBrokenLinks: "throw",
 
   i18n: {
-    defaultLocale: 'en',
-    locales: ['en'],
+    defaultLocale: "en",
+    locales: ["en"],
   },
 
   presets: [
     [
-      'classic',
+      "classic",
       {
         docs: {
-          sidebarPath: './sidebars.ts',
-          routeBasePath: 'docs',
+          sidebarPath: "./sidebars.ts",
+          routeBasePath: "docs",
         },
         blog: false,
         theme: {
-          customCss: './src/css/custom.css',
+          customCss: "./src/css/custom.css",
         },
       } satisfies Preset.Options,
     ],
@@ -45,64 +45,64 @@ const config: Config = {
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'Commiq',
+      title: "Commiq",
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'tutorialSidebar',
-          position: 'left',
-          label: 'Docs',
+          type: "docSidebar",
+          sidebarId: "tutorialSidebar",
+          position: "left",
+          label: "Docs",
         },
         {
-          href: 'https://github.com/naikidev/commiq',
-          label: 'GitHub',
-          position: 'right',
+          href: "https://github.com/naikidev/commiq",
+          label: "GitHub",
+          position: "right",
         },
       ],
     },
     footer: {
-      style: 'dark',
+      style: "dark",
       links: [
         {
-          title: 'Docs',
+          title: "Docs",
           items: [
             {
-              label: 'Getting Started',
-              to: '/docs/getting-started',
+              label: "Getting Started",
+              to: "/docs/getting-started",
             },
             {
-              label: 'API Reference',
-              to: '/docs/api/store',
+              label: "API Reference",
+              to: "/docs/api/store",
             },
           ],
         },
         {
-          title: 'Examples',
+          title: "Examples",
           items: [
             {
-              label: 'Store Dependencies',
-              to: '/docs/examples/store-dependencies',
+              label: "Store Dependencies",
+              to: "/docs/examples/store-dependencies",
             },
             {
-              label: 'Async Commands',
-              to: '/docs/examples/async-commands',
+              label: "Async Commands",
+              to: "/docs/examples/async-commands",
             },
             {
-              label: 'Event Stream',
-              to: '/docs/examples/event-stream',
+              label: "Event Stream",
+              to: "/docs/examples/event-stream",
             },
           ],
         },
         {
-          title: 'Packages',
+          title: "Packages",
           items: [
             {
-              label: '@naikidev/commiq',
-              to: '/docs/api/store',
+              label: "@naikidev/commiq",
+              to: "/docs/api/store",
             },
             {
-              label: '@naikidev/commiq-react',
-              to: '/docs/react/hooks',
+              label: "@naikidev/commiq-react",
+              to: "/docs/react/hooks",
             },
           ],
         },

@@ -7,10 +7,7 @@ import {
   decrement,
   reset,
 } from "../stores/counter.store";
-import {
-  todoStore,
-  addTodo,
-} from "../stores/todo.store";
+import { todoStore, addTodo } from "../stores/todo.store";
 import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
 
 interface LogEntry {
@@ -39,7 +36,7 @@ export function StreamPage() {
     const makeListener = (storeName: string) => (event: StoreEvent) => {
       if (pausedRef.current) return;
       setEntries((prev) => [
-        ...prev.slice(-200), // keep last 200
+        ...prev.slice(-200),
         {
           id: ++entryId,
           storeName,
@@ -66,7 +63,9 @@ export function StreamPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
 
-  const eventColor = (name: string): "green" | "indigo" | "red" | "amber" | "zinc" => {
+  const eventColor = (
+    name: string,
+  ): "green" | "indigo" | "red" | "amber" | "zinc" => {
     if (name.includes("error") || name.includes("invalid")) return "red";
     if (name.includes("Changed")) return "green";
     if (name.includes("Started") || name.includes("started")) return "amber";
@@ -82,18 +81,25 @@ export function StreamPage() {
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Controls */}
         <div className="space-y-4">
           <Card>
             <CardHeader title="Counter Commands" badge={`count: ${count}`} />
             <CardBody className="flex flex-wrap gap-2">
-              <Button onClick={() => queueCounter(increment())} variant="primary" size="xs">
+              <Button
+                onClick={() => queueCounter(increment())}
+                variant="primary"
+                size="xs"
+              >
                 + 1
               </Button>
               <Button onClick={() => queueCounter(decrement())} size="xs">
                 − 1
               </Button>
-              <Button onClick={() => queueCounter(reset())} variant="danger" size="xs">
+              <Button
+                onClick={() => queueCounter(reset())}
+                variant="danger"
+                size="xs"
+              >
                 Reset
               </Button>
             </CardBody>
@@ -106,7 +112,9 @@ export function StreamPage() {
                 variant="primary"
                 size="xs"
                 onClick={() =>
-                  queueTodo(addTodo(`Task ${Date.now().toString(36).slice(-4)}`))
+                  queueTodo(
+                    addTodo(`Task ${Date.now().toString(36).slice(-4)}`),
+                  )
                 }
               >
                 Add Random Todo
@@ -133,10 +141,12 @@ export function StreamPage() {
           </Card>
         </div>
 
-        {/* Stream log */}
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="Live Stream" badge={`${entries.length} events`} />
+            <CardHeader
+              title="Live Stream"
+              badge={`${entries.length} events`}
+            />
             <div className="flex items-center gap-2 px-5 py-2 border-b border-zinc-100 dark:border-zinc-800">
               <Button
                 size="xs"
@@ -145,11 +155,7 @@ export function StreamPage() {
               >
                 {paused ? "▶ Resume" : "⏸ Pause"}
               </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                onClick={() => setEntries([])}
-              >
+              <Button size="xs" variant="ghost" onClick={() => setEntries([])}>
                 Clear
               </Button>
             </div>

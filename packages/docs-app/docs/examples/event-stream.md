@@ -63,9 +63,12 @@ interface LogEntry {
 
 function createStreamLogger(
   stores: Record<string, SealedStore<any>>,
-  onEntry: (entry: LogEntry) => void
+  onEntry: (entry: LogEntry) => void,
 ) {
-  const listeners: Array<{ store: SealedStore<any>; listener: (e: StoreEvent) => void }> = [];
+  const listeners: Array<{
+    store: SealedStore<any>;
+    listener: (e: StoreEvent) => void;
+  }> = [];
 
   for (const [name, store] of Object.entries(stores)) {
     const listener = (event: StoreEvent) => {
@@ -98,7 +101,7 @@ function EventStreamViewer() {
   useEffect(() => {
     const cleanup = createStreamLogger(
       { counter: counterStore, todo: todoStore },
-      (entry) => setEntries((prev) => [...prev.slice(-200), entry])
+      (entry) => setEntries((prev) => [...prev.slice(-200), entry]),
     );
     return cleanup;
   }, []);
@@ -148,10 +151,10 @@ store.openStream((event) => {
 
 ## Use Cases
 
-| Use Case              | Approach                                                            |
-| --------------------- | ------------------------------------------------------------------- |
-| **Dev tools**         | Log all events to console or a debug panel                          |
-| **Analytics**         | Track specific events and send to an analytics service              |
-| **Undo/Redo**         | Record `stateChanged` events and replay `prev` states               |
-| **Cross-store sync**  | Use `openStream` directly (or event bus) to react to other stores   |
-| **Testing**           | Assert that specific events were emitted during a command           |
+| Use Case             | Approach                                                          |
+| -------------------- | ----------------------------------------------------------------- |
+| **Dev tools**        | Log all events to console or a debug panel                        |
+| **Analytics**        | Track specific events and send to an analytics service            |
+| **Undo/Redo**        | Record `stateChanged` events and replay `prev` states             |
+| **Cross-store sync** | Use `openStream` directly (or event bus) to react to other stores |
+| **Testing**          | Assert that specific events were emitted during a command         |

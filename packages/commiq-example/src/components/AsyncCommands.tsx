@@ -8,14 +8,7 @@ import {
   fetchCompleted,
   fetchFailed,
 } from "../stores/async.store";
-import {
-  PageHeader,
-  Card,
-  CardHeader,
-  CardBody,
-  Button,
-  Badge,
-} from "./ui";
+import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
 
 export function AsyncPage() {
   const { users, loading, error } = useSelector(asyncStore, (s) => s);
@@ -23,10 +16,7 @@ export function AsyncPage() {
   const [log, setLog] = useState<string[]>([]);
 
   useEvent(asyncStore, fetchCompleted, (e) => {
-    setLog((prev) => [
-      ...prev,
-      `✓ Fetched ${e.data.count} users`,
-    ]);
+    setLog((prev) => [...prev, `✓ Fetched ${e.data.count} users`]);
   });
 
   useEvent(asyncStore, fetchFailed, (e) => {
@@ -41,7 +31,6 @@ export function AsyncPage() {
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Users list */}
         <div className="lg:col-span-2">
           <Card>
             <CardHeader
@@ -57,9 +46,24 @@ export function AsyncPage() {
                 >
                   {loading ? (
                     <span className="flex items-center gap-1.5">
-                      <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      <svg
+                        className="animate-spin h-3.5 w-3.5"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                          fill="none"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                        />
                       </svg>
                       Fetching…
                     </span>
@@ -108,7 +112,6 @@ export function AsyncPage() {
           </Card>
         </div>
 
-        {/* Event log */}
         <div>
           <Card>
             <CardHeader title="Event Log" badge="useEvent" />
@@ -135,9 +138,13 @@ export function AsyncPage() {
 
           <div className="mt-4 rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
             <p>handler: async (ctx) =&gt; {"{"}</p>
-            <p>&nbsp; ctx.setState({"{"} loading: true {"}"})</p>
+            <p>
+              &nbsp; ctx.setState({"{"} loading: true {"}"})
+            </p>
             <p>&nbsp; await fetch(…)</p>
-            <p>&nbsp; ctx.emit(fetchCompleted, {"{"} count {"}"})</p>
+            <p>
+              &nbsp; ctx.emit(fetchCompleted, {"{"} count {"}"})
+            </p>
             <p>{"}"}</p>
           </div>
         </div>

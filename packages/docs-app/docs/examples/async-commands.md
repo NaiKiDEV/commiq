@@ -28,7 +28,12 @@ queue(fetchUsers)
 ### Store
 
 ```ts
-import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+import {
+  createStore,
+  createCommand,
+  createEvent,
+  sealStore,
+} from "@naikidev/commiq";
 
 interface AsyncState {
   users: User[];
