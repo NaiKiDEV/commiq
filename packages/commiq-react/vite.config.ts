@@ -13,4 +13,7 @@ export default defineConfig({
       external: ["react", "react-dom", "@naikidev/commiq"],
     },
   },
+  test: {
+    environment: "jsdom",
+  },
 });
