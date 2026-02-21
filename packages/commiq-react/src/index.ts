@@ -24,7 +24,7 @@ const CommiqContext = createContext<CommiqContextValue | null>(null);
 
 export interface CommiqProviderProps {
   stores: Record<string, SealedStore<any>>;
-  children: ReactNode;
+  children?: ReactNode;
 }
 
 export function CommiqProvider({ stores, children }: CommiqProviderProps) {

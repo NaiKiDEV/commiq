@@ -159,7 +159,7 @@ export function StreamPage() {
                 Clear
               </Button>
             </div>
-            <div className="h-[420px] overflow-y-auto font-mono text-xs">
+            <div className="h-105 overflow-y-auto font-mono text-xs">
               {entries.length === 0 && (
                 <p className="text-center text-zinc-400 py-10">
                   Waiting for events…
@@ -183,7 +183,7 @@ export function StreamPage() {
                           {e.eventName}
                         </Badge>
                       </td>
-                      <td className="px-3 py-1.5 text-zinc-500 dark:text-zinc-400 truncate max-w-[200px]">
+                      <td className="px-3 py-1.5 text-zinc-500 dark:text-zinc-400 truncate max-w-50">
                         {JSON.stringify(e.data)}
                       </td>
                     </tr>

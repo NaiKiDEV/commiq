@@ -50,7 +50,7 @@ describe("useSelector", () => {
 
   it("does not re-render when unrelated state changes", async () => {
     const store = createStore({ count: 0, name: "Alice" });
-    store.addCommandHandler("setName", (ctx, cmd) => {
+    store.addCommandHandler<string>("setName", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, name: cmd.data });
     });
     const sealed = sealStore(store);
@@ -113,7 +113,7 @@ describe("useEvent", () => {
   it("calls handler when a matching event is emitted", async () => {
     const userCreated = createEvent<{ name: string }>("userCreated");
     const store = createStore({ user: "" });
-    store.addCommandHandler("createUser", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
@@ -139,7 +139,7 @@ describe("useEvent", () => {
     const evt = createEvent("ping");
     const store = createStore({});
     store.addCommandHandler("fire", (ctx) => {
-      ctx.emit(evt, {});
+      ctx.emit(evt, undefined);
     });
     const sealed = sealStore(store);
     const handler = vi.fn();

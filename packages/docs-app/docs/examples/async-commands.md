@@ -9,7 +9,7 @@ Command handlers can be `async`. This is useful for API calls, timers, or any as
 
 ## The Pattern
 
-```
+```text
 queue(fetchUsers)
   │
   ▼

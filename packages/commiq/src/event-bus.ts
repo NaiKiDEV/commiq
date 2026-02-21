@@ -1,10 +1,14 @@
 import type { EventDef, StoreEvent, StreamListener } from "./types";
-import type { StoreImpl } from "./store";
 
 type EventBusHandler<D = unknown> = (event: StoreEvent<D>) => void;
 
+interface Streamable {
+  openStream: (listener: StreamListener) => void;
+  closeStream: (listener: StreamListener) => void;
+}
+
 interface Connection {
-  store: StoreImpl<any>;
+  store: Streamable;
   listener: StreamListener;
 }
 
@@ -22,12 +26,12 @@ export function createEventBus() {
   };
 
   return {
-    connect(store: StoreImpl<any>): void {
+    connect(store: Streamable): void {
       store.openStream(busListener);
       connections.push({ store, listener: busListener });
     },
 
-    disconnect(store: StoreImpl<any>): void {
+    disconnect(store: Streamable): void {
       const idx = connections.findIndex((c) => c.store === store);
       if (idx !== -1) {
         store.closeStream(connections[idx].listener);

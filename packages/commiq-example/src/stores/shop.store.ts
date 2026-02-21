@@ -121,7 +121,7 @@ _cartStore
 
 export const cartStore = sealStore(_cartStore);
 
-export const shopBus = createEventBus();
+const shopBus = createEventBus();
 shopBus.connect(_inventoryStore);
 shopBus.connect(_cartStore);
 

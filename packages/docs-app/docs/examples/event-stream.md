@@ -25,7 +25,7 @@ store.closeStream(listener);
 
 Every command processed by a store emits a sequence of builtin events:
 
-```
+```text
 queue(command)
   │
   ├─► commandStarted   { command }
@@ -42,7 +42,7 @@ queue(command)
 
 Error cases:
 
-```
+```text
 queue(unknownCommand)  ──► invalidCommand         { command }
 queue(failingCommand)  ──► commandHandlingError   { command, error }
 ```

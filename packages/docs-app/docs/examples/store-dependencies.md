@@ -9,7 +9,7 @@ When your application grows, you'll often need multiple stores that react to eac
 
 ## The Pattern
 
-```
+```text
 ┌─────────────┐   reserveStock   ┌─────────────────┐
 │  UI Button  │ ───────────────► │ Inventory Store  │
 └─────────────┘                  │                  │

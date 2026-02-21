@@ -69,7 +69,6 @@ _asyncStore
   });
 
 export const asyncStore = sealStore(_asyncStore);
-export const internalAsyncStore = _asyncStore;
 
 export const fetchUsers = () => createCommand("fetchUsers", undefined);
 export const clearUsers = () => createCommand("clearUsers", undefined);

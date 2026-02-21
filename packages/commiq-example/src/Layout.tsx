@@ -40,7 +40,7 @@ function SidebarLink({ to, label }: { to: string; label: string }) {
 export function Layout() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
+      <header className="sticky top-0 z-50 border-b border-zinc-200 dark:border-zinc-800 bg-white/80 dark:bg-zinc-900/80 backdrop-blur supports-backdrop-filter:bg-white/60">
         <div className="max-w-7xl mx-auto flex items-center h-14 px-6">
           <span className="text-lg font-bold tracking-tight text-indigo-600 dark:text-indigo-400">
             commiq
