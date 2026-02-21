@@ -1,0 +1,60 @@
+export interface Command<N extends string = string, D = unknown> {
+  name: N;
+  data: D;
+}
+
+export interface EventDef<D = unknown> {
+  id: symbol;
+  name: string;
+}
+
+export interface StoreEvent<D = unknown> {
+  id: symbol;
+  name: string;
+  data: D;
+}
+
+export interface CommandContext<S> {
+  state: S;
+  setState: (next: S) => void;
+  emit: <D>(eventDef: EventDef<D>, data: D) => void;
+}
+
+export interface EventContext<S> {
+  state: S;
+  queue: (command: Command) => void;
+}
+
+export type CommandHandler<S, D = unknown> = (
+  ctx: CommandContext<S>,
+  cmd: Command<string, D>
+) => void | Promise<void>;
+
+export type EventHandler<S, D = unknown> = (
+  ctx: EventContext<S>,
+  event: StoreEvent<D>
+) => void | Promise<void>;
+
+export type StreamListener = (event: StoreEvent) => void;
+
+export interface CommandHandlerOptions {
+  notify?: boolean;
+}
+
+export interface SealedStore<S> {
+  readonly state: S;
+  queue: (command: Command) => void;
+  openStream: (listener: StreamListener) => void;
+  closeStream: (listener: StreamListener) => void;
+}
+
+export function createCommand<N extends string, D>(
+  name: N,
+  data: D
+): Command<N, D> {
+  return { name, data };
+}
+
+export function createEvent<D = void>(name: string): EventDef<D> {
+  return { id: Symbol(name), name };
+}
