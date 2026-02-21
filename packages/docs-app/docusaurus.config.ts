@@ -77,6 +77,23 @@ const config: Config = {
           ],
         },
         {
+          title: 'Examples',
+          items: [
+            {
+              label: 'Store Dependencies',
+              to: '/docs/examples/store-dependencies',
+            },
+            {
+              label: 'Async Commands',
+              to: '/docs/examples/async-commands',
+            },
+            {
+              label: 'Event Stream',
+              to: '/docs/examples/event-stream',
+            },
+          ],
+        },
+        {
           title: 'Packages',
           items: [
             {
