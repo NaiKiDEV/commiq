@@ -27,7 +27,7 @@ interface HandlerEntry<S> {
   options?: CommandHandlerOptions;
 }
 
-class StoreImpl<S> {
+export class StoreImpl<S> {
   private _state: S;
   private _initialState: S;
   private _commandHandlers = new Map<string, HandlerEntry<S>>();

@@ -58,3 +58,7 @@ export function createCommand<N extends string, D>(
 export function createEvent<D = void>(name: string): EventDef<D> {
   return { id: Symbol(name), name };
 }
+
+export function handledEvent<D = unknown>(commandName: string): EventDef<D> {
+  return { id: Symbol(`${commandName}:handled`), name: `${commandName}:handled` };
+}

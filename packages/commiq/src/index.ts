@@ -1,5 +1,6 @@
-export { createCommand, createEvent } from "./types";
+export { createCommand, createEvent, handledEvent } from "./types";
 export { createStore, builtinEventDefs as builtinEvents } from "./store";
+export { sealStore } from "./proxy";
 export type {
   Command,
   EventDef,
