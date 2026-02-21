@@ -6,12 +6,12 @@ Commiq models state as a pipeline: commands enter a queue, handlers process them
 
 ## Packages
 
-| Package | Description |
-| --- | --- |
-| [`@naikidev/commiq`](packages/commiq) | Core library. Framework-agnostic. |
+| Package                                           | Description                                                               |
+| ------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`@naikidev/commiq`](packages/commiq)             | Core library. Framework-agnostic.                                         |
 | [`@naikidev/commiq-react`](packages/commiq-react) | React bindings (`useSelector`, `useQueue`, `useEvent`, `CommiqProvider`). |
-| [`@naikidev/commiq-example`](packages/commiq-example) | Example application with basic and advanced usage patterns. |
-| [`@naikidev/docs`](packages/docs-app) | Documentation site (Docusaurus). |
+| [`@naikidev/commiq-example`](apps/commiq-example) | Example application with basic and advanced usage patterns.               |
+| [`@naikidev/docs`](apps/docs-app)                 | Documentation site (Docusaurus).                                          |
 
 ## Install
 
@@ -114,14 +114,14 @@ store.openStream((event) => {
 
 ### Builtin Events
 
-| Event | Data | Description |
-| --- | --- | --- |
-| `stateChanged` | `{ prev, next }` | State was updated. |
-| `commandStarted` | `{ command }` | Handler began processing a command. |
-| `commandHandled` | `{ command }` | Handler finished processing a command. |
-| `invalidCommand` | `{ command }` | No handler registered for the command. |
-| `commandHandlingError` | `{ command, error }` | Handler threw an error. |
-| `stateReset` | — | State was reset. |
+| Event                  | Data                 | Description                            |
+| ---------------------- | -------------------- | -------------------------------------- |
+| `stateChanged`         | `{ prev, next }`     | State was updated.                     |
+| `commandStarted`       | `{ command }`        | Handler began processing a command.    |
+| `commandHandled`       | `{ command }`        | Handler finished processing a command. |
+| `invalidCommand`       | `{ command }`        | No handler registered for the command. |
+| `commandHandlingError` | `{ command, error }` | Handler threw an error.                |
+| `stateReset`           | —                    | State was reset.                       |
 
 ## React
 
@@ -148,14 +148,14 @@ pnpm build
 pnpm test
 ```
 
-| Script | Description |
-| --- | --- |
-| `pnpm build` | Build all packages. |
-| `pnpm test` | Run all tests. |
-| `pnpm example` | Start the example app. |
-| `pnpm docs` | Start the documentation site. |
+| Script            | Description                    |
+| ----------------- | ------------------------------ |
+| `pnpm build`      | Build all packages.            |
+| `pnpm test`       | Run all tests.                 |
+| `pnpm example`    | Start the example app.         |
+| `pnpm docs`       | Start the documentation site.  |
 | `pnpm build:libs` | Build core and react packages. |
-| `pnpm test:core` | Run core library tests only. |
+| `pnpm test:core`  | Run core library tests only.   |
 | `pnpm test:react` | Run react bindings tests only. |
 
 ## License
