@@ -1,4 +1,5 @@
 export { createCommand, createEvent } from "./types";
+export { createStore, builtinEventDefs as builtinEvents } from "./store";
 export type {
   Command,
   EventDef,
