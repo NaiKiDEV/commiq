@@ -20,4 +20,90 @@ describe("instrumentation", () => {
       expect(typeof event.correlationId).toBe("string");
     }
   });
+
+  it("tracks causality through command → event → cascading command", async () => {
+    const userCreated = createEvent<{ name: string }>("userCreated");
+    const listener = vi.fn();
+    const store = createStore({ user: "", greeting: "" });
+
+    store.addCommandHandler("createUser", (ctx, cmd) => {
+      ctx.setState({ ...ctx.state, user: cmd.data.name });
+      ctx.emit(userCreated, { name: cmd.data.name });
+    });
+    store.addCommandHandler("greet", (ctx, cmd) => {
+      ctx.setState({ ...ctx.state, greeting: `Hello ${cmd.data.name}` });
+    });
+    store.addEventHandler(userCreated, (ctx, event) => {
+      ctx.queue(createCommand("greet", { name: event.data.name }));
+    });
+
+    store.openStream(listener);
+    store.queue(createCommand("createUser", { name: "Alice" }));
+    await store.flush();
+
+    const events = listener.mock.calls.map((c) => c[0]);
+
+    // Find the userCreated event
+    const userCreatedEvent = events.find((e) => e.name === "userCreated");
+    expect(userCreatedEvent).toBeDefined();
+
+    // Find the second commandStarted (for "greet")
+    const commandStartedEvents = events.filter((e) => e.name === "commandStarted");
+    expect(commandStartedEvents).toHaveLength(2);
+
+    const greetStarted = commandStartedEvents[1];
+    const greetCommand = greetStarted.data.command;
+
+    // The greet command's causedBy should link to the userCreated event's correlationId
+    expect(greetCommand.causedBy).toBe(userCreatedEvent.correlationId);
+  });
+
+  it("assigns unique correlationIds to each event", async () => {
+    const listener = vi.fn();
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+    store.openStream(listener);
+    store.queue(createCommand("inc", undefined));
+    await store.flush();
+
+    const correlationIds = listener.mock.calls.map((c) => c[0].correlationId);
+    const unique = new Set(correlationIds);
+    expect(unique.size).toBe(correlationIds.length);
+  });
+
+  it("sets timestamps close to current time", async () => {
+    const listener = vi.fn();
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+    store.openStream(listener);
+
+    const before = Date.now();
+    store.queue(createCommand("inc", undefined));
+    await store.flush();
+    const after = Date.now();
+
+    for (const [event] of listener.mock.calls) {
+      expect(event.timestamp).toBeGreaterThanOrEqual(before);
+      expect(event.timestamp).toBeLessThanOrEqual(after);
+    }
+  });
+
+  it("commands queued from outside have causedBy null", async () => {
+    const listener = vi.fn();
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+    store.openStream(listener);
+    store.queue(createCommand("inc", undefined));
+    await store.flush();
+
+    // commandStarted carries the command — check the command's causedBy
+    const commandStarted = listener.mock.calls.find((c) => c[0].name === "commandStarted");
+    expect(commandStarted[0].data.command.causedBy).toBeNull();
+  });
 });
