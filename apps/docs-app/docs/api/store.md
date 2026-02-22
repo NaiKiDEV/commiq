@@ -64,7 +64,7 @@ store.addEventHandler(userCreated, (ctx, event) => {
 
 ## `store.queue(command)`
 
-Adds a command to the queue. Commands are processed sequentially.
+Adds a command to the queue. Commands are processed sequentially. Each queued command is automatically assigned a unique `correlationId` and its `causedBy` is set based on the current execution context (the correlation ID of the parent command/event, or `null` if queued from user code).
 
 ```ts
 store.queue(createCommand("increment", undefined));
@@ -90,6 +90,14 @@ store.openStream(listener);
 // later...
 store.closeStream(listener);
 ```
+
+Every event received by stream listeners includes instrumentation metadata:
+
+| Property        | Type             | Description                                      |
+| --------------- | ---------------- | ------------------------------------------------ |
+| `timestamp`     | `number`         | `Date.now()` when the event was emitted          |
+| `correlationId` | `string`         | Unique identifier for this event                 |
+| `causedBy`      | `string \| null` | Correlation ID of the parent command/event        |
 
 ## Builtin Events
 

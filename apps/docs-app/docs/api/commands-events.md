@@ -13,8 +13,10 @@ Creates a command object to be queued on a store.
 import { createCommand } from "@naikidev/commiq";
 
 const cmd = createCommand("addTodo", { text: "Buy milk" });
-// { name: "addTodo", data: { text: "Buy milk" } }
+// { name: "addTodo", data: { text: "Buy milk" }, correlationId: "", causedBy: null }
 ```
+
+Note: `correlationId` is assigned automatically when the command is queued via `store.queue()`. The empty string from `createCommand` is overwritten with a unique nanoid.
 
 Tip: wrap in factory functions for a clean API:
 
