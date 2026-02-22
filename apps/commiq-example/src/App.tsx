@@ -11,6 +11,7 @@ import { TodoPage } from "./components/TodoList";
 import { StoreDepsPage } from "./components/StoreDeps";
 import { AsyncPage } from "./components/AsyncCommands";
 import { StreamPage } from "./components/EventStream";
+import { DevtoolsPage } from "./components/DevtoolsPanel";
 
 const stores = {
   counter: counterStore,
@@ -30,6 +31,7 @@ export function App() {
           <Route path="store-deps" element={<StoreDepsPage />} />
           <Route path="async" element={<AsyncPage />} />
           <Route path="stream" element={<StreamPage />} />
+          <Route path="devtools" element={<DevtoolsPage />} />
         </Route>
       </Routes>
     </CommiqProvider>
