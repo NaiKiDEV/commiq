@@ -1,6 +1,8 @@
 export interface Command<N extends string = string, D = unknown> {
   name: N;
   data: D;
+  correlationId: string;
+  causedBy: string | null;
 }
 
 export interface EventDef<D = unknown> {
@@ -12,6 +14,9 @@ export interface StoreEvent<D = unknown> {
   id: symbol;
   name: string;
   data: D;
+  timestamp: number;
+  correlationId: string;
+  causedBy: string | null;
 }
 
 export interface CommandContext<S> {
@@ -52,7 +57,7 @@ export function createCommand<N extends string, D>(
   name: N,
   data: D
 ): Command<N, D> {
-  return { name, data };
+  return { name, data, correlationId: "", causedBy: null };
 }
 
 export function createEvent<D = void>(name: string): EventDef<D> {
