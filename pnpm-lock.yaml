@@ -13,12 +13,12 @@ importers:
       '@naikidev/commiq':
         specifier: workspace:*
         version: link:../../packages/commiq
+      '@naikidev/commiq-devtools':
+        specifier: workspace:*
+        version: link:../../packages/devtools
       '@naikidev/commiq-react':
         specifier: workspace:*
         version: link:../../packages/commiq-react
-      '@naikidev/devtools':
-        specifier: workspace:*
-        version: link:../../packages/devtools
       react:
         specifier: ^19.0.0
         version: 19.2.4

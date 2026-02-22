@@ -19,14 +19,14 @@ This enables full causality tracking: you can trace any event back through the c
 ## Installation
 
 ```bash
-npm install @naikidev/devtools
+npm install @naikidev/commiq-devtools
 ```
 
 ## Basic Usage
 
 ```typescript
 import { createStore, createCommand } from "@naikidev/commiq";
-import { createDevtools } from "@naikidev/devtools";
+import { createDevtools } from "@naikidev/commiq-devtools";
 
 const store = createStore({ count: 0 });
 store.addCommandHandler("increment", (ctx) => {
@@ -78,7 +78,7 @@ devtools.connect(store, "counter");
 The default transport uses `window.postMessage` for browser extension communication. You can provide custom transports for other environments:
 
 ```typescript
-import { createDevtools, memoryTransport } from "@naikidev/devtools";
+import { createDevtools, memoryTransport } from "@naikidev/commiq-devtools";
 
 // In-memory transport for testing
 const transport = memoryTransport();
@@ -92,7 +92,7 @@ console.log(transport.messages);
 ### Implementing a Custom Transport
 
 ```typescript
-import type { Transport, DevtoolsMessage } from "@naikidev/devtools";
+import type { Transport, DevtoolsMessage } from "@naikidev/commiq-devtools";
 
 const customTransport: Transport = {
   send(message: DevtoolsMessage) {
@@ -114,11 +114,11 @@ const devtools = createDevtools({ transport: customTransport });
 
 ## Options
 
-| Option         | Type        | Default                      | Description                |
-| -------------- | ----------- | ---------------------------- | -------------------------- |
-| `transport`    | `Transport` | `windowMessageTransport()`   | Message transport          |
-| `maxEvents`    | `number`    | `1000`                       | Ring buffer size           |
-| `logToConsole` | `boolean`   | `false`                      | Log events to console      |
+| Option         | Type        | Default                    | Description           |
+| -------------- | ----------- | -------------------------- | --------------------- |
+| `transport`    | `Transport` | `windowMessageTransport()` | Message transport     |
+| `maxEvents`    | `number`    | `1000`                     | Ring buffer size      |
+| `logToConsole` | `boolean`   | `false`                    | Log events to console |
 
 ## Cleanup
 

@@ -5,7 +5,7 @@ import {
   createEventBus,
   sealStore,
 } from "@naikidev/commiq";
-import { createDevtools } from "@naikidev/devtools";
+import { createDevtools } from "@naikidev/commiq-devtools";
 
 export interface Product {
   id: number;

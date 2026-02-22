@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSelector, useQueue } from "@naikidev/commiq-react";
-import type { TimelineEntry, StateSnapshot } from "@naikidev/devtools";
+import type { TimelineEntry, StateSnapshot } from "@naikidev/commiq-devtools";
 import {
   inventoryStore,
   cartStore,
@@ -21,9 +21,12 @@ function formatTime(ts: number): string {
   return new Date(ts).toISOString().slice(11, 23);
 }
 
-function eventColor(entry: TimelineEntry): "indigo" | "green" | "amber" | "red" {
+function eventColor(
+  entry: TimelineEntry,
+): "indigo" | "green" | "amber" | "red" {
   if (entry.name === "stateChanged") return "amber";
-  if (entry.name === "commandHandlingError" || entry.name === "invalidCommand") return "red";
+  if (entry.name === "commandHandlingError" || entry.name === "invalidCommand")
+    return "red";
   if (entry.type === "command") return "indigo";
   return "green";
 }
@@ -118,9 +121,7 @@ export function DevtoolsPage() {
               </Button>
             ))}
             {cartItems.length > 0 && (
-              <span className="text-xs text-zinc-500 ml-2">
-                Cart: ${total}
-              </span>
+              <span className="text-xs text-zinc-500 ml-2">Cart: ${total}</span>
             )}
           </div>
         </CardBody>
@@ -164,7 +165,10 @@ export function DevtoolsPage() {
               <tbody>
                 {timeline.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-6 text-center text-zinc-400">
+                    <td
+                      colSpan={6}
+                      className="px-4 py-6 text-center text-zinc-400"
+                    >
                       No events yet. Use the controls above to generate events.
                     </td>
                   </tr>
@@ -240,7 +244,9 @@ export function DevtoolsPage() {
               <div className="space-y-1">
                 {chain.map((entry, i) => {
                   const depth = entry.causedBy
-                    ? chain.findIndex((e) => e.correlationId === entry.causedBy) >= 0
+                    ? chain.findIndex(
+                        (e) => e.correlationId === entry.causedBy,
+                      ) >= 0
                       ? 1
                       : 0
                     : 0;
@@ -255,7 +261,9 @@ export function DevtoolsPage() {
                       style={{ marginLeft: `${depth * 16}px` }}
                     >
                       {depth > 0 && (
-                        <span className="text-zinc-300 dark:text-zinc-600">&#8627;</span>
+                        <span className="text-zinc-300 dark:text-zinc-600">
+                          &#8627;
+                        </span>
                       )}
                       <Badge color={eventColor(entry)}>{entry.name}</Badge>
                       <span className="text-zinc-400">{entry.storeName}</span>
@@ -279,7 +287,9 @@ export function DevtoolsPage() {
               { name: "CART_STORE", history: cartHistory },
             ].map(({ name, history }) => (
               <div key={name}>
-                <p className="text-xs font-semibold text-zinc-500 mb-2">{name}</p>
+                <p className="text-xs font-semibold text-zinc-500 mb-2">
+                  {name}
+                </p>
                 {history.length === 0 ? (
                   <p className="text-xs text-zinc-400">No state changes yet.</p>
                 ) : (

@@ -11,7 +11,7 @@
   "dependencies": {
     "@naikidev/commiq": "workspace:*",
     "@naikidev/commiq-react": "workspace:*",
-    "@naikidev/devtools": "workspace:*",
+    "@naikidev/commiq-devtools": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.0"
