@@ -5,6 +5,7 @@ import {
   createEventBus,
   sealStore,
 } from "@naikidev/commiq";
+import { createDevtools } from "@naikidev/devtools";
 
 export interface Product {
   id: number;
@@ -150,6 +151,10 @@ shopBus.on(outOfStock, (event) => {
     ),
   );
 });
+
+export const shopDevtools = createDevtools();
+shopDevtools.connect(_inventoryStore, "INVENTORY_STORE");
+shopDevtools.connect(_cartStore, "CART_STORE");
 
 export const reserveStock = (productId: number) =>
   createCommand("reserveStock", { productId, qty: 1 });

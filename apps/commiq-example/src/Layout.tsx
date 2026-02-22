@@ -46,7 +46,7 @@ export function Layout() {
           <span className="text-lg font-bold tracking-tight text-indigo-600 dark:text-indigo-400">
             commiq
           </span>
-          <span className="ml-2 text-xs font-mono text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">
+          <span className="text-lg font-bold tracking-tight text-zinc-400 dark:text-zinc-100">
             examples
           </span>
           <div className="flex-1" />
