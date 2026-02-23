@@ -514,8 +514,8 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.sans,
   },
   detailClose: {
-    background: "none",
-    border: "none",
+    backgroundColor: "transparent",
+    borderWidth: 0,
     color: colors.textMuted,
     cursor: "pointer",
     fontSize: 12,

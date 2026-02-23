@@ -337,7 +337,7 @@ const styles: Record<string, CSSProperties> = {
   },
   rowSelected: {
     backgroundColor: colors.bgSelected,
-    borderBottomColor: colors.borderSelected,
+    borderBottom: `1px solid ${colors.borderSelected}`,
   },
   time: {
     fontFamily: fonts.mono,

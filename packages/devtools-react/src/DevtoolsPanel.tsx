@@ -9,10 +9,11 @@ import type { SealedStore } from "@naikidev/commiq";
 import { colors, fonts } from "./theme";
 import { EventLog } from "./EventLog";
 import { CausalityGraph } from "./CausalityGraph";
+import { TimelineChart } from "./TimelineChart";
 import { StoreStateView } from "./StoreStateView";
 import type { DevtoolsEngine } from "./useDevtoolsEngine";
 
-type Tab = "events" | "graph" | "state";
+type Tab = "events" | "graph" | "timeline" | "state";
 
 interface DevtoolsPanelProps {
   engine: DevtoolsEngine;
@@ -67,6 +68,7 @@ export function DevtoolsPanel({
   const tabs: { id: Tab; label: string; icon: string }[] = [
     { id: "events", label: "Events", icon: "≡" },
     { id: "graph", label: "Graph", icon: "◇" },
+    { id: "timeline", label: "Timeline", icon: "◔" },
     { id: "state", label: "State", icon: "◆" },
   ];
 
@@ -126,6 +128,12 @@ export function DevtoolsPanel({
         )}
         {activeTab === "graph" && (
           <CausalityGraph
+            timeline={engine.timeline}
+            storeNames={engine.storeNames}
+          />
+        )}
+        {activeTab === "timeline" && (
+          <TimelineChart
             timeline={engine.timeline}
             storeNames={engine.storeNames}
           />
@@ -240,8 +248,8 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
     fontWeight: 500,
     color: colors.tabInactive,
-    background: "none",
-    border: "none",
+    backgroundColor: "transparent",
+    borderWidth: 0,
     borderRadius: 5,
     cursor: "pointer",
     fontFamily: fonts.sans,
@@ -269,8 +277,8 @@ const styles: Record<string, CSSProperties> = {
     height: 26,
     fontSize: 13,
     color: colors.textSecondary,
-    background: "none",
-    border: "none",
+    backgroundColor: "transparent",
+    borderWidth: 0,
     borderRadius: 4,
     cursor: "pointer",
     transition: "all 0.15s",

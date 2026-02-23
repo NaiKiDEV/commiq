@@ -11,8 +11,6 @@ export interface CounterState {
 
 export const counterReset = createEvent("counter:reset");
 
-// --- Commands ---
-
 export const increment = () => createCommand("increment", undefined);
 export const decrement = () => createCommand("decrement", undefined);
 export const reset = () => createCommand("reset", undefined);

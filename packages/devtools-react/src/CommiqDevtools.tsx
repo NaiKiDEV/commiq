@@ -168,7 +168,7 @@ const styles: Record<string, CSSProperties> = {
     width: 44,
     height: 44,
     borderRadius: "50%",
-    border: "none",
+    borderWidth: 0,
     backgroundColor: colors.triggerBg,
     color: colors.textInverse,
     cursor: "pointer",

@@ -43,18 +43,17 @@ describe("instrumentation", () => {
 
     const events = listener.mock.calls.map((c) => c[0]);
 
-    // Find the userCreated event
     const userCreatedEvent = events.find((e) => e.name === "userCreated");
     expect(userCreatedEvent).toBeDefined();
 
-    // Find the second commandStarted (for "greet")
-    const commandStartedEvents = events.filter((e) => e.name === "commandStarted");
+    const commandStartedEvents = events.filter(
+      (e) => e.name === "commandStarted",
+    );
     expect(commandStartedEvents).toHaveLength(2);
 
     const greetStarted = commandStartedEvents[1];
     const greetCommand = greetStarted.data.command;
 
-    // The greet command's causedBy should link to the userCreated event's correlationId
     expect(greetCommand.causedBy).toBe(userCreatedEvent.correlationId);
   });
 
@@ -111,11 +110,14 @@ describe("instrumentation", () => {
     storeA.openStream(listenerA);
     storeB.openStream(listenerB);
 
-    // Simulate event bus: storeA emits userCreated, external code queues on storeB with causedBy
     storeA.openStream((event) => {
       if (event.name === "userCreated") {
         storeB.queue(
-          createCommand("greet", { name: (event.data as any).name }, { causedBy: event.correlationId })
+          createCommand(
+            "greet",
+            { name: (event.data as any).name },
+            { causedBy: event.correlationId },
+          ),
         );
       }
     });
@@ -124,14 +126,18 @@ describe("instrumentation", () => {
     await storeA.flush();
     await storeB.flush();
 
-    // Find the userCreated event on storeA
-    const userCreatedEvent = listenerA.mock.calls.map((c) => c[0]).find((e) => e.name === "userCreated");
+    const userCreatedEvent = listenerA.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.name === "userCreated");
     expect(userCreatedEvent).toBeDefined();
 
-    // Find commandStarted on storeB — its command should have causedBy linking back to userCreated
-    const greetStarted = listenerB.mock.calls.map((c) => c[0]).find((e) => e.name === "commandStarted");
+    const greetStarted = listenerB.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.name === "commandStarted");
     expect(greetStarted).toBeDefined();
-    expect(greetStarted.data.command.causedBy).toBe(userCreatedEvent.correlationId);
+    expect(greetStarted.data.command.causedBy).toBe(
+      userCreatedEvent.correlationId,
+    );
   });
 
   it("commands queued from outside have causedBy null", async () => {
@@ -144,8 +150,9 @@ describe("instrumentation", () => {
     store.queue(createCommand("inc", undefined));
     await store.flush();
 
-    // commandStarted carries the command — check the command's causedBy
-    const commandStarted = listener.mock.calls.find((c) => c[0].name === "commandStarted");
+    const commandStarted = listener.mock.calls.find(
+      (c) => c[0].name === "commandStarted",
+    );
     expect(commandStarted[0].data.command.causedBy).toBeNull();
   });
 });

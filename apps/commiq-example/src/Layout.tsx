@@ -15,6 +15,7 @@ const nav = [
       { to: "/store-deps", label: "Store Dependencies" },
       { to: "/async", label: "Async Commands" },
       { to: "/stream", label: "Event Stream" },
+      { to: "/pipeline", label: "Order Pipeline" },
       { to: "/devtools", label: "Devtools" },
     ],
   },
