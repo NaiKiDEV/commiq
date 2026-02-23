@@ -55,9 +55,10 @@ export interface SealedStore<S> {
 
 export function createCommand<N extends string, D>(
   name: N,
-  data: D
+  data: D,
+  options?: { causedBy?: string },
 ): Command<N, D> {
-  return { name, data, correlationId: "", causedBy: null };
+  return { name, data, correlationId: "", causedBy: options?.causedBy ?? null };
 }
 
 export function createEvent<D = void>(name: string): EventDef<D> {

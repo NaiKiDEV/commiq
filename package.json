@@ -16,6 +16,10 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "core-js",
+      "core-js-pure"
     ]
   }
 }

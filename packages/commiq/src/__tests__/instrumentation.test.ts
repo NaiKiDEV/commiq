@@ -92,6 +92,48 @@ describe("instrumentation", () => {
     }
   });
 
+  it("preserves causedBy set via createCommand options for cross-store causality", async () => {
+    const userCreated = createEvent<{ name: string }>("userCreated");
+    const listenerA = vi.fn();
+    const listenerB = vi.fn();
+
+    const storeA = createStore({ user: "" });
+    const storeB = createStore({ greeting: "" });
+
+    storeA.addCommandHandler("createUser", (ctx, cmd) => {
+      ctx.setState({ user: cmd.data.name });
+      ctx.emit(userCreated, { name: cmd.data.name });
+    });
+    storeB.addCommandHandler("greet", (ctx, cmd) => {
+      ctx.setState({ greeting: `Hello ${cmd.data.name}` });
+    });
+
+    storeA.openStream(listenerA);
+    storeB.openStream(listenerB);
+
+    // Simulate event bus: storeA emits userCreated, external code queues on storeB with causedBy
+    storeA.openStream((event) => {
+      if (event.name === "userCreated") {
+        storeB.queue(
+          createCommand("greet", { name: (event.data as any).name }, { causedBy: event.correlationId })
+        );
+      }
+    });
+
+    storeA.queue(createCommand("createUser", { name: "Alice" }));
+    await storeA.flush();
+    await storeB.flush();
+
+    // Find the userCreated event on storeA
+    const userCreatedEvent = listenerA.mock.calls.map((c) => c[0]).find((e) => e.name === "userCreated");
+    expect(userCreatedEvent).toBeDefined();
+
+    // Find commandStarted on storeB — its command should have causedBy linking back to userCreated
+    const greetStarted = listenerB.mock.calls.map((c) => c[0]).find((e) => e.name === "commandStarted");
+    expect(greetStarted).toBeDefined();
+    expect(greetStarted.data.command.causedBy).toBe(userCreatedEvent.correlationId);
+  });
+
   it("commands queued from outside have causedBy null", async () => {
     const listener = vi.fn();
     const store = createStore({ count: 0 });

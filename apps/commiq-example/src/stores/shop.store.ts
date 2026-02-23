@@ -52,6 +52,7 @@ _inventoryStore
       });
       ctx.emit(stockReserved, { productId, qty });
     },
+    { notify: true },
   )
   .addCommandHandler<{ productId: number; qty: number }>(
     "releaseStock",
@@ -64,6 +65,7 @@ _inventoryStore
       });
       ctx.emit(stockReleased, { productId, qty });
     },
+    { notify: true },
   );
 
 export const inventoryStore = sealStore(_inventoryStore);
@@ -132,11 +134,11 @@ shopBus.on(stockReserved, (event) => {
   );
   if (!product) return;
   _cartStore.queue(
-    createCommand("addToCart", {
-      productId: product.id,
-      name: product.name,
-      price: product.price,
-    }),
+    createCommand(
+      "addToCart",
+      { productId: product.id, name: product.name, price: product.price },
+      { causedBy: event.correlationId },
+    ),
   );
 });
 
@@ -148,6 +150,7 @@ shopBus.on(outOfStock, (event) => {
     createCommand(
       "setError",
       `"${product?.name ?? "Product"}" is out of stock`,
+      { causedBy: event.correlationId },
     ),
   );
 });

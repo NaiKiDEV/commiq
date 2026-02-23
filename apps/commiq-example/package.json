@@ -12,6 +12,7 @@
     "@naikidev/commiq": "workspace:*",
     "@naikidev/commiq-react": "workspace:*",
     "@naikidev/commiq-devtools": "workspace:*",
+    "@naikidev/commiq-devtools-react": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.0"

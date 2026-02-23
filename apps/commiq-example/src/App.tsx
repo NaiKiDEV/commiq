@@ -1,6 +1,7 @@
 import React from "react";
 import { Routes, Route } from "react-router-dom";
 import { CommiqProvider } from "@naikidev/commiq-react";
+import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
 import { counterStore } from "./stores/counter.store";
 import { todoStore } from "./stores/todo.store";
 import { inventoryStore, cartStore } from "./stores/shop.store";
@@ -34,6 +35,7 @@ export function App() {
           <Route path="devtools" element={<DevtoolsPage />} />
         </Route>
       </Routes>
+      <CommiqDevtools stores={stores} enabled={true} />
     </CommiqProvider>
   );
 }

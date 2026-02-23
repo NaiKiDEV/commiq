@@ -67,7 +67,7 @@ export class StoreImpl<S> {
 
   queue(command: Command): void {
     command.correlationId = nanoid();
-    command.causedBy = this._currentCorrelationId;
+    command.causedBy = this._currentCorrelationId ?? command.causedBy;
     this._queue.push(command);
     if (!this._processing) {
       this._processQueue();
