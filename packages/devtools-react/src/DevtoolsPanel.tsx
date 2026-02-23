@@ -10,10 +10,11 @@ import { colors, fonts } from "./theme";
 import { EventLog } from "./EventLog";
 import { CausalityGraph } from "./CausalityGraph";
 import { TimelineChart } from "./TimelineChart";
+import { PerformanceTab } from "./PerformanceTab";
 import { StoreStateView } from "./StoreStateView";
 import type { DevtoolsEngine } from "./useDevtoolsEngine";
 
-type Tab = "events" | "graph" | "timeline" | "state";
+type Tab = "events" | "graph" | "timeline" | "perf" | "state";
 
 interface DevtoolsPanelProps {
   engine: DevtoolsEngine;
@@ -69,6 +70,7 @@ export function DevtoolsPanel({
     { id: "events", label: "Events", icon: "≡" },
     { id: "graph", label: "Graph", icon: "◇" },
     { id: "timeline", label: "Timeline", icon: "◔" },
+    { id: "perf", label: "Performance", icon: "⚡" },
     { id: "state", label: "State", icon: "◆" },
   ];
 
@@ -134,6 +136,12 @@ export function DevtoolsPanel({
         )}
         {activeTab === "timeline" && (
           <TimelineChart
+            timeline={engine.timeline}
+            storeNames={engine.storeNames}
+          />
+        )}
+        {activeTab === "perf" && (
+          <PerformanceTab
             timeline={engine.timeline}
             storeNames={engine.storeNames}
           />
