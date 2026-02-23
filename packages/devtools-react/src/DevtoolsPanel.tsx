@@ -144,7 +144,7 @@ export function DevtoolsPanel({
           <span style={styles.titleSuffix}>devtools</span>
         </div>
 
-        <div style={styles.tabs}>
+        <div style={styles.tabs} className="commiq-devtools-tabs">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -172,17 +172,17 @@ export function DevtoolsPanel({
           )}
           <button
             onClick={handleExport}
-            style={styles.headerButton}
-            title="Export timeline"
+            style={styles.labelButton}
+            title="Export timeline as JSON"
           >
-            ↓
+            ↓ Export
           </button>
           <button
             onClick={handleImport}
-            style={styles.headerButton}
-            title="Import timeline"
+            style={styles.labelButton}
+            title="Import timeline from JSON"
           >
-            ↑
+            ↑ Import
           </button>
           <input
             ref={fileInputRef}
@@ -282,6 +282,9 @@ const scrollbarCSS = `
 .commiq-resize-handle.dragging {
   border-color: ${colors.accent};
 }
+.commiq-devtools-tabs::-webkit-scrollbar {
+  display: none;
+}
 `;
 
 const styles: Record<string, CSSProperties> = {
@@ -320,18 +323,20 @@ const styles: Record<string, CSSProperties> = {
   header: {
     display: "flex",
     alignItems: "center",
-    gap: 12,
-    padding: "0 12px",
+    gap: 8,
+    padding: "0 10px",
     height: 40,
     backgroundColor: colors.bgHeader,
     borderBottom: `1px solid ${colors.border}`,
     flexShrink: 0,
+    overflow: "hidden",
   },
   headerLeft: {
     display: "flex",
     alignItems: "center",
     gap: 6,
-    marginRight: 8,
+    marginRight: 4,
+    flexShrink: 0,
   },
   logo: {
     fontSize: 16,
@@ -353,12 +358,17 @@ const styles: Record<string, CSSProperties> = {
   tabs: {
     display: "flex",
     gap: 2,
+    flex: "1 1 0",
+    minWidth: 0,
+    overflow: "auto" as const,
+    scrollbarWidth: "none" as any,
+    msOverflowStyle: "none" as any,
   },
   tab: {
     display: "flex",
     alignItems: "center",
-    gap: 4,
-    padding: "5px 10px",
+    gap: 3,
+    padding: "5px 8px",
     fontSize: 11,
     fontWeight: 500,
     color: colors.tabInactive,
@@ -369,6 +379,7 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.sans,
     transition: "all 0.15s",
     whiteSpace: "nowrap" as const,
+    flexShrink: 0,
   },
   tabActive: {
     color: colors.textInverse,
@@ -380,8 +391,9 @@ const styles: Record<string, CSSProperties> = {
   headerRight: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
     marginLeft: "auto",
+    flexShrink: 0,
   },
   headerButton: {
     display: "flex",
@@ -396,6 +408,24 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 4,
     cursor: "pointer",
     transition: "all 0.15s",
+    flexShrink: 0,
+  },
+  labelButton: {
+    display: "flex",
+    alignItems: "center",
+    gap: 3,
+    padding: "3px 8px",
+    fontSize: 10,
+    fontWeight: 500,
+    color: colors.textSecondary,
+    backgroundColor: colors.bgPanel,
+    borderWidth: 0,
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: fonts.sans,
+    transition: "all 0.15s",
+    whiteSpace: "nowrap" as const,
+    flexShrink: 0,
   },
   eventBadge: {
     fontSize: 10,
