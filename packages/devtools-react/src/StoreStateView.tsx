@@ -104,7 +104,6 @@ const styles: Record<string, CSSProperties> = {
   storeBody: {
     padding: "10px 14px",
     overflow: "auto",
-    maxHeight: 300,
     lineHeight: "20px",
   },
 };

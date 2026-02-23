@@ -431,6 +431,5 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 6,
     border: `1px solid ${colors.border}`,
     overflow: "auto",
-    maxHeight: 180,
   },
 };

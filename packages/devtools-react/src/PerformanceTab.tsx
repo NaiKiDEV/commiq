@@ -26,10 +26,7 @@ interface StoreStats {
   commands: CommandStats[];
 }
 
-export function PerformanceTab({
-  timeline,
-  storeNames,
-}: PerformanceTabProps) {
+export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"total" | "avg" | "max" | "count">(
     "total",
@@ -50,8 +47,7 @@ export function PerformanceTab({
         const cb = e.causedBy;
         const s = cb ? started.get(cb) : undefined;
         if (s && cb) {
-          const cmdName =
-            (s.data as any)?.command?.name ?? "unknown";
+          const cmdName = (s.data as any)?.command?.name ?? "unknown";
           const key = `${e.storeName}::${cmdName}`;
           const pairs = commandPairs.get(key) ?? [];
           pairs.push({
@@ -171,13 +167,9 @@ export function PerformanceTab({
           <option value="max">Max time</option>
           <option value="count">Call count</option>
         </select>
-
       </div>
 
-      <div
-        style={styles.scrollArea}
-        className="commiq-devtools-scroll"
-      >
+      <div style={styles.scrollArea} className="commiq-devtools-scroll">
         {storeStats.every((s) => s.totalCommands === 0) && (
           <div style={styles.empty}>
             No commands recorded yet. Dispatch commands to see performance
@@ -219,11 +211,7 @@ export function PerformanceTab({
             ) : (
               <div style={styles.commandList}>
                 {store.commands.map((cmd) => (
-                  <CommandRow
-                    key={cmd.name}
-                    cmd={cmd}
-                    globalMax={globalMax}
-                  />
+                  <CommandRow key={cmd.name} cmd={cmd} globalMax={globalMax} />
                 ))}
               </div>
             )}

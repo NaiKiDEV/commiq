@@ -31,6 +31,7 @@ export function DevtoolsPanel({
 }: DevtoolsPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("events");
   const [panelHeight, setPanelHeight] = useState(initialHeight);
+  const [isPanelDragging, setIsPanelDragging] = useState(false);
   const isDragging = useRef(false);
   const startY = useRef(0);
   const startHeight = useRef(0);
@@ -38,6 +39,7 @@ export function DevtoolsPanel({
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       isDragging.current = true;
+      setIsPanelDragging(true);
       startY.current = e.clientY;
       startHeight.current = panelHeight;
       e.preventDefault();
@@ -57,6 +59,7 @@ export function DevtoolsPanel({
     };
     const onMouseUp = () => {
       isDragging.current = false;
+      setIsPanelDragging(false);
     };
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
@@ -78,8 +81,8 @@ export function DevtoolsPanel({
     <div style={{ ...styles.panel, height: panelHeight }}>
       <style>{scrollbarCSS}</style>
 
-      <div style={styles.resizeHandle} onMouseDown={onMouseDown}>
-        <div style={styles.resizeGrip} />
+      <div style={styles.resizeHandle} className={`commiq-resize-handle${isPanelDragging ? " dragging" : ""}`} onMouseDown={onMouseDown}>
+        <div style={styles.resizeGrip} className="commiq-resize-grip" />
       </div>
 
       <div style={styles.header}>
@@ -173,6 +176,24 @@ const scrollbarCSS = `
 .commiq-devtools-scroll *::-webkit-scrollbar-thumb:hover {
   background: ${colors.scrollThumbHover};
 }
+.commiq-resize-grip {
+  background-color: ${colors.textMuted};
+  opacity: 0.5;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+.commiq-resize-handle {
+  border-top: 1px solid transparent;
+  transition: border-color 0.15s;
+}
+.commiq-resize-handle:hover .commiq-resize-grip,
+.commiq-resize-handle.dragging .commiq-resize-grip {
+  opacity: 1;
+  background-color: ${colors.accent};
+}
+.commiq-resize-handle:hover,
+.commiq-resize-handle.dragging {
+  border-color: ${colors.accent};
+}
 `;
 
 const styles: Record<string, CSSProperties> = {
@@ -207,9 +228,6 @@ const styles: Record<string, CSSProperties> = {
     width: 36,
     height: 3,
     borderRadius: 2,
-    backgroundColor: colors.textMuted,
-    opacity: 0.5,
-    transition: "opacity 0.15s",
   },
   header: {
     display: "flex",

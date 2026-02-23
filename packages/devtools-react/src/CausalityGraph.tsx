@@ -1,4 +1,11 @@
-import { useState, useMemo, type CSSProperties } from "react";
+import {
+  useState,
+  useMemo,
+  useRef,
+  useCallback,
+  useEffect,
+  type CSSProperties,
+} from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools";
 import {
   colors,
@@ -31,6 +38,42 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
   const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(
     null,
   );
+  const [detailHeight, setDetailHeight] = useState(180);
+  const [isDetailDragging, setIsDetailDragging] = useState(false);
+  const detailDragging = useRef(false);
+  const detailStartY = useRef(0);
+  const detailStartH = useRef(0);
+
+  const onDetailMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      detailDragging.current = true;
+      setIsDetailDragging(true);
+      detailStartY.current = e.clientY;
+      detailStartH.current = detailHeight;
+      e.preventDefault();
+    },
+    [detailHeight],
+  );
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!detailDragging.current) return;
+      const delta = detailStartY.current - e.clientY;
+      setDetailHeight(
+        Math.max(80, Math.min(500, detailStartH.current + delta)),
+      );
+    };
+    const onUp = () => {
+      detailDragging.current = false;
+      setIsDetailDragging(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
   const chains = useMemo(() => buildChains(timeline), [timeline]);
 
@@ -93,7 +136,17 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
       </div>
 
       {selectedEvent && (
-        <div style={styles.detailPanel}>
+        <div style={{ ...styles.detailPanel, height: detailHeight }}>
+          <div
+            style={styles.detailResize}
+            className={`commiq-resize-handle${isDetailDragging ? " dragging" : ""}`}
+            onMouseDown={onDetailMouseDown}
+          >
+            <div
+              style={styles.detailResizeGrip}
+              className="commiq-resize-grip"
+            />
+          </div>
           <div style={styles.detailHeader}>
             <span style={styles.detailTitle}>{selectedEvent.name}</span>
             <button
@@ -497,8 +550,27 @@ const styles: Record<string, CSSProperties> = {
     flexShrink: 0,
     borderTop: `1px solid ${colors.border}`,
     backgroundColor: colors.bgActive,
-    maxHeight: "40%",
-    overflow: "auto",
+    overflow: "hidden",
+    display: "flex",
+    flexDirection: "column",
+    position: "relative" as const,
+  },
+  detailResize: {
+    position: "absolute" as const,
+    top: -4,
+    left: 0,
+    right: 0,
+    height: 8,
+    cursor: "ns-resize",
+    zIndex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  detailResizeGrip: {
+    width: 36,
+    height: 3,
+    borderRadius: 2,
   },
   detailHeader: {
     display: "flex",
@@ -524,6 +596,8 @@ const styles: Record<string, CSSProperties> = {
   },
   detailBody: {
     padding: "8px 12px",
+    overflow: "auto" as const,
+    flex: 1,
   },
   detailRow: {
     display: "flex",
@@ -559,6 +633,5 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 6,
     border: `1px solid ${colors.border}`,
     overflow: "auto",
-    maxHeight: 140,
   },
 };
