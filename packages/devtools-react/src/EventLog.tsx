@@ -9,6 +9,7 @@ import {
   formatTime,
 } from "./theme";
 import { JsonTree } from "./JsonTree";
+import { StateDiff } from "./StateDiff";
 
 interface EventLogProps {
   timeline: TimelineEntry[];
@@ -196,29 +197,18 @@ export function EventLog({
                     </div>
                   )}
 
-                  {entry.stateBefore !== undefined && (
-                    <div style={styles.detailSection}>
-                      <div style={styles.detailSectionLabel}>State Before</div>
-                      <div style={styles.detailContent}>
-                        <JsonTree
-                          data={entry.stateBefore}
-                          initialExpanded={false}
-                        />
+                  {entry.stateBefore !== undefined &&
+                    entry.stateAfter !== undefined && (
+                      <div style={styles.detailSection}>
+                        <div style={styles.detailSectionLabel}>State Diff</div>
+                        <div style={styles.detailContent}>
+                          <StateDiff
+                            before={entry.stateBefore}
+                            after={entry.stateAfter}
+                          />
+                        </div>
                       </div>
-                    </div>
-                  )}
-
-                  {entry.stateAfter !== undefined && (
-                    <div style={styles.detailSection}>
-                      <div style={styles.detailSectionLabel}>State After</div>
-                      <div style={styles.detailContent}>
-                        <JsonTree
-                          data={entry.stateAfter}
-                          initialExpanded={false}
-                        />
-                      </div>
-                    </div>
-                  )}
+                    )}
                 </div>
               )}
             </div>

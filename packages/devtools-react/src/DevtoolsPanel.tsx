@@ -6,15 +6,17 @@ import {
   type CSSProperties,
 } from "react";
 import type { SealedStore } from "@naikidev/commiq";
+import type { TimelineEntry } from "@naikidev/commiq-devtools";
 import { colors, fonts } from "./theme";
 import { EventLog } from "./EventLog";
 import { CausalityGraph } from "./CausalityGraph";
 import { TimelineChart } from "./TimelineChart";
 import { PerformanceTab } from "./PerformanceTab";
 import { StoreStateView } from "./StoreStateView";
+import { DependencyMap } from "./DependencyMap";
 import type { DevtoolsEngine } from "./useDevtoolsEngine";
 
-type Tab = "events" | "graph" | "timeline" | "perf" | "state";
+type Tab = "events" | "graph" | "timeline" | "perf" | "state" | "deps";
 
 interface DevtoolsPanelProps {
   engine: DevtoolsEngine;
@@ -32,9 +34,54 @@ export function DevtoolsPanel({
   const [activeTab, setActiveTab] = useState<Tab>("events");
   const [panelHeight, setPanelHeight] = useState(initialHeight);
   const [isPanelDragging, setIsPanelDragging] = useState(false);
+  const [importedTimeline, setImportedTimeline] = useState<
+    TimelineEntry[] | null
+  >(null);
   const isDragging = useRef(false);
   const startY = useRef(0);
   const startHeight = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const activeTimeline = importedTimeline ?? engine.timeline;
+  const activeStoreNames = importedTimeline
+    ? [...new Set(importedTimeline.map((e) => e.storeName))]
+    : engine.storeNames;
+
+  const handleExport = useCallback(() => {
+    const data = JSON.stringify(engine.timeline, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `commiq-timeline-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [engine.timeline]);
+
+  const handleImport = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result as string) as TimelineEntry[];
+          if (Array.isArray(data)) {
+            setImportedTimeline(data);
+          }
+        } catch {
+          /* ignore invalid files */
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    },
+    [],
+  );
 
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -75,13 +122,18 @@ export function DevtoolsPanel({
     { id: "timeline", label: "Timeline", icon: "◔" },
     { id: "perf", label: "Performance", icon: "⚡" },
     { id: "state", label: "State", icon: "◆" },
+    { id: "deps", label: "Deps", icon: "◈" },
   ];
 
   return (
     <div style={{ ...styles.panel, height: panelHeight }}>
       <style>{scrollbarCSS}</style>
 
-      <div style={styles.resizeHandle} className={`commiq-resize-handle${isPanelDragging ? " dragging" : ""}`} onMouseDown={onMouseDown}>
+      <div
+        style={styles.resizeHandle}
+        className={`commiq-resize-handle${isPanelDragging ? " dragging" : ""}`}
+        onMouseDown={onMouseDown}
+      >
         <div style={styles.resizeGrip} className="commiq-resize-grip" />
       </div>
 
@@ -109,6 +161,36 @@ export function DevtoolsPanel({
         </div>
 
         <div style={styles.headerRight}>
+          {importedTimeline && (
+            <button
+              onClick={() => setImportedTimeline(null)}
+              style={styles.importedBadge}
+              title="Viewing imported data — click to return to live"
+            >
+              ⬤ imported
+            </button>
+          )}
+          <button
+            onClick={handleExport}
+            style={styles.headerButton}
+            title="Export timeline"
+          >
+            ↓
+          </button>
+          <button
+            onClick={handleImport}
+            style={styles.headerButton}
+            title="Import timeline"
+          >
+            ↑
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json"
+            onChange={handleFileChange}
+            style={{ display: "none" }}
+          />
           <button
             onClick={engine.clear}
             style={styles.headerButton}
@@ -129,28 +211,34 @@ export function DevtoolsPanel({
 
       <div style={styles.content} className="commiq-devtools-scroll">
         {activeTab === "events" && (
-          <EventLog timeline={engine.timeline} storeNames={engine.storeNames} />
+          <EventLog timeline={activeTimeline} storeNames={activeStoreNames} />
         )}
         {activeTab === "graph" && (
           <CausalityGraph
-            timeline={engine.timeline}
-            storeNames={engine.storeNames}
+            timeline={activeTimeline}
+            storeNames={activeStoreNames}
           />
         )}
         {activeTab === "timeline" && (
           <TimelineChart
-            timeline={engine.timeline}
-            storeNames={engine.storeNames}
+            timeline={activeTimeline}
+            storeNames={activeStoreNames}
           />
         )}
         {activeTab === "perf" && (
           <PerformanceTab
-            timeline={engine.timeline}
-            storeNames={engine.storeNames}
+            timeline={activeTimeline}
+            storeNames={activeStoreNames}
           />
         )}
         {activeTab === "state" && (
           <StoreStateView stores={stores} storeStates={engine.storeStates} />
+        )}
+        {activeTab === "deps" && (
+          <DependencyMap
+            timeline={activeTimeline}
+            storeNames={activeStoreNames}
+          />
         )}
       </div>
     </div>
@@ -253,7 +341,7 @@ const styles: Record<string, CSSProperties> = {
   title: {
     fontSize: 13,
     fontWeight: 700,
-    color: colors.text,
+    color: colors.accentLight,
     letterSpacing: -0.2,
   },
   titleSuffix: {
@@ -317,6 +405,21 @@ const styles: Record<string, CSSProperties> = {
     padding: "2px 7px",
     borderRadius: 9999,
     fontWeight: 500,
+  },
+  importedBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 9,
+    fontFamily: fonts.mono,
+    color: "#fbbf24",
+    backgroundColor: "rgba(251, 191, 36, 0.1)",
+    padding: "2px 8px",
+    borderRadius: 9999,
+    fontWeight: 500,
+    borderWidth: 0,
+    cursor: "pointer",
+    transition: "all 0.15s",
   },
   content: {
     flex: 1,

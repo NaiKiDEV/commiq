@@ -16,6 +16,7 @@ import {
   formatTime,
 } from "./theme";
 import { JsonTree } from "./JsonTree";
+import { StateDiff } from "./StateDiff";
 
 interface CausalityGraphProps {
   timeline: TimelineEntry[];
@@ -187,6 +188,18 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
                 </div>
               </div>
             )}
+            {selectedEvent.stateBefore !== undefined &&
+              selectedEvent.stateAfter !== undefined && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={styles.detailSectionLabel}>State Diff</div>
+                  <div style={styles.detailContent}>
+                    <StateDiff
+                      before={selectedEvent.stateBefore}
+                      after={selectedEvent.stateAfter}
+                    />
+                  </div>
+                </div>
+              )}
           </div>
         </div>
       )}

@@ -16,6 +16,7 @@ import {
   formatTime,
 } from "./theme";
 import { JsonTree } from "./JsonTree";
+import { StateDiff } from "./StateDiff";
 
 interface TimelineChartProps {
   timeline: TimelineEntry[];
@@ -563,6 +564,18 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
                 </div>
               </div>
             )}
+            {selectedEvent.stateBefore !== undefined &&
+              selectedEvent.stateAfter !== undefined && (
+                <div style={{ marginTop: 8 }}>
+                  <div style={styles.sectionLabel}>State Diff</div>
+                  <div style={styles.sectionContent}>
+                    <StateDiff
+                      before={selectedEvent.stateBefore}
+                      after={selectedEvent.stateAfter}
+                    />
+                  </div>
+                </div>
+              )}
           </div>
         </div>
       )}
