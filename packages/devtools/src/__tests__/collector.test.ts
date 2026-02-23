@@ -23,8 +23,12 @@ describe("EventCollector", () => {
   it("filters timeline by store name", async () => {
     const store1 = createStore({ a: 0 });
     const store2 = createStore({ b: 0 });
-    store1.addCommandHandler("inc", (ctx) => ctx.setState({ a: ctx.state.a + 1 }));
-    store2.addCommandHandler("inc", (ctx) => ctx.setState({ b: ctx.state.b + 1 }));
+    store1.addCommandHandler("inc", (ctx) =>
+      ctx.setState({ a: ctx.state.a + 1 }),
+    );
+    store2.addCommandHandler("inc", (ctx) =>
+      ctx.setState({ b: ctx.state.b + 1 }),
+    );
 
     const collector = new EventCollector({ maxEvents: 1000 });
     collector.connect(store1, "store1");
@@ -45,11 +49,11 @@ describe("EventCollector", () => {
     const userCreated = createEvent<{ name: string }>("userCreated");
     const store = createStore({ user: "", greeting: "" });
 
-    store.addCommandHandler("createUser", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
-    store.addCommandHandler("greet", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, greeting: `Hello ${cmd.data.name}` });
     });
     store.addEventHandler(userCreated, (ctx, event) => {
@@ -63,7 +67,9 @@ describe("EventCollector", () => {
     await store.flush();
 
     const timeline = collector.getTimeline();
-    const firstCommandStarted = timeline.find((e) => e.name === "commandStarted");
+    const firstCommandStarted = timeline.find(
+      (e) => e.name === "commandStarted",
+    );
     expect(firstCommandStarted).toBeDefined();
 
     const chain = collector.getChain(firstCommandStarted!.causedBy!);

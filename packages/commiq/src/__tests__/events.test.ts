@@ -12,7 +12,7 @@ describe("events", () => {
     const listener = vi.fn();
     const store = createStore({ user: "" });
 
-    store.addCommandHandler("createUser", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
@@ -28,11 +28,11 @@ describe("events", () => {
     const userCreated = createEvent<{ name: string }>("userCreated");
     const store = createStore({ user: "", greeting: "" });
 
-    store.addCommandHandler("createUser", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
-    store.addCommandHandler("greet", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, greeting: `Hello ${cmd.data.name}` });
     });
     store.addEventHandler(userCreated, (ctx, event) => {
@@ -58,7 +58,10 @@ describe("events", () => {
       .map((c) => c[0])
       .filter((e) => e.id === builtinEvents.stateChanged.id);
     expect(stateChanges).toHaveLength(1);
-    expect(stateChanges[0].data).toEqual({ prev: { count: 0 }, next: { count: 1 } });
+    expect(stateChanges[0].data).toEqual({
+      prev: { count: 0 },
+      next: { count: 1 },
+    });
   });
 
   it("emits invalidCommand for unregistered commands", async () => {
@@ -107,9 +110,13 @@ describe("events", () => {
   it("emits auto-notify event when notify option is true", async () => {
     const listener = vi.fn();
     const store = createStore({ count: 0 });
-    store.addCommandHandler("inc", (ctx) => {
-      ctx.setState({ count: ctx.state.count + 1 });
-    }, { notify: true });
+    store.addCommandHandler(
+      "inc",
+      (ctx) => {
+        ctx.setState({ count: ctx.state.count + 1 });
+      },
+      { notify: true },
+    );
     store.openStream(listener);
     store.queue(createCommand("inc", undefined));
     await store.flush();

@@ -157,10 +157,10 @@ export class StoreImpl<S> {
         );
 
         if (entry.options?.notify) {
-          const notifyEventDef = createEvent(`${command.name}:handled`);
-          await this._broadcast(
-            this._createEvent(notifyEventDef, { command }),
+          const notifyEventDef = createEvent<{ command: Command }>(
+            `${command.name}:handled`,
           );
+          await this._broadcast(this._createEvent(notifyEventDef, { command }));
         }
       } catch (error) {
         await this._broadcast(

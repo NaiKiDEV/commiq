@@ -30,7 +30,7 @@ describe("createStore", () => {
   it("processes commands sequentially", async () => {
     const order: number[] = [];
     const store = createStore({ value: "" });
-    store.addCommandHandler("append", async (ctx, cmd) => {
+    store.addCommandHandler<number>("append", async (ctx, cmd) => {
       order.push(cmd.data);
       await new Promise((r) => setTimeout(r, cmd.data === 1 ? 50 : 10));
       ctx.setState({ value: ctx.state.value + cmd.data });

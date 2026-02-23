@@ -26,11 +26,11 @@ describe("instrumentation", () => {
     const listener = vi.fn();
     const store = createStore({ user: "", greeting: "" });
 
-    store.addCommandHandler("createUser", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
-    store.addCommandHandler("greet", (ctx, cmd) => {
+    store.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
       ctx.setState({ ...ctx.state, greeting: `Hello ${cmd.data.name}` });
     });
     store.addEventHandler(userCreated, (ctx, event) => {
@@ -99,11 +99,11 @@ describe("instrumentation", () => {
     const storeA = createStore({ user: "" });
     const storeB = createStore({ greeting: "" });
 
-    storeA.addCommandHandler("createUser", (ctx, cmd) => {
+    storeA.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
-    storeB.addCommandHandler("greet", (ctx, cmd) => {
+    storeB.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
       ctx.setState({ greeting: `Hello ${cmd.data.name}` });
     });
 
@@ -153,6 +153,6 @@ describe("instrumentation", () => {
     const commandStarted = listener.mock.calls.find(
       (c) => c[0].name === "commandStarted",
     );
-    expect(commandStarted[0].data.command.causedBy).toBeNull();
+    expect(commandStarted![0].data.command.causedBy).toBeNull();
   });
 });

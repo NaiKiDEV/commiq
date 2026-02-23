@@ -13,12 +13,12 @@ describe("createEventBus", () => {
     const storeA = createStore({ user: "" });
     const storeB = createStore({ greeting: "" });
 
-    storeA.addCommandHandler("createUser", (ctx, cmd) => {
+    storeA.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
       ctx.setState({ user: cmd.data.name });
       ctx.emit(userCreated, { name: cmd.data.name });
     });
 
-    storeB.addCommandHandler("greet", (ctx, cmd) => {
+    storeB.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
       ctx.setState({ greeting: `Hello ${cmd.data.name}` });
     });
 
@@ -36,11 +36,11 @@ describe("createEventBus", () => {
   });
 
   it("disconnects a store from the bus", async () => {
-    const evt = createEvent("test");
+    const evt = createEvent<undefined>("test");
     const listener = vi.fn();
     const store = createStore({});
     store.addCommandHandler("fire", (ctx) => {
-      ctx.emit(evt, {});
+      ctx.emit(evt, undefined);
     });
 
     const bus = createEventBus();
