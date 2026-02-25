@@ -12,6 +12,8 @@ import {
   createEvent,
 } from "./types";
 
+let _causalContext: string | null = null;
+
 export const builtinEventDefs = {
   stateChanged: createEvent<{ prev: unknown; next: unknown }>("stateChanged"),
   commandHandled: createEvent<{ command: Command }>("commandHandled"),
@@ -67,7 +69,8 @@ export class StoreImpl<S> {
 
   queue(command: Command): void {
     command.correlationId = nanoid();
-    command.causedBy = this._currentCorrelationId ?? command.causedBy;
+    command.causedBy =
+      this._currentCorrelationId ?? command.causedBy ?? _causalContext;
     this._queue.push(command);
     if (!this._processing) {
       this._processQueue();
@@ -183,9 +186,14 @@ export class StoreImpl<S> {
   }
 
   private async _broadcast(event: StoreEvent): Promise<void> {
+    const prevCausalContext = _causalContext;
+    _causalContext = event.correlationId;
+
     for (const listener of this._streamListeners) {
       listener(event);
     }
+
+    _causalContext = prevCausalContext;
 
     await this._handleEvent(event);
   }

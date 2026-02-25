@@ -209,65 +209,58 @@ pipelineBus.connect(_notificationStore);
 
 pipelineBus.on(orderValidated, (event) => {
   _paymentStore.queue(
-    createCommand(
-      "processPayment",
-      { orderId: event.data.orderId, amount: event.data.total },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("processPayment", {
+      orderId: event.data.orderId,
+      amount: event.data.total,
+    }),
   );
 });
 
 pipelineBus.on(paymentCompleted, (event) => {
   _orderStore.queue(
-    createCommand(
-      "updateOrderStatus",
-      { orderId: event.data.orderId, status: "paid" as const },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("updateOrderStatus", {
+      orderId: event.data.orderId,
+      status: "paid" as const,
+    }),
   );
   _fulfillmentStore.queue(
-    createCommand(
-      "shipOrder",
-      { orderId: event.data.orderId, transactionId: event.data.transactionId },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("shipOrder", {
+      orderId: event.data.orderId,
+      transactionId: event.data.transactionId,
+    }),
   );
 });
 
 pipelineBus.on(paymentFailed, (event) => {
   _orderStore.queue(
-    createCommand(
-      "updateOrderStatus",
-      { orderId: event.data.orderId, status: "rejected" as const },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("updateOrderStatus", {
+      orderId: event.data.orderId,
+      status: "rejected" as const,
+    }),
   );
 });
 
 pipelineBus.on(orderShipped, (event) => {
   _orderStore.queue(
-    createCommand(
-      "updateOrderStatus",
-      { orderId: event.data.orderId, status: "shipped" as const },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("updateOrderStatus", {
+      orderId: event.data.orderId,
+      status: "shipped" as const,
+    }),
   );
   _notificationStore.queue(
-    createCommand(
-      "sendNotification",
-      { orderId: event.data.orderId, trackingCode: event.data.trackingCode },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("sendNotification", {
+      orderId: event.data.orderId,
+      trackingCode: event.data.trackingCode,
+    }),
   );
 });
 
 pipelineBus.on(notificationSent, (event) => {
   _orderStore.queue(
-    createCommand(
-      "updateOrderStatus",
-      { orderId: event.data.orderId, status: "done" as const },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("updateOrderStatus", {
+      orderId: event.data.orderId,
+      status: "done" as const,
+    }),
   );
 });
 

@@ -91,7 +91,7 @@ describe("instrumentation", () => {
     }
   });
 
-  it("preserves causedBy set via createCommand options for cross-store causality", async () => {
+  it("automatically tracks cross-store causality without explicit causedBy", async () => {
     const userCreated = createEvent<{ name: string }>("userCreated");
     const listenerA = vi.fn();
     const listenerB = vi.fn();
@@ -113,11 +113,7 @@ describe("instrumentation", () => {
     storeA.openStream((event) => {
       if (event.name === "userCreated") {
         storeB.queue(
-          createCommand(
-            "greet",
-            { name: (event.data as any).name },
-            { causedBy: event.correlationId },
-          ),
+          createCommand("greet", { name: (event.data as any).name }),
         );
       }
     });
@@ -138,6 +134,45 @@ describe("instrumentation", () => {
     expect(greetStarted.data.command.causedBy).toBe(
       userCreatedEvent.correlationId,
     );
+  });
+
+  it("preserves explicit causedBy when provided", async () => {
+    const userCreated = createEvent<{ name: string }>("userCreated");
+    const listenerB = vi.fn();
+
+    const storeA = createStore({ user: "" });
+    const storeB = createStore({ greeting: "" });
+
+    storeA.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
+      ctx.setState({ user: cmd.data.name });
+      ctx.emit(userCreated, { name: cmd.data.name });
+    });
+    storeB.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
+      ctx.setState({ greeting: `Hello ${cmd.data.name}` });
+    });
+
+    storeB.openStream(listenerB);
+
+    storeA.openStream((event) => {
+      if (event.name === "userCreated") {
+        storeB.queue(
+          createCommand(
+            "greet",
+            { name: (event.data as any).name },
+            { causedBy: "custom-id" },
+          ),
+        );
+      }
+    });
+
+    storeA.queue(createCommand("createUser", { name: "Alice" }));
+    await storeA.flush();
+    await storeB.flush();
+
+    const greetStarted = listenerB.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.name === "commandStarted");
+    expect(greetStarted.data.command.causedBy).toBe("custom-id");
   });
 
   it("commands queued from outside have causedBy null", async () => {

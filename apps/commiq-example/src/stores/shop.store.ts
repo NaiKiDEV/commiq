@@ -134,11 +134,11 @@ shopBus.on(stockReserved, (event) => {
   );
   if (!product) return;
   _cartStore.queue(
-    createCommand(
-      "addToCart",
-      { productId: product.id, name: product.name, price: product.price },
-      { causedBy: event.correlationId },
-    ),
+    createCommand("addToCart", {
+      productId: product.id,
+      name: product.name,
+      price: product.price,
+    }),
   );
 });
 
@@ -150,7 +150,6 @@ shopBus.on(outOfStock, (event) => {
     createCommand(
       "setError",
       `"${product?.name ?? "Product"}" is out of stock`,
-      { causedBy: event.correlationId },
     ),
   );
 });
