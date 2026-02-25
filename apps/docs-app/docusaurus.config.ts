@@ -11,8 +11,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: "https://commiq.dev",
-  baseUrl: "/",
+  url: "https://naikidev.github.io",
+  baseUrl: "/commiq/docs/",
 
   organizationName: "naikidev",
   projectName: "commiq",
@@ -30,7 +30,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: "./sidebars.ts",
-          routeBasePath: "docs",
+          routeBasePath: "/",
         },
         blog: false,
         theme: {
@@ -54,6 +54,11 @@ const config: Config = {
           label: "Docs",
         },
         {
+          href: "https://naikidev.github.io/commiq/",
+          label: "Examples",
+          position: "left",
+        },
+        {
           href: "https://github.com/naikidev/commiq",
           label: "GitHub",
           position: "right",
@@ -68,11 +73,11 @@ const config: Config = {
           items: [
             {
               label: "Getting Started",
-              to: "/docs/getting-started",
+              to: "/getting-started",
             },
             {
               label: "API Reference",
-              to: "/docs/api/store",
+              to: "/api/store",
             },
           ],
         },
@@ -81,15 +86,15 @@ const config: Config = {
           items: [
             {
               label: "Store Dependencies",
-              to: "/docs/examples/store-dependencies",
+              to: "/examples/store-dependencies",
             },
             {
               label: "Async Commands",
-              to: "/docs/examples/async-commands",
+              to: "/examples/async-commands",
             },
             {
               label: "Event Stream",
-              to: "/docs/examples/event-stream",
+              to: "/examples/event-stream",
             },
           ],
         },
@@ -98,11 +103,11 @@ const config: Config = {
           items: [
             {
               label: "@naikidev/commiq",
-              to: "/docs/api/store",
+              to: "/api/store",
             },
             {
               label: "@naikidev/commiq-react",
-              to: "/docs/react/hooks",
+              to: "/react/hooks",
             },
           ],
         },

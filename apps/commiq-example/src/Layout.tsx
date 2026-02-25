@@ -52,6 +52,12 @@ export function Layout() {
           </span>
           <div className="flex-1" />
           <a
+            href="/commiq/docs/"
+            className="text-sm font-medium text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors mr-4"
+          >
+            Docs
+          </a>
+          <a
             href="https://github.com/naikidev/commiq"
             target="_blank"
             rel="noopener"
