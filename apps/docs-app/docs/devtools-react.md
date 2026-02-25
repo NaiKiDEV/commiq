@@ -16,6 +16,10 @@ Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
 
 ## Basic Usage
 
+No provider required. Pass stores directly as props or mount imperatively.
+
+### As a Component
+
 ```tsx
 import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
 import { counterStore } from "./stores/counter";
@@ -33,7 +37,24 @@ function App() {
 }
 ```
 
-The component renders a floating button in the corner of the screen. Click it to open the devtools panel.
+### Without JSX
+
+Mount from anywhere — `main.ts`, a store file, or a plain script:
+
+```ts
+import { mountDevtools } from "@naikidev/commiq-devtools-react";
+import { counterStore } from "./stores/counter";
+import { todoStore } from "./stores/todos";
+
+const unmount = mountDevtools({
+  stores: { counter: counterStore, todos: todoStore },
+});
+
+// Later, to remove:
+unmount();
+```
+
+Both approaches render a floating button in the corner of the screen. Click it to open the devtools panel.
 
 ## Props
 
@@ -87,6 +108,41 @@ By default, `CommiqDevtools` auto-detects the environment and renders nothing in
 // Auto-detect (default) — hidden when NODE_ENV === "production"
 <CommiqDevtools stores={stores} />
 ```
+
+## Custom Devtools UI
+
+Use the `useDevtoolsEngine` hook to build your own devtools interface:
+
+```tsx
+import { useDevtoolsEngine } from "@naikidev/commiq-devtools-react";
+
+function MyDevtools() {
+  const engine = useDevtoolsEngine({ counter: counterStore });
+
+  return (
+    <div>
+      <p>Events: {engine.eventCount}</p>
+      <ul>
+        {engine.timeline.map((entry) => (
+          <li key={entry.correlationId}>{entry.name}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+The hook returns a `DevtoolsEngine` with:
+
+| Property          | Type                                          | Description                          |
+| ----------------- | --------------------------------------------- | ------------------------------------ |
+| `timeline`        | `TimelineEntry[]`                             | All collected events                 |
+| `getChain`        | `(correlationId: string) => TimelineEntry[]`  | Events linked by causality           |
+| `getStateHistory` | `(storeName: string) => StateSnapshot[]`      | State changes over time              |
+| `storeStates`     | `Record<string, unknown>`                     | Current state of each store          |
+| `storeNames`      | `string[]`                                    | Connected store names                |
+| `eventCount`      | `number`                                      | Total events collected               |
+| `clear`           | `() => void`                                  | Reset collection                     |
 
 ## Export and Import
 

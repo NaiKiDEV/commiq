@@ -12,6 +12,8 @@ Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
 
 ## Usage
 
+No provider required. Use as a component or mount imperatively.
+
 ```tsx
 import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
 
@@ -23,6 +25,14 @@ function App() {
     </>
   );
 }
+```
+
+Or without JSX:
+
+```ts
+import { mountDevtools } from "@naikidev/commiq-devtools-react";
+
+const unmount = mountDevtools({ stores: { counter: counterStore } });
 ```
 
 Auto-hides in production. Override with `enabled={true}` or `enabled={false}`.
