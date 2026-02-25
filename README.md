@@ -6,12 +6,15 @@ Commiq models state as a pipeline: commands enter a queue, handlers process them
 
 ## Packages
 
-| Package                                           | Description                                                               |
-| ------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`@naikidev/commiq`](packages/commiq)             | Core library. Framework-agnostic.                                         |
-| [`@naikidev/commiq-react`](packages/commiq-react) | React bindings (`useSelector`, `useQueue`, `useEvent`, `CommiqProvider`). |
-| [`@naikidev/commiq-example`](apps/commiq-example) | Example application with basic and advanced usage patterns.               |
-| [`@naikidev/docs`](apps/docs-app)                 | Documentation site (Docusaurus).                                          |
+| Package                                                         | Description                                                               |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`@naikidev/commiq`](packages/commiq)                           | Core library. Framework-agnostic.                                         |
+| [`@naikidev/commiq-react`](packages/commiq-react)               | React bindings (`useSelector`, `useQueue`, `useEvent`, `CommiqProvider`). |
+| [`@naikidev/commiq-devtools`](packages/devtools)                | Instrumentation and debugging tools.                                      |
+| [`@naikidev/commiq-devtools-react`](packages/devtools-react)    | Embedded devtools panel for React.                                        |
+| [`@naikidev/commiq-otel`](packages/commiq-otel)                 | OpenTelemetry tracing integration.                                        |
+| [`@naikidev/commiq-example`](apps/commiq-example)               | Example application with basic and advanced usage patterns.               |
+| [`@naikidev/docs`](apps/docs-app)                               | Documentation site (Docusaurus).                                          |
 
 ## Install
 

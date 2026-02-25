@@ -84,3 +84,25 @@ function Counter() {
   );
 }
 ```
+
+## Add Devtools
+
+During development, drop in the `CommiqDevtools` component to see store activity, trace causality chains, and inspect state:
+
+```bash
+pnpm add @naikidev/commiq-devtools-react @naikidev/commiq-devtools
+```
+
+```tsx
+import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
+import { counterStore } from "./stores/counter";
+
+function App() {
+  return (
+    <>
+      <Counter />
+      <CommiqDevtools stores={{ counter: counterStore }} />
+    </>
+  );
+}
+```

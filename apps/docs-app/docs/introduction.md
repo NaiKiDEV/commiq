@@ -24,6 +24,9 @@ Instead of directly mutating state, you describe _what should happen_ via **comm
 
 - **`@naikidev/commiq`** — Core library (framework-agnostic)
 - **`@naikidev/commiq-react`** — React bindings (`useSelector`, `useQueue`, `useEvent`, `CommiqProvider`)
+- **`@naikidev/commiq-devtools`** — Instrumentation, event timeline, and causality tracking
+- **`@naikidev/commiq-devtools-react`** — Embedded devtools panel for React applications
+- **`@naikidev/commiq-otel`** — OpenTelemetry tracing integration
 
 ## Quick Example
 
