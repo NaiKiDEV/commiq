@@ -11,7 +11,7 @@ import {
 import { JsonTree } from "./JsonTree";
 import { StateDiff } from "./StateDiff";
 
-interface EventLogProps {
+type EventLogProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
   onSelectCorrelation?: (id: string) => void;

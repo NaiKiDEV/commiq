@@ -1,3 +1,5 @@
+import { BuiltinEventName } from "@naikidev/commiq";
+
 export const colors = {
   bg: "#0d1117",
   bgPanel: "#151921",
@@ -58,19 +60,12 @@ export const fonts = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
 } as const;
 
-export const BUILTIN_EVENTS = new Set([
-  "stateChanged",
-  "commandStarted",
-  "commandHandled",
-  "invalidCommand",
-  "commandHandlingError",
-  "stateReset",
-]);
+export const BUILTIN_EVENTS: Set<string> = new Set(Object.values(BuiltinEventName));
 
 export function getEventColor(name: string, type: "command" | "event") {
-  if (name === "commandHandlingError" || name === "invalidCommand")
+  if (name === BuiltinEventName.CommandHandlingError || name === BuiltinEventName.InvalidCommand)
     return { fg: colors.error, bg: colors.errorBg };
-  if (name === "stateChanged")
+  if (name === BuiltinEventName.StateChanged)
     return { fg: colors.stateChange, bg: colors.stateChangeBg };
   if (type === "command") return { fg: colors.command, bg: colors.commandBg };
   return { fg: colors.event, bg: colors.eventBg };

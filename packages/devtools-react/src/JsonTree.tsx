@@ -1,7 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { colors, fonts } from "./theme";
 
-interface JsonTreeProps {
+type JsonTreeProps = {
   data: unknown;
   depth?: number;
   initialExpanded?: boolean;

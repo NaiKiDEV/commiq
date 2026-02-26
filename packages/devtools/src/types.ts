@@ -1,4 +1,4 @@
-export interface TimelineEntry {
+export type TimelineEntry = {
   storeName: string;
   type: "command" | "event";
   name: string;
@@ -10,7 +10,7 @@ export interface TimelineEntry {
   stateAfter?: unknown;
 }
 
-export interface StateSnapshot {
+export type StateSnapshot = {
   storeName: string;
   state: unknown;
   timestamp: number;
@@ -25,13 +25,13 @@ export type DevtoolsMessage =
   | { type: "REQUEST_STATE"; storeName: string }
   | { type: "TIME_TRAVEL"; storeName: string; stateIndex: number };
 
-export interface Transport {
+export type Transport = {
   send(message: DevtoolsMessage): void;
   onMessage(handler: (message: DevtoolsMessage) => void): () => void;
   destroy(): void;
 }
 
-export interface DevtoolsOptions {
+export type DevtoolsOptions = {
   transport?: Transport;
   maxEvents?: number;
   logToConsole?: boolean;

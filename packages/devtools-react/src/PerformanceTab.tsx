@@ -2,12 +2,12 @@ import { useState, useMemo, type CSSProperties } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools";
 import { colors, fonts } from "./theme";
 
-interface PerformanceTabProps {
+type PerformanceTabProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
 }
 
-interface CommandStats {
+type CommandStats = {
   name: string;
   storeName: string;
   count: number;
@@ -17,7 +17,7 @@ interface CommandStats {
   avgMs: number;
 }
 
-interface StoreStats {
+type StoreStats = {
   storeName: string;
   totalCommands: number;
   totalEvents: number;

@@ -14,15 +14,15 @@ import type {
   EventDef,
   StoreEvent,
 } from "@naikidev/commiq";
-import { builtinEvents } from "@naikidev/commiq";
+import { BuiltinEvent } from "@naikidev/commiq";
 
-interface CommiqContextValue {
+type CommiqContextValue = {
   stores: Record<string, SealedStore<any>>;
 }
 
 const CommiqContext = createContext<CommiqContextValue | null>(null);
 
-export interface CommiqProviderProps {
+export type CommiqProviderProps = {
   stores: Record<string, SealedStore<any>>;
   children?: ReactNode;
 }
@@ -41,7 +41,7 @@ export function useSelector<S, T>(
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       const listener = (event: StoreEvent) => {
-        if (event.id === builtinEvents.stateChanged.id) {
+        if (event.id === BuiltinEvent.StateChanged.id) {
           onStoreChange();
         }
       };

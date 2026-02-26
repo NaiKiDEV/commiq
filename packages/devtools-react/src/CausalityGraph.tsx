@@ -18,13 +18,13 @@ import {
 import { JsonTree } from "./JsonTree";
 import { StateDiff } from "./StateDiff";
 
-interface CausalityGraphProps {
+type CausalityGraphProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
 }
 
 /** A group of events spawned by a single command dispatch */
-interface CommandGroup {
+type CommandGroup = {
   commandId: string;
   commandName: string;
   storeName: string;

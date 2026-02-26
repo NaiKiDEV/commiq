@@ -18,7 +18,7 @@ import type { DevtoolsEngine } from "./useDevtoolsEngine";
 
 type Tab = "events" | "graph" | "timeline" | "perf" | "state" | "deps";
 
-interface DevtoolsPanelProps {
+type DevtoolsPanelProps = {
   engine: DevtoolsEngine;
   stores: Record<string, SealedStore<any>>;
   onClose: () => void;

@@ -2,12 +2,12 @@ import type { EventDef, StoreEvent, StreamListener } from "./types";
 
 type EventBusHandler<D = unknown> = (event: StoreEvent<D>) => void;
 
-interface Streamable {
+type Streamable = {
   openStream: (listener: StreamListener) => void;
   closeStream: (listener: StreamListener) => void;
 }
 
-interface Connection {
+type Connection = {
   store: Streamable;
   listener: StreamListener;
 }

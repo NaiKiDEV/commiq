@@ -1,8 +1,9 @@
 import { trace, Span, SpanStatusCode } from "@opentelemetry/api";
-import type { StoreEvent, StreamListener, SealedStore } from "@naikidev/commiq";
+import type { StoreEvent, StreamListener } from "@naikidev/commiq";
+import { BuiltinEventName } from "@naikidev/commiq";
 import type { InstrumentOptions } from "./types";
 
-interface StoreWithStream {
+type StoreWithStream = {
   openStream: (listener: StreamListener) => void;
   closeStream: (listener: StreamListener) => void;
 }
@@ -18,7 +19,7 @@ export function instrumentStore(
 
   const listener: StreamListener = (event: StoreEvent) => {
     switch (event.name) {
-      case "commandStarted": {
+      case BuiltinEventName.CommandStarted: {
         const cmd = (event.data as { command: { name: string; correlationId: string; causedBy: string | null } }).command;
         const span = tracer.startSpan(`commiq.command:${cmd.name}`, {
           attributes: {
@@ -32,7 +33,7 @@ export function instrumentStore(
         break;
       }
 
-      case "commandHandled": {
+      case BuiltinEventName.CommandHandled: {
         const cmd = (event.data as { command: { correlationId: string } }).command;
         const span = activeSpans.get(cmd.correlationId);
         if (span) {
@@ -43,7 +44,7 @@ export function instrumentStore(
         break;
       }
 
-      case "commandHandlingError": {
+      case BuiltinEventName.CommandHandlingError: {
         const { command: cmd, error } = event.data as {
           command: { correlationId: string };
           error: unknown;
@@ -62,17 +63,17 @@ export function instrumentStore(
         break;
       }
 
-      case "stateChanged": {
+      case BuiltinEventName.StateChanged: {
         const parentSpan = event.causedBy ? activeSpans.get(event.causedBy) : undefined;
         if (parentSpan) {
-          parentSpan.addEvent("stateChanged", {
+          parentSpan.addEvent(BuiltinEventName.StateChanged, {
             "commiq.event.correlation_id": event.correlationId,
           });
         } else {
-          const span = tracer.startSpan(`commiq.event:stateChanged`, {
+          const span = tracer.startSpan(`commiq.event:${BuiltinEventName.StateChanged}`, {
             attributes: {
               "commiq.store": storeName,
-              "commiq.event.name": "stateChanged",
+              "commiq.event.name": BuiltinEventName.StateChanged,
               "commiq.event.correlation_id": event.correlationId,
             },
           });
@@ -82,7 +83,7 @@ export function instrumentStore(
       }
 
       default: {
-        if (event.name === "invalidCommand" || event.name === "stateReset") {
+        if (event.name === BuiltinEventName.InvalidCommand || event.name === BuiltinEventName.StateReset) {
           break;
         }
 

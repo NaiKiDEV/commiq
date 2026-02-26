@@ -1,7 +1,7 @@
 import { useMemo, type CSSProperties } from "react";
 import { colors, fonts } from "./theme";
 
-interface StateDiffProps {
+type StateDiffProps = {
   before: unknown;
   after: unknown;
 }

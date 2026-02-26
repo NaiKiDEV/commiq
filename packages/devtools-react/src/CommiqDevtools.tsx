@@ -5,7 +5,7 @@ import { colors, fonts } from "./theme";
 import { useDevtoolsEngine } from "./useDevtoolsEngine";
 import { DevtoolsPanel } from "./DevtoolsPanel";
 
-export interface CommiqDevtoolsProps {
+export type CommiqDevtoolsProps = {
   /** Record of stores to monitor, keyed by display name */
   stores: Record<string, SealedStore<any>>;
   /**

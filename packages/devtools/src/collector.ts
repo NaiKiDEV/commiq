@@ -1,13 +1,14 @@
 import type { StoreEvent, StreamListener } from "@naikidev/commiq";
+import { BuiltinEventName } from "@naikidev/commiq";
 import type { TimelineEntry, StateSnapshot } from "./types";
 
-interface Streamable {
+type Streamable = {
   readonly state: unknown;
   openStream: (listener: StreamListener) => void;
   closeStream: (listener: StreamListener) => void;
 }
 
-interface StoreConnection {
+type StoreConnection = {
   store: Streamable;
   listener: StreamListener;
 }
@@ -87,7 +88,7 @@ export class EventCollector {
       timestamp: event.timestamp,
     };
 
-    if (event.name === "stateChanged") {
+    if (event.name === BuiltinEventName.StateChanged) {
       const stateData = event.data as { prev: unknown; next: unknown };
       entry.stateBefore = stateData.prev;
       entry.stateAfter = stateData.next;
@@ -111,10 +112,10 @@ export class EventCollector {
 
   private _isCommandEvent(name: string): boolean {
     return (
-      name === "commandStarted" ||
-      name === "commandHandled" ||
-      name === "invalidCommand" ||
-      name === "commandHandlingError"
+      name === BuiltinEventName.CommandStarted ||
+      name === BuiltinEventName.CommandHandled ||
+      name === BuiltinEventName.InvalidCommand ||
+      name === BuiltinEventName.CommandHandlingError
     );
   }
 }

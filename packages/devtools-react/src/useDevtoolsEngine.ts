@@ -9,7 +9,7 @@ import {
   type DevtoolsMessage,
 } from "@naikidev/commiq-devtools";
 
-export interface DevtoolsEngine {
+export type DevtoolsEngine = {
   timeline: TimelineEntry[];
   getChain: (correlationId: string) => TimelineEntry[];
   getStateHistory: (storeName: string) => StateSnapshot[];

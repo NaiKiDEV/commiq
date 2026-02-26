@@ -14,18 +14,27 @@ import {
 
 let _causalContext: string | null = null;
 
-export const builtinEventDefs = {
-  stateChanged: createEvent<{ prev: unknown; next: unknown }>("stateChanged"),
-  commandHandled: createEvent<{ command: Command }>("commandHandled"),
-  commandStarted: createEvent<{ command: Command }>("commandStarted"),
-  invalidCommand: createEvent<{ command: Command }>("invalidCommand"),
-  commandHandlingError: createEvent<{ command: Command; error: unknown }>(
-    "commandHandlingError",
-  ),
-  stateReset: createEvent("stateReset"),
+export const BuiltinEventName = {
+  StateChanged: "stateChanged",
+  CommandHandled: "commandHandled",
+  CommandStarted: "commandStarted",
+  InvalidCommand: "invalidCommand",
+  CommandHandlingError: "commandHandlingError",
+  StateReset: "stateReset",
 } as const;
 
-interface HandlerEntry<S> {
+export const BuiltinEvent = {
+  StateChanged: createEvent<{ prev: unknown; next: unknown }>(BuiltinEventName.StateChanged),
+  CommandHandled: createEvent<{ command: Command }>(BuiltinEventName.CommandHandled),
+  CommandStarted: createEvent<{ command: Command }>(BuiltinEventName.CommandStarted),
+  InvalidCommand: createEvent<{ command: Command }>(BuiltinEventName.InvalidCommand),
+  CommandHandlingError: createEvent<{ command: Command; error: unknown }>(
+    BuiltinEventName.CommandHandlingError,
+  ),
+  StateReset: createEvent(BuiltinEventName.StateReset),
+} as const;
+
+type HandlerEntry<S> = {
   handler: CommandHandler<S>;
   options?: CommandHandlerOptions;
 }
@@ -115,14 +124,14 @@ export class StoreImpl<S> {
 
       if (!entry) {
         await this._broadcast(
-          this._createEvent(builtinEventDefs.invalidCommand, { command }),
+          this._createEvent(BuiltinEvent.InvalidCommand, { command }),
         );
         this._currentCorrelationId = null;
         continue;
       }
 
       await this._broadcast(
-        this._createEvent(builtinEventDefs.commandStarted, { command }),
+        this._createEvent(BuiltinEvent.CommandStarted, { command }),
       );
 
       const collectedEvents: StoreEvent[] = [];
@@ -144,7 +153,7 @@ export class StoreImpl<S> {
 
         if (this._state !== prevState) {
           await this._broadcast(
-            this._createEvent(builtinEventDefs.stateChanged, {
+            this._createEvent(BuiltinEvent.StateChanged, {
               prev: prevState,
               next: this._state,
             }),
@@ -156,7 +165,7 @@ export class StoreImpl<S> {
         }
 
         await this._broadcast(
-          this._createEvent(builtinEventDefs.commandHandled, { command }),
+          this._createEvent(BuiltinEvent.CommandHandled, { command }),
         );
 
         if (entry.options?.notify) {
@@ -167,7 +176,7 @@ export class StoreImpl<S> {
         }
       } catch (error) {
         await this._broadcast(
-          this._createEvent(builtinEventDefs.commandHandlingError, {
+          this._createEvent(BuiltinEvent.CommandHandlingError, {
             command,
             error,
           }),

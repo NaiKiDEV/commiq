@@ -3,7 +3,7 @@ import {
   createStore,
   createCommand,
   createEvent,
-  builtinEvents,
+  BuiltinEvent,
 } from "../index";
 
 describe("events", () => {
@@ -56,7 +56,7 @@ describe("events", () => {
 
     const stateChanges = listener.mock.calls
       .map((c) => c[0])
-      .filter((e) => e.id === builtinEvents.stateChanged.id);
+      .filter((e) => e.id === BuiltinEvent.StateChanged.id);
     expect(stateChanges).toHaveLength(1);
     expect(stateChanges[0].data).toEqual({
       prev: { count: 0 },
@@ -73,7 +73,7 @@ describe("events", () => {
 
     const invalid = listener.mock.calls
       .map((c) => c[0])
-      .filter((e) => e.id === builtinEvents.invalidCommand.id);
+      .filter((e) => e.id === BuiltinEvent.InvalidCommand.id);
     expect(invalid).toHaveLength(1);
   });
 
@@ -89,7 +89,7 @@ describe("events", () => {
 
     const errors = listener.mock.calls
       .map((c) => c[0])
-      .filter((e) => e.id === builtinEvents.commandHandlingError.id);
+      .filter((e) => e.id === BuiltinEvent.CommandHandlingError.id);
     expect(errors).toHaveLength(1);
     expect(errors[0].data.error.message).toBe("oops");
   });

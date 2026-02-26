@@ -1,16 +1,16 @@
-export interface Command<N extends string = string, D = unknown> {
+export type Command<N extends string = string, D = unknown> = {
   name: N;
   data: D;
   correlationId: string;
   causedBy: string | null;
 }
 
-export interface EventDef<D = unknown> {
+export type EventDef<D = unknown> = {
   id: symbol;
   name: string;
 }
 
-export interface StoreEvent<D = unknown> {
+export type StoreEvent<D = unknown> = {
   id: symbol;
   name: string;
   data: D;
@@ -19,13 +19,13 @@ export interface StoreEvent<D = unknown> {
   causedBy: string | null;
 }
 
-export interface CommandContext<S> {
+export type CommandContext<S> = {
   state: S;
   setState: (next: S) => void;
   emit: <D>(eventDef: EventDef<D>, data: D) => void;
 }
 
-export interface EventContext<S> {
+export type EventContext<S> = {
   state: S;
   queue: (command: Command) => void;
 }
@@ -42,11 +42,11 @@ export type EventHandler<S, D = unknown> = (
 
 export type StreamListener = (event: StoreEvent) => void;
 
-export interface CommandHandlerOptions {
+export type CommandHandlerOptions = {
   notify?: boolean;
 }
 
-export interface SealedStore<S> {
+export type SealedStore<S> = {
   readonly state: S;
   queue: (command: Command) => void;
   openStream: (listener: StreamListener) => void;

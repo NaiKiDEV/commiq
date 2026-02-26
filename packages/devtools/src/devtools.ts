@@ -1,15 +1,16 @@
 import type { StoreEvent, StreamListener } from "@naikidev/commiq";
+import { BuiltinEventName } from "@naikidev/commiq";
 import type { DevtoolsOptions, TimelineEntry, StateSnapshot, Transport } from "./types";
 import { EventCollector } from "./collector";
 import { windowMessageTransport } from "./transport";
 
-interface Streamable {
+type Streamable = {
   readonly state: unknown;
   openStream: (listener: StreamListener) => void;
   closeStream: (listener: StreamListener) => void;
 }
 
-interface StoreConnection {
+type StoreConnection = {
   store: Streamable;
   listener: StreamListener;
 }
@@ -40,7 +41,7 @@ export function createDevtools(options: DevtoolsOptions = {}) {
         timestamp: event.timestamp,
       };
 
-      if (event.name === "stateChanged") {
+      if (event.name === BuiltinEventName.StateChanged) {
         const stateData = event.data as { prev: unknown; next: unknown };
         entry.stateBefore = stateData.prev;
         entry.stateAfter = stateData.next;
@@ -87,10 +88,10 @@ export function createDevtools(options: DevtoolsOptions = {}) {
 
   function isCommandEvent(name: string): boolean {
     return (
-      name === "commandStarted" ||
-      name === "commandHandled" ||
-      name === "invalidCommand" ||
-      name === "commandHandlingError"
+      name === BuiltinEventName.CommandStarted ||
+      name === BuiltinEventName.CommandHandled ||
+      name === BuiltinEventName.InvalidCommand ||
+      name === BuiltinEventName.CommandHandlingError
     );
   }
 

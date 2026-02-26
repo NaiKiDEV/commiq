@@ -18,7 +18,7 @@ import {
 import { JsonTree } from "./JsonTree";
 import { StateDiff } from "./StateDiff";
 
-interface TimelineChartProps {
+type TimelineChartProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
 }
@@ -30,13 +30,13 @@ const TIME_AXIS_HEIGHT = 24;
 const MIN_SPACING = 18;
 const CHART_PADDING = 24;
 
-interface PositionedEvent {
+type PositionedEvent = {
   entry: TimelineEntry;
   x: number;
   y: number;
 }
 
-interface CausalLink {
+type CausalLink = {
   from: PositionedEvent;
   to: PositionedEvent;
 }

@@ -3,7 +3,7 @@ import type { SealedStore } from "@naikidev/commiq";
 import { colors, fonts } from "./theme";
 import { JsonTree } from "./JsonTree";
 
-interface StoreStateViewProps {
+type StoreStateViewProps = {
   stores: Record<string, SealedStore<any>>;
   storeStates: Record<string, unknown>;
 }

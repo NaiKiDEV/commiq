@@ -1,4 +1,4 @@
-export interface InstrumentOptions {
+export type InstrumentOptions = {
   storeName: string;
   tracerName?: string;
   tracerVersion?: string;

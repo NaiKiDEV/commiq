@@ -9,12 +9,12 @@ import {
 import type { TimelineEntry } from "@naikidev/commiq-devtools";
 import { colors, fonts } from "./theme";
 
-interface DependencyMapProps {
+type DependencyMapProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
 }
 
-interface StoreEdge {
+type StoreEdge = {
   from: string;
   to: string;
   commands: Set<string>;
