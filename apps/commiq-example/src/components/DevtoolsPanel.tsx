@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { useSelector, useQueue } from "@naikidev/commiq-react";
-import type { TimelineEntry, StateSnapshot } from "@naikidev/commiq-devtools";
+import type { TimelineEntry, StateSnapshot } from "@naikidev/commiq-devtools-core";
 import {
   inventoryStore,
   cartStore,

@@ -15,10 +15,10 @@ importers:
         version: link:../../packages/commiq
       '@naikidev/commiq-devtools':
         specifier: workspace:*
-        version: link:../../packages/devtools
-      '@naikidev/commiq-devtools-react':
+        version: link:../../packages/commiq-devtools
+      '@naikidev/commiq-devtools-core':
         specifier: workspace:*
-        version: link:../../packages/devtools-react
+        version: link:../../packages/commiq-devtools-core
       '@naikidev/commiq-react':
         specifier: workspace:*
         version: link:../../packages/commiq-react
@@ -110,6 +110,56 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@25.3.0)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.31.1)(terser@5.46.0)
 
+  packages/commiq-devtools:
+    dependencies:
+      '@naikidev/commiq-devtools-core':
+        specifier: workspace:*
+        version: link:../commiq-devtools-core
+    devDependencies:
+      '@naikidev/commiq':
+        specifier: workspace:*
+        version: link:../commiq
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.14)
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.2.4(react@19.2.4)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)
+      vite-plugin-dts:
+        specifier: ^4.0.0
+        version: 4.5.4(@types/node@25.3.0)(rollup@4.58.0)(typescript@5.9.3)(vite@6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0))
+
+  packages/commiq-devtools-core:
+    dependencies:
+      '@naikidev/commiq':
+        specifier: workspace:*
+        version: link:../commiq
+    devDependencies:
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vite:
+        specifier: ^6.0.0
+        version: 6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)
+      vite-plugin-dts:
+        specifier: ^4.0.0
+        version: 4.5.4(@types/node@25.3.0)(rollup@4.58.0)(typescript@5.9.3)(vite@6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0))
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.3.0)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.31.1)(terser@5.46.0)
+
   packages/commiq-otel:
     dependencies:
       '@naikidev/commiq':
@@ -167,56 +217,6 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@25.3.0)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.31.1)(terser@5.46.0)
-
-  packages/devtools:
-    dependencies:
-      '@naikidev/commiq':
-        specifier: workspace:*
-        version: link:../commiq
-    devDependencies:
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vite:
-        specifier: ^6.0.0
-        version: 6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)
-      vite-plugin-dts:
-        specifier: ^4.0.0
-        version: 4.5.4(@types/node@25.3.0)(rollup@4.58.0)(typescript@5.9.3)(vite@6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0))
-      vitest:
-        specifier: ^3.0.0
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@25.3.0)(jiti@2.6.1)(jsdom@26.1.0)(lightningcss@1.31.1)(terser@5.46.0)
-
-  packages/devtools-react:
-    dependencies:
-      '@naikidev/commiq-devtools':
-        specifier: workspace:*
-        version: link:../devtools
-    devDependencies:
-      '@naikidev/commiq':
-        specifier: workspace:*
-        version: link:../commiq
-      '@types/react':
-        specifier: ^19.0.0
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.0.0
-        version: 19.2.3(@types/react@19.2.14)
-      react:
-        specifier: ^19.0.0
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.0.0
-        version: 19.2.4(react@19.2.4)
-      typescript:
-        specifier: ^5.7.0
-        version: 5.9.3
-      vite:
-        specifier: ^6.0.0
-        version: 6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0)
-      vite-plugin-dts:
-        specifier: ^4.0.0
-        version: 4.5.4(@types/node@25.3.0)(rollup@4.58.0)(typescript@5.9.3)(vite@6.4.1(@types/node@25.3.0)(jiti@2.6.1)(lightningcss@1.31.1)(terser@5.46.0))
 
 packages:
 

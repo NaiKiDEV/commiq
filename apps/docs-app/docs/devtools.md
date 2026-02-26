@@ -19,14 +19,14 @@ This enables full causality tracking: you can trace any event back through the c
 ## Installation
 
 ```bash
-npm install @naikidev/commiq-devtools
+npm install @naikidev/commiq-devtools-core
 ```
 
 ## Basic Usage
 
 ```typescript
 import { createStore, createCommand } from "@naikidev/commiq";
-import { createDevtools } from "@naikidev/commiq-devtools";
+import { createDevtools } from "@naikidev/commiq-devtools-core";
 
 const store = createStore({ count: 0 });
 store.addCommandHandler("increment", (ctx) => {
@@ -78,7 +78,7 @@ devtools.connect(store, "counter");
 The default transport uses `window.postMessage` for browser extension communication. You can provide custom transports for other environments:
 
 ```typescript
-import { createDevtools, memoryTransport } from "@naikidev/commiq-devtools";
+import { createDevtools, memoryTransport } from "@naikidev/commiq-devtools-core";
 
 // In-memory transport for testing
 const transport = memoryTransport();
@@ -92,7 +92,7 @@ console.log(transport.messages);
 ### Implementing a Custom Transport
 
 ```typescript
-import type { Transport, DevtoolsMessage } from "@naikidev/commiq-devtools";
+import type { Transport, DevtoolsMessage } from "@naikidev/commiq-devtools-core";
 
 const customTransport: Transport = {
   send(message: DevtoolsMessage) {

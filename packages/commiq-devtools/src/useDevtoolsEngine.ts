@@ -7,7 +7,7 @@ import {
   type StateSnapshot,
   type Transport,
   type DevtoolsMessage,
-} from "@naikidev/commiq-devtools";
+} from "@naikidev/commiq-devtools-core";
 
 export type DevtoolsEngine = {
   timeline: TimelineEntry[];

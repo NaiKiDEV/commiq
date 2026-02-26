@@ -1,17 +1,17 @@
-# @naikidev/commiq-devtools
+# @naikidev/commiq-devtools-core
 
 Instrumentation and debugging tools for Commiq stores. Tracks events, causality chains, state history, and supports pluggable transports.
 
 ## Install
 
 ```bash
-pnpm add @naikidev/commiq-devtools
+pnpm add @naikidev/commiq-devtools-core
 ```
 
 ## Usage
 
 ```typescript
-import { createDevtools } from "@naikidev/commiq-devtools";
+import { createDevtools } from "@naikidev/commiq-devtools-core";
 
 const devtools = createDevtools();
 devtools.connect(store, "counter");

@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import type { SealedStore } from "@naikidev/commiq";
-import type { TimelineEntry } from "@naikidev/commiq-devtools";
+import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import { colors, fonts } from "./theme";
 import { EventLog } from "./EventLog";
 import { CausalityGraph } from "./CausalityGraph";

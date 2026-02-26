@@ -1,7 +1,7 @@
 import React from "react";
 import { Routes, Route } from "react-router-dom";
 import { CommiqProvider } from "@naikidev/commiq-react";
-import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
+import { CommiqDevtools } from "@naikidev/commiq-devtools";
 import { counterStore } from "./stores/counter.store";
 import { todoStore } from "./stores/todo.store";
 import { inventoryStore, cartStore } from "./stores/shop.store";

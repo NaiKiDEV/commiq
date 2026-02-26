@@ -6,7 +6,7 @@ import {
   useEffect,
   type CSSProperties,
 } from "react";
-import type { TimelineEntry } from "@naikidev/commiq-devtools";
+import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import {
   colors,
   fonts,

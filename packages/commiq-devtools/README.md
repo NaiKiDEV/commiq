@@ -1,11 +1,11 @@
-# @naikidev/commiq-devtools-react
+# @naikidev/commiq-devtools
 
 Embedded devtools panel for React applications. Inspect events, trace causality, view state, and monitor performance.
 
 ## Install
 
 ```bash
-pnpm add @naikidev/commiq-devtools-react @naikidev/commiq-devtools
+pnpm add @naikidev/commiq-devtools
 ```
 
 Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
@@ -15,7 +15,7 @@ Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
 No provider required. Use as a component or mount imperatively.
 
 ```tsx
-import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
+import { CommiqDevtools } from "@naikidev/commiq-devtools";
 
 function App() {
   return (
@@ -30,7 +30,7 @@ function App() {
 Or without JSX:
 
 ```ts
-import { mountDevtools } from "@naikidev/commiq-devtools-react";
+import { mountDevtools } from "@naikidev/commiq-devtools";
 
 const unmount = mountDevtools({ stores: { counter: counterStore } });
 ```

@@ -4,12 +4,12 @@ sidebar_position: 6
 
 # Devtools React
 
-`@naikidev/commiq-devtools-react` provides an embedded devtools panel for React applications. Drop it into your app to inspect events, trace causality, view state, and monitor performance — no browser extension required.
+`@naikidev/commiq-devtools` provides an embedded devtools panel for React applications. Drop it into your app to inspect events, trace causality, view state, and monitor performance — no browser extension required.
 
 ## Installation
 
 ```bash
-pnpm add @naikidev/commiq-devtools-react @naikidev/commiq-devtools
+pnpm add @naikidev/commiq-devtools
 ```
 
 Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
@@ -21,7 +21,7 @@ No provider required. Pass stores directly as props or mount imperatively.
 ### As a Component
 
 ```tsx
-import { CommiqDevtools } from "@naikidev/commiq-devtools-react";
+import { CommiqDevtools } from "@naikidev/commiq-devtools";
 import { counterStore } from "./stores/counter";
 import { todoStore } from "./stores/todos";
 
@@ -42,7 +42,7 @@ function App() {
 Mount from anywhere — `main.ts`, a store file, or a plain script:
 
 ```ts
-import { mountDevtools } from "@naikidev/commiq-devtools-react";
+import { mountDevtools } from "@naikidev/commiq-devtools";
 import { counterStore } from "./stores/counter";
 import { todoStore } from "./stores/todos";
 
@@ -114,7 +114,7 @@ By default, `CommiqDevtools` auto-detects the environment and renders nothing in
 Use the `useDevtoolsEngine` hook to build your own devtools interface:
 
 ```tsx
-import { useDevtoolsEngine } from "@naikidev/commiq-devtools-react";
+import { useDevtoolsEngine } from "@naikidev/commiq-devtools";
 
 function MyDevtools() {
   const engine = useDevtoolsEngine({ counter: counterStore });

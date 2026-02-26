@@ -12,7 +12,7 @@ export type MountDevtoolsOptions = Omit<CommiqDevtoolsProps, "enabled">;
  *
  * @example
  * ```ts
- * import { mountDevtools } from "@naikidev/commiq-devtools-react";
+ * import { mountDevtools } from "@naikidev/commiq-devtools";
  * const unmount = mountDevtools({ stores: { counter: counterStore } });
  * ```
  */

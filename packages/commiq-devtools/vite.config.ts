@@ -15,7 +15,7 @@ export default defineConfig({
         "react-dom",
         "react/jsx-runtime",
         "@naikidev/commiq",
-        "@naikidev/commiq-devtools",
+        "@naikidev/commiq-devtools-core",
       ],
     },
   },
