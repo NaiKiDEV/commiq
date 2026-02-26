@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  createStore,
-  createCommand,
-  createEvent,
-} from "@naikidev/commiq";
+import { createStore, createCommand, createEvent } from "@naikidev/commiq";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -47,7 +43,9 @@ describe("instrumentStore", () => {
     expect(commandSpan!.status.code).toBe(SpanStatusCode.OK);
     expect(commandSpan!.attributes["commiq.store"]).toBe("counter");
     expect(commandSpan!.attributes["commiq.command.name"]).toBe("inc");
-    expect(commandSpan!.attributes["commiq.command.correlation_id"]).toBeDefined();
+    expect(
+      commandSpan!.attributes["commiq.command.correlation_id"],
+    ).toBeDefined();
   });
 
   it("records stateChanged as a span event on the command span", async () => {
@@ -90,9 +88,7 @@ describe("instrumentStore", () => {
     const commandSpan = spans.find((s) => s.name === "commiq.command:addTodo");
     expect(commandSpan).toBeDefined();
 
-    const customEvent = commandSpan!.events.find(
-      (e) => e.name === "todoAdded",
-    );
+    const customEvent = commandSpan!.events.find((e) => e.name === "todoAdded");
     expect(customEvent).toBeDefined();
   });
 
@@ -130,8 +126,6 @@ describe("instrumentStore", () => {
     uninstrument();
     const spansAfter = exporter.getFinishedSpans().length;
 
-    // All spans should already be ended from normal flow
-    // uninstrument just cleans up the listener
     expect(spansAfter).toBeGreaterThanOrEqual(spansBefore);
   });
 
@@ -154,5 +148,48 @@ describe("instrumentStore", () => {
     const commandSpan = spans.find((s) => s.name === "commiq.command:inc");
     expect(commandSpan).toBeDefined();
     expect(commandSpan!.instrumentationLibrary.name).toBe("my-app");
+  });
+
+  it("creates an ERROR span for invalid commands (no handler registered)", async () => {
+    const store = createStore({ count: 0 });
+
+    const uninstrument = instrumentStore(store, { storeName: "counter" });
+
+    store.queue(createCommand("nonexistent", undefined));
+    await store.flush();
+    uninstrument();
+
+    const spans = exporter.getFinishedSpans();
+    const commandSpan = spans.find(
+      (s) => s.name === "commiq.command:nonexistent",
+    );
+    expect(commandSpan).toBeDefined();
+    expect(commandSpan!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(commandSpan!.status.message).toContain("nonexistent");
+    expect(commandSpan!.events.some((e) => e.name === "exception")).toBe(true);
+    expect(commandSpan!.attributes["commiq.store"]).toBe("counter");
+  });
+
+  it("sets ERROR status with exception details on commandHandlingError", async () => {
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("fail", () => {
+      throw new Error("something broke");
+    });
+
+    const uninstrument = instrumentStore(store, { storeName: "counter" });
+
+    store.queue(createCommand("fail", undefined));
+    await store.flush();
+    uninstrument();
+
+    const spans = exporter.getFinishedSpans();
+    const commandSpan = spans.find((s) => s.name === "commiq.command:fail");
+    expect(commandSpan).toBeDefined();
+    expect(commandSpan!.status.code).toBe(SpanStatusCode.ERROR);
+    expect(commandSpan!.status.message).toBe("Error: something broke");
+    const exceptionEvent = commandSpan!.events.find(
+      (e) => e.name === "exception",
+    );
+    expect(exceptionEvent).toBeDefined();
   });
 });

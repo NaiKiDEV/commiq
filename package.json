@@ -11,7 +11,9 @@
     "build:react": "pnpm --filter @naikidev/commiq-react build",
     "build:libs": "pnpm --filter @naikidev/commiq build && pnpm --filter @naikidev/commiq-react build",
     "test:core": "pnpm --filter @naikidev/commiq test",
-    "test:react": "pnpm --filter @naikidev/commiq-react test"
+    "test:react": "pnpm --filter @naikidev/commiq-react test",
+    "aspire": "docker compose up -d",
+    "aspire:stop": "docker compose down"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

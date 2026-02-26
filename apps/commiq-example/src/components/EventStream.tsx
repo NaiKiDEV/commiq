@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSelector, useQueue } from "@naikidev/commiq-react";
-import type { StoreEvent } from "@naikidev/commiq";
+import { createCommand, type StoreEvent } from "@naikidev/commiq";
 import {
   counterStore,
   increment,
   decrement,
   reset,
+  throwUnhandledError,
 } from "../stores/counter.store";
 import { todoStore, addTodo } from "../stores/todo.store";
 import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
@@ -66,10 +67,11 @@ export function StreamPage() {
   const eventColor = (
     name: string,
   ): "green" | "indigo" | "red" | "amber" | "zinc" => {
-    if (name.includes("error") || name.includes("invalid")) return "red";
-    if (name.includes("Changed")) return "green";
-    if (name.includes("Started") || name.includes("started")) return "amber";
-    if (name.includes("Handled") || name.includes("handled")) return "indigo";
+    const n = name.toLowerCase();
+    if (n.includes("error") || n.includes("invalid")) return "red";
+    if (n.includes("changed")) return "green";
+    if (n.includes("started")) return "amber";
+    if (n.includes("handled")) return "indigo";
     return "zinc";
   };
 
@@ -129,13 +131,29 @@ export function StreamPage() {
                 size="xs"
                 variant="danger"
                 onClick={() =>
-                  counterStore.queue({ name: "nonExistent", data: {} })
+                  counterStore.queue(createCommand("nonExistent", undefined))
                 }
               >
                 Queue Unknown Command
               </Button>
               <p className="mt-2 text-[11px] text-zinc-400">
                 Triggers an <code>invalidCommand</code> event.
+              </p>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader title="Force Error" />
+            <CardBody>
+              <Button
+                size="xs"
+                variant="danger"
+                onClick={() => queueCounter(throwUnhandledError())}
+              >
+                Throw in Handler
+              </Button>
+              <p className="mt-2 text-[11px] text-zinc-400">
+                Triggers a <code>commandHandlingError</code> event.
               </p>
             </CardBody>
           </Card>
@@ -153,7 +171,7 @@ export function StreamPage() {
                 variant={paused ? "primary" : "default"}
                 onClick={() => setPaused(!paused)}
               >
-                {paused ? "▶ Resume" : "⏸ Pause"}
+                {paused ? "Resume" : "Pause"}
               </Button>
               <Button size="xs" variant="ghost" onClick={() => setEntries([])}>
                 Clear

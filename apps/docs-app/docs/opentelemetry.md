@@ -48,11 +48,11 @@ function instrumentStore(
 
 ### Options
 
-| Option           | Type     | Default    | Description                    |
-| ---------------- | -------- | ---------- | ------------------------------ |
-| `storeName`      | `string` | (required) | Display name used in span attributes |
-| `tracerName`     | `string` | `"commiq"` | OpenTelemetry tracer name      |
-| `tracerVersion`  | `string` | —          | OpenTelemetry tracer version   |
+| Option          | Type     | Default    | Description                          |
+| --------------- | -------- | ---------- | ------------------------------------ |
+| `storeName`     | `string` | (required) | Display name used in span attributes |
+| `tracerName`    | `string` | `"commiq"` | OpenTelemetry tracer name            |
+| `tracerVersion` | `string` | —          | OpenTelemetry tracer version         |
 
 ## Tracing Model
 
@@ -72,21 +72,21 @@ State changes and custom events emitted during a command are recorded as **span 
 
 **Command spans** (`commiq.command:{name}`):
 
-| Attribute                      | Description                           |
-| ------------------------------ | ------------------------------------- |
-| `commiq.store`                 | Store name                            |
-| `commiq.command.name`          | Command name                          |
-| `commiq.command.correlation_id`| Unique correlation ID                 |
-| `commiq.command.caused_by`     | Parent event ID (if applicable)       |
+| Attribute                       | Description                     |
+| ------------------------------- | ------------------------------- |
+| `commiq.store`                  | Store name                      |
+| `commiq.command.name`           | Command name                    |
+| `commiq.command.correlation_id` | Unique correlation ID           |
+| `commiq.command.caused_by`      | Parent event ID (if applicable) |
 
 **Standalone event spans** (`commiq.event:{name}`):
 
-| Attribute                      | Description                           |
-| ------------------------------ | ------------------------------------- |
-| `commiq.store`                 | Store name                            |
-| `commiq.event.name`            | Event name                            |
-| `commiq.event.correlation_id`  | Unique correlation ID                 |
-| `commiq.event.caused_by`       | Parent event ID (if applicable)       |
+| Attribute                     | Description                     |
+| ----------------------------- | ------------------------------- |
+| `commiq.store`                | Store name                      |
+| `commiq.event.name`           | Event name                      |
+| `commiq.event.correlation_id` | Unique correlation ID           |
+| `commiq.event.caused_by`      | Parent event ID (if applicable) |
 
 ## Error Handling
 
@@ -140,4 +140,44 @@ sealed.queue(createCommand("increment", undefined));
 // Cleanup
 uninstrument();
 await sdk.shutdown();
+```
+
+## Local Testing with Aspire Dashboard
+
+The example app ships with a ready-to-use setup that sends traces to the
+[.NET Aspire Dashboard](https://aspire.dev/dashboard/overview/) running in Docker.
+Follows the official [Enable browser telemetry](https://aspire.dev/dashboard/enable-browser-telemetry/) guide.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) installed and running.
+
+### 1. Start the Aspire Dashboard
+
+```bash
+# from the repository root
+pnpm aspire          # runs: docker compose up -d
+```
+
+The dashboard will be available at **http://localhost:18888**.
+
+### 2. Run the example app
+
+```bash
+pnpm example         # starts the Vite dev server
+```
+
+Because the example uses `import.meta.env.DEV`, tracing is **only** active
+during local development and is completely excluded from production builds.
+
+### 3. View traces
+
+Open the Aspire Dashboard at http://localhost:18888, navigate to
+**Traces**, and interact with the example app — every store command will
+appear as an OpenTelemetry span.
+
+### 4. Stop the dashboard
+
+```bash
+pnpm aspire:stop     # runs: docker compose down
 ```

@@ -13,6 +13,13 @@
     "@naikidev/commiq-react": "workspace:*",
     "@naikidev/commiq-devtools-core": "workspace:*",
     "@naikidev/commiq-devtools": "workspace:*",
+    "@naikidev/commiq-otel": "workspace:*",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/sdk-trace-web": "^1.30.0",
+    "@opentelemetry/exporter-trace-otlp-proto": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/semantic-conventions": "^1.30.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.0"

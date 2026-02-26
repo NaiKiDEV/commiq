@@ -16,6 +16,8 @@ export const decrement = () => createCommand("decrement", undefined);
 export const reset = () => createCommand("reset", undefined);
 export const incrementBy = (amount: number) =>
   createCommand("incrementBy", amount);
+export const throwUnhandledError = () =>
+  createCommand("unhandledError", undefined);
 
 const _counterStore = createStore<CounterState>({ count: 0 });
 
@@ -32,6 +34,9 @@ _counterStore
   .addCommandHandler("reset", (ctx) => {
     ctx.setState({ count: 0 });
     ctx.emit(counterReset, undefined);
+  })
+  .addCommandHandler("unhandledError", () => {
+    throw new Error("Something went wrong");
   });
 
 export const counterStore = sealStore(_counterStore);
