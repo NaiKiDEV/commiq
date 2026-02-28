@@ -24,26 +24,24 @@ store.closeStream(listener);
 
 Every command processed by a store emits a sequence of builtin events:
 
-```text
-queue(command)
-  │
-  ├─► commandStarted   { command }
-  │
-  ├─► [handler runs]
-  │     ├─► stateChanged      { prev, next }   (if state changed)
-  │     └─► [custom events]                     (if handler calls ctx.emit)
-  │
-  ├─► commandHandled   { command }
-  │
-  └─► (if notify: true)
-      └─► <commandName>:handled  { command }
+```mermaid
+flowchart TB
+    Q["queue(command)"] --> CS["commandStarted"]
+    CS --> HR["handler runs"]
+    HR --> SC["stateChanged (if state changed)"]
+    HR --> CE["custom events (if ctx.emit called)"]
+    SC --> CH["commandHandled"]
+    CE --> CH
+    CH --> N{"notify: true?"}
+    N -->|yes| H["commandName:handled"]
 ```
 
 Error cases:
 
-```text
-queue(unknownCommand)  ──► invalidCommand         { command }
-queue(failingCommand)  ──► commandHandlingError   { command, error }
+```mermaid
+flowchart LR
+    UC["queue(unknownCommand)"] --> IC["invalidCommand"]
+    FC["queue(failingCommand)"] --> CHE["commandHandlingError"]
 ```
 
 ## Example: Real-Time Event Log

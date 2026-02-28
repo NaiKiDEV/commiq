@@ -8,17 +8,12 @@ When your application grows, you'll often need multiple stores that react to eac
 
 ## The Pattern
 
-```text
-┌─────────────┐   reserveStock   ┌─────────────────┐
-│  UI Button  │ ───────────────► │ Inventory Store  │
-└─────────────┘                  │                  │
-                                 │  emits:          │
-                                 │  stockReserved ──┼──► Event Bus
-                                 └─────────────────┘        │
-                                                            │
-┌─────────────┐   addToCart      ┌─────────────────┐        │
-│  Cart UI    │ ◄─────────────── │   Cart Store     │ ◄─────┘
-└─────────────┘                  └─────────────────┘
+```mermaid
+flowchart LR
+    UI["UI Button"] -->|reserveStock| Inventory["Inventory Store"]
+    Inventory -->|stockReserved| Bus["Event Bus"]
+    Bus -->|addToCart| Cart["Cart Store"]
+    Cart --> CartUI["Cart UI"]
 ```
 
 The inventory store doesn't know about the cart. The cart store doesn't know about inventory. The event bus wires them together.

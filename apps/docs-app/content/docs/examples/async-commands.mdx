@@ -4,23 +4,9 @@ title: Async Commands
 
 # Async Commands
 
-Command handlers can be `async`. This is useful for API calls, timers, or any asynchronous operation. The store processes commands sequentially, so an `async` handler will complete before the next command is picked up.
+Command handlers can be `async`. This is useful for API calls, timers, or any asynchronous operation.
 
-## The Pattern
-
-```text
-queue(fetchUsers)
-  │
-  ▼
-┌──────────────────────────────┐
-│ handler: async (ctx) => {    │
-│   ctx.setState({ loading })  │  ← immediate state update
-│   await fetch(…)             │  ← async work
-│   ctx.setState({ data })     │  ← update with result
-│   ctx.emit(fetchCompleted)   │  ← notify listeners
-│ }                            │
-└──────────────────────────────┘
-```
+**Key behavior:** The store processes commands **sequentially**. When a handler is async, the queue waits for it to complete before picking up the next command. This guarantees ordering and prevents race conditions.
 
 ## Example: Fetching Users
 

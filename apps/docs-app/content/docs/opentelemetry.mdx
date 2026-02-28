@@ -2,7 +2,7 @@
 title: OpenTelemetry
 ---
 
-import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
 # OpenTelemetry
 
@@ -10,26 +10,18 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 ## Installation
 
-<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+<Tabs groupId="pkg-manager" items={["pnpm", "npm", "Yarn", "Bun"]}>
   <Tab value="pnpm">
-    ```bash
-    pnpm add @naikidev/commiq-otel @opentelemetry/api
-    ```
+    ```bash pnpm add @naikidev/commiq-otel @opentelemetry/api ```
   </Tab>
   <Tab value="npm">
-    ```bash
-    npm install @naikidev/commiq-otel @opentelemetry/api
-    ```
+    ```bash npm install @naikidev/commiq-otel @opentelemetry/api ```
   </Tab>
   <Tab value="Yarn">
-    ```bash
-    yarn add @naikidev/commiq-otel @opentelemetry/api
-    ```
+    ```bash yarn add @naikidev/commiq-otel @opentelemetry/api ```
   </Tab>
   <Tab value="Bun">
-    ```bash
-    bun add @naikidev/commiq-otel @opentelemetry/api
-    ```
+    ```bash bun add @naikidev/commiq-otel @opentelemetry/api ```
   </Tab>
 </Tabs>
 
@@ -82,7 +74,7 @@ function instrumentStore(
 Each command creates a span that lives from `commandStarted` to `commandHandled` (or `commandHandlingError`):
 
 ```
-commiq.command:increment  [============================]
+commiq.command:increment
   ├─ span event: stateChanged
   └─ span event: itemAdded (custom event)
 ```
@@ -163,42 +155,15 @@ uninstrument();
 await sdk.shutdown();
 ```
 
-## Local Testing with Aspire Dashboard
+## Testing Locally
 
-The example app ships with a ready-to-use setup that sends traces to the
-[.NET Aspire Dashboard](https://aspire.dev/dashboard/overview/) running in Docker.
-Follows the official [Enable browser telemetry](https://aspire.dev/dashboard/enable-browser-telemetry/) guide.
+To visualize traces during development, use any OpenTelemetry-compatible backend:
 
-### Prerequisites
+| Backend                                                                                             | Best for            | Setup                                                                                                                          |
+| --------------------------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [Jaeger](https://www.jaegertracing.io/)                                                             | Local debugging     | `docker run -p 16686:16686 jaegertracing/all-in-one`                                                                           |
+| [Aspire Dashboard](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/overview) | .NET ecosystem      | See [browser telemetry guide](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/enable-browser-telemetry) |
+| [Zipkin](https://zipkin.io/)                                                                        | Lightweight tracing | `docker run -p 9411:9411 openzipkin/zipkin`                                                                                    |
+| [Grafana Tempo](https://grafana.com/oss/tempo/)                                                     | Production-grade    | Requires Grafana stack                                                                                                         |
 
-- [Docker](https://docs.docker.com/get-docker/) installed and running.
-
-### 1. Start the Aspire Dashboard
-
-```bash
-# from the repository root
-pnpm aspire          # runs: docker compose up -d
-```
-
-The dashboard will be available at **http://localhost:18888**.
-
-### 2. Run the example app
-
-```bash
-pnpm example         # starts the Vite dev server
-```
-
-Because the example uses `import.meta.env.DEV`, tracing is **only** active
-during local development and is completely excluded from production builds.
-
-### 3. View traces
-
-Open the Aspire Dashboard at http://localhost:18888, navigate to
-**Traces**, and interact with the example app — every store command will
-appear as an OpenTelemetry span.
-
-### 4. Stop the dashboard
-
-```bash
-pnpm aspire:stop     # runs: docker compose down
-```
+Configure your OTel SDK exporter to point to your chosen backend. The `ConsoleSpanExporter` in the example above is useful for quick debugging without any backend setup.

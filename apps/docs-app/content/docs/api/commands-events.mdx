@@ -80,9 +80,9 @@ Wraps a store in a read-only proxy that only exposes:
 import { sealStore } from "@naikidev/commiq";
 
 const sealed = sealStore(store);
-sealed.state; // ✅
-sealed.queue(cmd); // ✅
-sealed.addCommandHandler; // ❌ undefined
+sealed.state; // allowed
+sealed.queue(cmd); // allowed
+sealed.addCommandHandler; // undefined (not exposed)
 ```
 
 ## `createEventBus()`

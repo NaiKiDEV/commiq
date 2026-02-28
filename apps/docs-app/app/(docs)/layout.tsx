@@ -10,7 +10,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       links={[
         {
           text: "Commiq Examples",
-          url: "https://naikidev.github.io/commiq/",
+          url: "/commiq/",
           external: true,
         },
         {
