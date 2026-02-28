@@ -35,11 +35,11 @@ import {
   sealStore,
 } from "@naikidev/commiq";
 
-interface AsyncState {
+type AsyncState = {
   users: User[];
   loading: boolean;
   error: string;
-}
+};
 
 const fetchCompleted = createEvent<{ count: number }>("fetchCompleted");
 const fetchFailed = createEvent<{ error: string }>("fetchFailed");

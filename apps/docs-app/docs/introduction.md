@@ -5,7 +5,7 @@ sidebar_position: 1
 
 # Introduction
 
-**Commiq** is a lightweight, command & event driven state management library for TypeScript and React.
+**Commiq** is a lightweight, command & event driven state management library for TypeScript. The core library has no framework dependencies — React bindings are available separately via `@naikidev/commiq-react`.
 
 Instead of directly mutating state, you describe _what should happen_ via **commands**, and the store's handlers decide _how_ the state changes. Handlers can emit **events** to notify other parts of your application — enabling clean, decoupled architectures.
 

@@ -2,15 +2,37 @@
 sidebar_position: 6
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Devtools React
 
 `@naikidev/commiq-devtools` provides an embedded devtools panel for React applications. Drop it into your app to inspect events, trace causality, view state, and monitor performance — no browser extension required.
 
 ## Installation
 
-```bash
-pnpm add @naikidev/commiq-devtools
-```
+<Tabs groupId="pkg-manager">
+  <TabItem value="pnpm" label="pnpm" default>
+    ```bash
+    pnpm add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="npm" label="npm">
+    ```bash
+    npm install @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="bun" label="Bun">
+    ```bash
+    bun add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+</Tabs>
 
 Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
 

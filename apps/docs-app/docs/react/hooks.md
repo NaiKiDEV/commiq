@@ -9,7 +9,7 @@ The `@naikidev/commiq-react` package provides hooks to integrate Commiq stores w
 
 ## `CommiqProvider`
 
-Wraps your app and provides stores via React context.
+Wraps a component tree and provides stores via React context. **This is optional** — all hooks accept stores directly as arguments, so no provider is required for typical usage. Use `CommiqProvider` when you need dependency injection, testing overrides, or SSR compatibility.
 
 ```tsx
 import { CommiqProvider } from "@naikidev/commiq-react";

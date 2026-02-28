@@ -2,15 +2,37 @@
 sidebar_position: 5
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # OpenTelemetry
 
 `@naikidev/commiq-otel` instruments Commiq stores with [OpenTelemetry](https://opentelemetry.io/) tracing. Each command becomes a span, and events emitted during that command are recorded as span events, giving you end-to-end visibility in any OTel-compatible backend.
 
 ## Installation
 
-```bash
-pnpm add @naikidev/commiq-otel @opentelemetry/api
-```
+<Tabs groupId="pkg-manager">
+  <TabItem value="pnpm" label="pnpm" default>
+    ```bash
+    pnpm add @naikidev/commiq-otel @opentelemetry/api
+    ```
+  </TabItem>
+  <TabItem value="npm" label="npm">
+    ```bash
+    npm install @naikidev/commiq-otel @opentelemetry/api
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-otel @opentelemetry/api
+    ```
+  </TabItem>
+  <TabItem value="bun" label="Bun">
+    ```bash
+    bun add @naikidev/commiq-otel @opentelemetry/api
+    ```
+  </TabItem>
+</Tabs>
 
 `@opentelemetry/api` is a peer dependency.
 

@@ -2,26 +2,60 @@
 sidebar_position: 2
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Getting Started
 
 ## Installation
 
-```bash
-# Core library
-pnpm add @naikidev/commiq
+<Tabs groupId="pkg-manager">
+  <TabItem value="pnpm" label="pnpm" default>
+    ```bash
+    # Core library
+    pnpm add @naikidev/commiq
 
-# React bindings (optional)
-pnpm add @naikidev/commiq-react
-```
+    # React bindings (optional)
+    pnpm add @naikidev/commiq-react
+    ```
+  </TabItem>
+  <TabItem value="npm" label="npm">
+    ```bash
+    # Core library
+    npm install @naikidev/commiq
+
+    # React bindings (optional)
+    npm install @naikidev/commiq-react
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="Yarn">
+    ```bash
+    # Core library
+    yarn add @naikidev/commiq
+
+    # React bindings (optional)
+    yarn add @naikidev/commiq-react
+    ```
+  </TabItem>
+  <TabItem value="bun" label="Bun">
+    ```bash
+    # Core library
+    bun add @naikidev/commiq
+
+    # React bindings (optional)
+    bun add @naikidev/commiq-react
+    ```
+  </TabItem>
+</Tabs>
 
 ## Your First Store
 
 ### 1. Define the state
 
 ```ts
-interface CounterState {
+type CounterState = {
   count: number;
-}
+};
 ```
 
 ### 2. Create the store and add handlers
@@ -89,9 +123,28 @@ function Counter() {
 
 During development, drop in the `CommiqDevtools` component to see store activity, trace causality chains, and inspect state:
 
-```bash
-pnpm add @naikidev/commiq-devtools
-```
+<Tabs groupId="pkg-manager">
+  <TabItem value="pnpm" label="pnpm" default>
+    ```bash
+    pnpm add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="npm" label="npm">
+    ```bash
+    npm install @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+  <TabItem value="bun" label="Bun">
+    ```bash
+    bun add @naikidev/commiq-devtools
+    ```
+  </TabItem>
+</Tabs>
 
 ```tsx
 import { CommiqDevtools } from "@naikidev/commiq-devtools";

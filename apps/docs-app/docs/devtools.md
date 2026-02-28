@@ -2,6 +2,9 @@
 sidebar_position: 4
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Devtools
 
 Commiq includes built-in instrumentation and a devtools package for debugging, event inspection, and state tracking.
@@ -18,9 +21,28 @@ This enables full causality tracking: you can trace any event back through the c
 
 ## Installation
 
-```bash
-npm install @naikidev/commiq-devtools-core
-```
+<Tabs groupId="pkg-manager">
+  <TabItem value="pnpm" label="pnpm" default>
+    ```bash
+    pnpm add @naikidev/commiq-devtools-core
+    ```
+  </TabItem>
+  <TabItem value="npm" label="npm">
+    ```bash
+    npm install @naikidev/commiq-devtools-core
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-devtools-core
+    ```
+  </TabItem>
+  <TabItem value="bun" label="Bun">
+    ```bash
+    bun add @naikidev/commiq-devtools-core
+    ```
+  </TabItem>
+</Tabs>
 
 ## Basic Usage
 
@@ -37,13 +59,13 @@ store.addCommandHandler("increment", (ctx) => {
 const devtools = createDevtools();
 devtools.connect(store, "counter");
 
-// Events are now tracked and sent to the browser extension bridge
+// Events are now tracked
 store.queue(createCommand("increment", undefined));
 ```
 
 ## Query API
 
-Even without a browser extension, you can query the devtools programmatically:
+Query collected events programmatically at any time:
 
 ```typescript
 // Get full event timeline
@@ -75,7 +97,7 @@ devtools.connect(store, "counter");
 
 ## Custom Transports
 
-The default transport uses `window.postMessage` for browser extension communication. You can provide custom transports for other environments:
+The default transport uses `window.postMessage`, which serves as an integration point for external tools. You can provide custom transports for other environments:
 
 ```typescript
 import { createDevtools, memoryTransport } from "@naikidev/commiq-devtools-core";
