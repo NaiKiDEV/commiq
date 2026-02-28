@@ -1,0 +1,16 @@
+{
+  "title": "Commiq",
+  "pages": [
+    "index",
+    "getting-started",
+    "---",
+    "api",
+    "react",
+    "---",
+    "devtools",
+    "devtools-react",
+    "opentelemetry",
+    "---",
+    "examples"
+  ]
+}

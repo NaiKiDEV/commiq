@@ -1,9 +1,8 @@
 ---
-sidebar_position: 6
+title: Devtools React
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 # Devtools React
 
@@ -11,27 +10,27 @@ import TabItem from '@theme/TabItem';
 
 ## Installation
 
-<Tabs groupId="pkg-manager">
-  <TabItem value="pnpm" label="pnpm" default>
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
     ```bash
     pnpm add @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="npm" label="npm">
+  </Tab>
+  <Tab value="npm">
     ```bash
     npm install @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="yarn" label="Yarn">
+  </Tab>
+  <Tab value="Yarn">
     ```bash
     yarn add @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="bun" label="Bun">
+  </Tab>
+  <Tab value="Bun">
     ```bash
     bun add @naikidev/commiq-devtools
     ```
-  </TabItem>
+  </Tab>
 </Tabs>
 
 Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.

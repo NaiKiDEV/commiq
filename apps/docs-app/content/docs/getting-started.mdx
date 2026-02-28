@@ -1,16 +1,15 @@
 ---
-sidebar_position: 2
+title: Getting Started
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 # Getting Started
 
 ## Installation
 
-<Tabs groupId="pkg-manager">
-  <TabItem value="pnpm" label="pnpm" default>
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
     ```bash
     # Core library
     pnpm add @naikidev/commiq
@@ -18,8 +17,8 @@ import TabItem from '@theme/TabItem';
     # React bindings (optional)
     pnpm add @naikidev/commiq-react
     ```
-  </TabItem>
-  <TabItem value="npm" label="npm">
+  </Tab>
+  <Tab value="npm">
     ```bash
     # Core library
     npm install @naikidev/commiq
@@ -27,8 +26,8 @@ import TabItem from '@theme/TabItem';
     # React bindings (optional)
     npm install @naikidev/commiq-react
     ```
-  </TabItem>
-  <TabItem value="yarn" label="Yarn">
+  </Tab>
+  <Tab value="Yarn">
     ```bash
     # Core library
     yarn add @naikidev/commiq
@@ -36,8 +35,8 @@ import TabItem from '@theme/TabItem';
     # React bindings (optional)
     yarn add @naikidev/commiq-react
     ```
-  </TabItem>
-  <TabItem value="bun" label="Bun">
+  </Tab>
+  <Tab value="Bun">
     ```bash
     # Core library
     bun add @naikidev/commiq
@@ -45,7 +44,7 @@ import TabItem from '@theme/TabItem';
     # React bindings (optional)
     bun add @naikidev/commiq-react
     ```
-  </TabItem>
+  </Tab>
 </Tabs>
 
 ## Your First Store
@@ -123,27 +122,27 @@ function Counter() {
 
 During development, drop in the `CommiqDevtools` component to see store activity, trace causality chains, and inspect state:
 
-<Tabs groupId="pkg-manager">
-  <TabItem value="pnpm" label="pnpm" default>
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
     ```bash
     pnpm add @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="npm" label="npm">
+  </Tab>
+  <Tab value="npm">
     ```bash
     npm install @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="yarn" label="Yarn">
+  </Tab>
+  <Tab value="Yarn">
     ```bash
     yarn add @naikidev/commiq-devtools
     ```
-  </TabItem>
-  <TabItem value="bun" label="Bun">
+  </Tab>
+  <Tab value="Bun">
     ```bash
     bun add @naikidev/commiq-devtools
     ```
-  </TabItem>
+  </Tab>
 </Tabs>
 
 ```tsx
