@@ -1,0 +1,133 @@
+---
+title: Typed Command Factories
+description: Replace magic strings with typed factory functions for type-safe, discoverable command dispatch.
+---
+
+# Typed Command Factories
+
+Every command is dispatched with `createCommand(name, data)`. Writing command names as string literals scattered across components is fragile — a typo fails silently, and there is no autocompletion or type checking on the data shape.
+
+The solution is to define typed factory functions alongside the store and use them everywhere commands are dispatched.
+
+## The problem
+
+```tsx
+// Scattered across components — no type checking, no autocomplete
+queue(createCommand("increment", { amount: 1 }));
+queue(createCommand("increment", { amunt: 1 }));   // typo in data key — no error
+queue(createCommand("incriment", { amount: 1 }));  // wrong name — fails silently
+```
+
+There is also no central place to discover what commands a store accepts.
+
+## The pattern
+
+Define a factory function for each command in the store file:
+
+```ts
+// stores/counter.ts
+import { createCommand } from "@naikidev/commiq";
+
+export const CounterCommand = {
+  increment: (amount: number) => createCommand("counter:increment", { amount }),
+  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
+  reset: () => createCommand("counter:reset", undefined),
+};
+```
+
+The store registers handlers using the same names:
+
+```ts
+_store
+  .addCommandHandler<{ amount: number }>("counter:increment", (ctx, cmd) => {
+    ctx.setState({ count: ctx.state.count + cmd.data.amount });
+  })
+  .addCommandHandler<{ amount: number }>("counter:decrement", (ctx, cmd) => {
+    ctx.setState({ count: ctx.state.count - cmd.data.amount });
+  })
+  .addCommandHandler("counter:reset", (ctx) => {
+    ctx.setState({ count: 0 });
+  });
+```
+
+Dispatch from anywhere using the factory:
+
+```tsx
+import { CounterCommand } from "./stores/counter";
+
+queue(CounterCommand.increment(1));
+queue(CounterCommand.decrement(2));
+queue(CounterCommand.reset());
+```
+
+## Benefits
+
+- **Type safety.** TypeScript infers the data type at the call site. Passing the wrong shape is a compile error.
+- **Discoverability.** Autocomplete on `CounterCommand.` lists all available commands for that store.
+- **Single definition.** The command name string exists in one place. Rename it once and the whole codebase updates.
+- **Readable call sites.** `CounterCommand.increment(1)` reads clearly. `createCommand("counter:increment", { amount: 1 })` does not.
+
+## Typing command data
+
+When the factory function accepts parameters, the `data` type is inferred automatically. You do not need to annotate `createCommand`:
+
+```ts
+// The return type of increment() is Command<"counter:increment", { amount: number }>
+increment: (amount: number) => createCommand("counter:increment", { amount }),
+```
+
+For commands with no data, pass `undefined` explicitly to signal intent:
+
+```ts
+reset: () => createCommand("counter:reset", undefined),
+```
+
+For commands with complex data, define a type:
+
+```ts
+type AddItemData = {
+  productId: string;
+  quantity: number;
+  price: number;
+};
+
+export const CartCommand = {
+  addItem: (data: AddItemData) => createCommand("cart:add-item", data),
+  removeItem: (productId: string) => createCommand("cart:remove-item", { productId }),
+  clear: () => createCommand("cart:clear", undefined),
+};
+```
+
+## Where to place factories
+
+Place the command factory object in the same file as the store. It is part of the store's public API, alongside the sealed store and event definitions.
+
+```ts
+// stores/counter.ts
+
+// Types
+type CounterState = { count: number };
+
+// Events
+export const CounterEvent = { ... };
+
+// Commands
+export const CounterCommand = {
+  increment: (amount: number) => createCommand("counter:increment", { amount }),
+  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
+  reset: () => createCommand("counter:reset", undefined),
+};
+
+// Store (private)
+const _store = createStore<CounterState>({ count: 0 });
+// ... handlers ...
+
+// Public interface
+export const counterStore = sealStore(_store);
+```
+
+When using a [domain folder structure](/patterns/store-file-structure), place the factory in `commands.ts` and re-export it from `index.ts`.
+
+<Callout type="info">
+You can still use `createCommand` directly in tests or one-off wiring code where discoverability is less important. Factories are primarily a call-site concern for application code.
+</Callout>

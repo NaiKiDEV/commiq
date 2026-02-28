@@ -1,0 +1,136 @@
+---
+title: Async Loading States
+description: A standard pattern for async commands with loading, success, and error state handling.
+---
+
+# Async Loading States
+
+Async command handlers naturally map to three phases: loading, success, and error. Representing these consistently in the state shape makes components predictable and eliminates edge cases.
+
+## State shape
+
+Use a `status` discriminant rather than separate boolean flags:
+
+```ts
+type UserState = {
+  id: string | null;
+  name: string | null;
+  status: "idle" | "loading" | "error";
+  errorMessage: string | null;
+};
+
+export const initialState: UserState = {
+  id: null,
+  name: null,
+  status: "idle",
+  errorMessage: null,
+};
+```
+
+A `status` enum cannot represent impossible combinations. Two boolean flags (`isLoading`, `isError`) can both be `true` at the same time — `status` cannot.
+
+## Command handler
+
+```ts
+import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+
+type User = { id: string; name: string };
+
+export const UserEvent = {
+  Fetched: createEvent<User>("user:fetched"),
+  FetchFailed: createEvent<{ message: string }>("user:fetch-failed"),
+};
+
+const _store = createStore<UserState>(initialState);
+
+_store.addCommandHandler<{ id: string }>("user:fetch", async (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, status: "loading", errorMessage: null });
+
+  try {
+    const user = await fetchUserById(cmd.data.id);
+    ctx.setState({ id: user.id, name: user.name, status: "idle", errorMessage: null });
+    ctx.emit(UserEvent.Fetched, user);
+  } catch (e) {
+    ctx.setState({ ...ctx.state, status: "error", errorMessage: (e as Error).message });
+    ctx.emit(UserEvent.FetchFailed, { message: (e as Error).message });
+  }
+});
+
+export const userStore = sealStore(_store);
+```
+
+The handler transitions through three states in sequence:
+
+1. Set `status: "loading"` synchronously as the first line — this is immediate feedback.
+2. On success: update the data fields and set `status: "idle"`. Emit a success event.
+3. On failure: record the error message and set `status: "error"`. Emit a failure event.
+
+Emitting events on both outcomes allows other stores and UI layers to react without polling state.
+
+## Selectors
+
+Write targeted selectors to avoid unnecessary re-renders:
+
+```tsx
+function UserProfile({ userId }: { userId: string }) {
+  const status = useSelector(userStore, (s) => s.status);
+  const name = useSelector(userStore, (s) => s.name);
+  const errorMessage = useSelector(userStore, (s) => s.errorMessage);
+  const queue = useQueue(userStore);
+
+  useEffect(() => {
+    queue(UserCommand.fetchUser(userId));
+  }, [userId]);
+
+  if (status === "loading") return <Spinner />;
+  if (status === "error") return <ErrorMessage message={errorMessage} />;
+  return <p>{name}</p>;
+}
+```
+
+Each `useSelector` call subscribes independently. A component that only reads `status` will not re-render when `name` changes.
+
+Wrapped in a [domain hook](/patterns/domain-hooks):
+
+```ts
+export function useUser(userId: string) {
+  const status = useSelector(userStore, (s) => s.status);
+  const name = useSelector(userStore, (s) => s.name);
+  const queue = useQueue(userStore);
+
+  useEffect(() => {
+    queue(UserCommand.fetchUser(userId));
+  }, [userId]);
+
+  return { status, name };
+}
+```
+
+## Reset
+
+Provide an explicit reset command to clear state when navigating away or when the data is no longer relevant:
+
+```ts
+_store.addCommandHandler("user:reset", (ctx) => {
+  ctx.setState(initialState);
+});
+```
+
+Exporting `initialState` alongside the store ensures the reset is consistent with the initial state definition. Avoid duplicating the initial values in the reset handler.
+
+## Multiple async operations
+
+When a store manages several independent async operations, track each one with its own status field:
+
+```ts
+type DashboardState = {
+  user: { data: User | null; status: "idle" | "loading" | "error" };
+  orders: { data: Order[]; status: "idle" | "loading" | "error" };
+};
+```
+
+This allows components to show granular loading states — a spinner next to the orders table while the user header has already loaded.
+
+<Callout type="warn">
+Do not queue a second fetch command while a fetch is already in progress unless you intend to cancel the first. Commiq processes commands sequentially, so a second `user:fetch` queued while the first is still running will wait and then execute after the first completes.
+</Callout>

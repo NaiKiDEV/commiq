@@ -1,0 +1,170 @@
+---
+title: Domain Hooks
+description: Encapsulate store interactions in a clean, reusable React hook API.
+---
+
+# Domain Hooks
+
+Using `useSelector`, `useQueue`, and command factories directly in every component that interacts with a store leads to repetition and couples the UI to implementation details. A domain hook wraps this into a single, reusable function.
+
+## The problem
+
+```tsx
+// Repeated across multiple components
+const count = useSelector(counterStore, (s) => s.count);
+const queue = useQueue(counterStore);
+
+return (
+  <button onClick={() => queue(CounterCommand.increment(1))}>
+    {count}
+  </button>
+);
+```
+
+If the state shape changes, the command API changes, or the store is swapped for testing, every component needs to be updated.
+
+## The pattern
+
+```ts
+// hooks/use-counter.ts
+import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { counterStore, CounterCommand } from "../stores/counter";
+
+export function useCounter() {
+  const count = useSelector(counterStore, (s) => s.count);
+  const queue = useQueue(counterStore);
+
+  return {
+    count,
+    increment: (amount: number) => queue(CounterCommand.increment(amount)),
+    decrement: (amount: number) => queue(CounterCommand.decrement(amount)),
+    reset: () => queue(CounterCommand.reset()),
+  };
+}
+```
+
+Components become straightforward:
+
+```tsx
+function Counter() {
+  const { count, increment, decrement, reset } = useCounter();
+
+  return (
+    <div>
+      <p>{count}</p>
+      <button onClick={() => increment(1)}>+</button>
+      <button onClick={() => decrement(1)}>-</button>
+      <button onClick={reset}>Reset</button>
+    </div>
+  );
+}
+```
+
+## Read/write split
+
+For stores where some components only read state and others only dispatch commands, splitting the hook avoids unnecessary re-renders.
+
+```ts
+// hooks/use-user.ts
+import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { userStore, UserCommand } from "../stores/user";
+
+export function useUserState() {
+  return {
+    id: useSelector(userStore, (s) => s.id),
+    name: useSelector(userStore, (s) => s.name),
+    status: useSelector(userStore, (s) => s.status),
+  };
+}
+
+export function useUserActions() {
+  const queue = useQueue(userStore);
+  return {
+    fetchUser: (id: string) => queue(UserCommand.fetchUser(id)),
+    signOut: () => queue(UserCommand.signOut()),
+  };
+}
+```
+
+A component that only reads state will not re-render when an action is dispatched:
+
+```tsx
+function UserProfile() {
+  const { name, status } = useUserState(); // Re-renders on state change only
+
+  if (status === "loading") return <Spinner />;
+  return <p>{name}</p>;
+}
+
+function SignOutButton() {
+  const { signOut } = useUserActions(); // Never re-renders due to state changes
+
+  return <button onClick={signOut}>Sign out</button>;
+}
+```
+
+## Testing with CommiqProvider
+
+Domain hooks make components testable in isolation. Wrap the component under test in `CommiqProvider` with a test store:
+
+```tsx
+import { CommiqProvider } from "@naikidev/commiq-react";
+import { createStore, sealStore } from "@naikidev/commiq";
+import { render, screen } from "@testing-library/react";
+
+it("displays the count", () => {
+  const testStore = sealStore(
+    createStore({ count: 42 })
+  );
+
+  render(
+    <CommiqProvider stores={{ counter: testStore }}>
+      <Counter />
+    </CommiqProvider>
+  );
+
+  expect(screen.getByText("42")).toBeInTheDocument();
+});
+```
+
+<Callout>
+For `CommiqProvider`-based testing to work, the domain hook must read the store from context rather than importing it directly. See the [React hooks documentation](/react/hooks) for details on using `CommiqProvider` for dependency injection.
+</Callout>
+
+## Where to place domain hooks
+
+Place domain hooks in a `hooks/` directory alongside your components, or co-locate them with the feature they serve:
+
+```
+src/
+  stores/
+    counter.ts
+    user.ts
+  hooks/
+    use-counter.ts
+    use-user.ts
+  components/
+    Counter.tsx
+    UserProfile.tsx
+```
+
+For feature-based project structures, co-locate the hook with the feature:
+
+```
+src/
+  features/
+    counter/
+      counter.store.ts
+      use-counter.ts
+      Counter.tsx
+    user/
+      user.store.ts
+      use-user.ts
+      UserProfile.tsx
+```
+
+## Benefits
+
+- **Single point of change.** When the store's shape or command API changes, update the hook — not every component.
+- **Readable components.** Components express intent (`increment`, `fetchUser`) rather than mechanics (`queue(createCommand(...))`).
+- **Consistent API.** Every component that uses a domain gets the same interface, regardless of which developer wrote it.

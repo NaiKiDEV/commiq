@@ -1,0 +1,174 @@
+---
+title: Store File Structure
+description: How to organize store files for clarity, testability, and scale.
+---
+
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+
+# Store File Structure
+
+Commiq stores are plain TypeScript modules. There is no required file structure, but the patterns below have proven effective for projects of different sizes.
+
+## Single-file stores
+
+For most stores, a single file per domain is the right choice. Place all commands, events, handler registration, and the sealed export together.
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="stores" defaultOpen>
+      <File name="counter.ts" />
+      <File name="user.ts" />
+      <File name="cart.ts" />
+    </Folder>
+  </Folder>
+</Files>
+
+A complete single-file store follows this structure:
+
+```ts
+// stores/counter.ts
+import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+type CounterState = {
+  count: number;
+};
+
+// ── Events ───────────────────────────────────────────────────────────────────
+
+export const CounterEvent = {
+  Incremented: createEvent<{ amount: number }>("counter:incremented"),
+  Decremented: createEvent<{ amount: number }>("counter:decremented"),
+  Reset: createEvent<void>("counter:reset"),
+};
+
+// ── Commands ─────────────────────────────────────────────────────────────────
+
+export const CounterCommand = {
+  increment: (amount: number) => createCommand("counter:increment", { amount }),
+  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
+  reset: () => createCommand("counter:reset", undefined),
+};
+
+// ── Store ─────────────────────────────────────────────────────────────────────
+
+const _store = createStore<CounterState>({ count: 0 });
+
+_store
+  .addCommandHandler<{ amount: number }>("counter:increment", (ctx, cmd) => {
+    ctx.setState({ count: ctx.state.count + cmd.data.amount });
+    ctx.emit(CounterEvent.Incremented, { amount: cmd.data.amount });
+  })
+  .addCommandHandler<{ amount: number }>("counter:decrement", (ctx, cmd) => {
+    ctx.setState({ count: ctx.state.count - cmd.data.amount });
+    ctx.emit(CounterEvent.Decremented, { amount: cmd.data.amount });
+  })
+  .addCommandHandler("counter:reset", (ctx) => {
+    ctx.setState({ count: 0 });
+    ctx.emit(CounterEvent.Reset, undefined);
+  });
+
+// ── Public interface ──────────────────────────────────────────────────────────
+
+export const counterStore = sealStore(_store);
+```
+
+The raw store (`_store`) stays private. The sealed store, events, and command factories are the only public exports.
+
+## Domain folder stores
+
+As a store grows — more commands, event handlers, or complex types — split it into a domain folder. This keeps each file focused and makes large stores easier to navigate.
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="stores" defaultOpen>
+      <Folder name="user" defaultOpen>
+        <File name="events.ts" />
+        <File name="commands.ts" />
+        <File name="store.ts" />
+        <File name="index.ts" />
+      </Folder>
+      <Folder name="cart">
+        <File name="events.ts" />
+        <File name="commands.ts" />
+        <File name="store.ts" />
+        <File name="index.ts" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
+
+```ts
+// stores/user/events.ts
+import { createEvent } from "@naikidev/commiq";
+
+export const UserEvent = {
+  Fetched: createEvent<{ id: string; name: string }>("user:fetched"),
+  FetchFailed: createEvent<{ message: string }>("user:fetch-failed"),
+  SignedOut: createEvent<void>("user:signed-out"),
+};
+```
+
+```ts
+// stores/user/commands.ts
+import { createCommand } from "@naikidev/commiq";
+
+export const UserCommand = {
+  fetchUser: (id: string) => createCommand("user:fetch", { id }),
+  signOut: () => createCommand("user:sign-out", undefined),
+};
+```
+
+```ts
+// stores/user/store.ts
+import { createStore } from "@naikidev/commiq";
+import { UserEvent } from "./events";
+
+type UserState = {
+  id: string | null;
+  name: string | null;
+  status: "idle" | "loading" | "error";
+};
+
+export const initialState: UserState = { id: null, name: null, status: "idle" };
+
+export const _store = createStore<UserState>(initialState);
+
+_store
+  .addCommandHandler<{ id: string }>("user:fetch", async (ctx, cmd) => {
+    ctx.setState({ ...ctx.state, status: "loading" });
+    try {
+      const user = await fetchUserById(cmd.data.id);
+      ctx.setState({ id: user.id, name: user.name, status: "idle" });
+      ctx.emit(UserEvent.Fetched, user);
+    } catch (e) {
+      ctx.setState({ ...ctx.state, status: "error" });
+      ctx.emit(UserEvent.FetchFailed, { message: (e as Error).message });
+    }
+  })
+  .addCommandHandler("user:sign-out", (ctx) => {
+    ctx.setState(initialState);
+    ctx.emit(UserEvent.SignedOut, undefined);
+  });
+```
+
+```ts
+// stores/user/index.ts
+import { sealStore } from "@naikidev/commiq";
+import { _store } from "./store";
+
+export { UserEvent } from "./events";
+export { UserCommand } from "./commands";
+export const userStore = sealStore(_store);
+```
+
+The `index.ts` is the single public entry point. Consumers import from `./stores/user`, not from individual files inside it.
+
+## Rules of thumb
+
+- **Export sealed stores.** Never export the raw store from a module that other parts of the app import. The sealed interface is intentional — it restricts consumers to reading state and queuing commands.
+- **Keep the raw store private.** Prefix it with `_` or limit its scope to the store module. Anything that needs the raw store (event bus wiring, `addEventHandler` calls) belongs in the same file or a dedicated wiring module.
+- **Group by domain, not by type.** Avoid a flat `events/` or `commands/` folder. Co-location makes it straightforward to understand what a store does.
+- **Namespace command and event names.** Use `"user:fetch"` rather than `"fetch"` to avoid collisions between stores and make debug output readable.
+- **Export initial state.** Exporting `initialState` alongside the store allows reset commands to reference it directly, ensuring consistency.

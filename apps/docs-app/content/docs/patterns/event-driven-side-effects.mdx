@@ -1,0 +1,145 @@
+---
+title: Event-Driven Side Effects
+description: Trigger notifications, navigation, and analytics from store events without coupling logic to views.
+---
+
+# Event-Driven Side Effects
+
+Not all reactions to store events should be state changes. Showing a toast notification, navigating after a successful login, or logging an analytics event are concerns of the UI layer — they should not live in the store.
+
+The `useEvent` hook subscribes a component to store events and runs a callback when they fire, without adding transient flags to the state.
+
+## The problem with state flags
+
+The alternative — adding a `justSaved` or `loginRedirectPending` flag to state — creates noise and requires cleanup:
+
+```ts
+// Avoid this approach
+type FormState = {
+  saved: boolean;
+  justSaved: boolean; // Only exists to trigger a toast — belongs in UI, not store
+};
+```
+
+Managing flag resets adds commands, adds complexity, and still does not prevent a component from missing the transition if it renders after the flag was set.
+
+## The pattern
+
+Emit a semantic event from the command handler:
+
+```ts
+// stores/form.ts
+export const FormEvent = {
+  Saved: createEvent<{ id: string }>("form:saved"),
+  SaveFailed: createEvent<{ message: string }>("form:save-failed"),
+};
+
+_store.addCommandHandler("form:save", async (ctx, cmd) => {
+  try {
+    const result = await saveFormData(cmd.data);
+    ctx.setState({ ...ctx.state, dirty: false });
+    ctx.emit(FormEvent.Saved, { id: result.id });
+  } catch (e) {
+    ctx.emit(FormEvent.SaveFailed, { message: (e as Error).message });
+  }
+});
+```
+
+Subscribe to the event in the component that owns the side effect:
+
+```tsx
+import { useEvent } from "@naikidev/commiq-react";
+import { formStore, FormEvent } from "../stores/form";
+
+function FormPage() {
+  useEvent(formStore, FormEvent.Saved, (event) => {
+    showToast(`Saved (ID: ${event.data.id})`);
+  });
+
+  useEvent(formStore, FormEvent.SaveFailed, (event) => {
+    showToast(`Save failed: ${event.data.message}`, { type: "error" });
+  });
+
+  return <FormEditor />;
+}
+```
+
+The store emits what happened. The component decides what to do about it. Neither knows about the other.
+
+## Navigation after an action
+
+```tsx
+import { useNavigate } from "react-router-dom";
+import { useEvent } from "@naikidev/commiq-react";
+import { authStore, AuthEvent } from "../stores/auth";
+
+function LoginPage() {
+  const navigate = useNavigate();
+
+  useEvent(authStore, AuthEvent.SignedIn, () => {
+    navigate("/dashboard");
+  });
+
+  return <LoginForm />;
+}
+```
+
+Routing libraries are a UI concern. The auth store emits `AuthEvent.SignedIn` and is not aware of React Router.
+
+## Analytics
+
+Centralizing analytics in a shell or layout component keeps tracking code out of store logic and out of individual feature components:
+
+```tsx
+function AppShell() {
+  useEvent(orderStore, OrderEvent.Placed, (event) => {
+    analytics.track("order_placed", {
+      orderId: event.data.id,
+      total: event.data.total,
+    });
+  });
+
+  useEvent(authStore, AuthEvent.SignedOut, () => {
+    analytics.track("signed_out");
+  });
+
+  return <Outlet />;
+}
+```
+
+All `useEvent` subscriptions clean up automatically when the component unmounts, so analytics tracking stops when the shell is removed.
+
+## State vs. events
+
+| Reaction | Belongs in state | Belongs in useEvent |
+|---|---|---|
+| Loading spinner | Yes | No |
+| Inline error message | Yes | No |
+| Transient toast notification | No | Yes |
+| Navigate to another page | No | Yes |
+| Analytics event | No | Yes |
+| Disabled button after submission | Yes | No |
+
+The distinction: **state** represents what is currently true about the domain. **Events** represent what just happened. Side effects triggered by "what happened" belong in `useEvent`, not in state.
+
+## Placing useEvent calls
+
+Use `useEvent` in the component that owns the side effect — typically a page component, a layout, or a notification provider. Avoid placing it deep in a component tree where the subscription lifetime is tied to a rarely-rendered component.
+
+```tsx
+// Good: the page owns the navigation side effect
+function CheckoutPage() {
+  useEvent(checkoutStore, CheckoutEvent.Completed, () => {
+    navigate("/order-confirmation");
+  });
+  return <CheckoutForm />;
+}
+
+// Avoid: a leaf component triggering navigation is hard to trace
+function SubmitButton() {
+  useEvent(checkoutStore, CheckoutEvent.Completed, () => {
+    navigate("/order-confirmation"); // Unexpected location for a navigation side effect
+  });
+  return <button>Place Order</button>;
+}
+```

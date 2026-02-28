@@ -1,0 +1,40 @@
+---
+title: Patterns
+description: Architectural patterns and best practices for building with Commiq.
+---
+
+import { Card, Cards } from 'fumadocs-ui/components/card';
+
+# Patterns
+
+These patterns address recurring architectural decisions when building with Commiq. Each one is prescriptive — it reflects how the library is designed to be used and what works well in practice.
+
+Use them as starting points. Copy the code, adapt the names, and apply the structure that fits your project.
+
+<Cards>
+  <Card
+    title="Store File Structure"
+    href="/patterns/store-file-structure"
+    description="How to organize store files for clarity, testability, and scale."
+  />
+  <Card
+    title="Typed Command Factories"
+    href="/patterns/typed-command-factories"
+    description="Replace magic strings with typed factory functions for type-safe command dispatch."
+  />
+  <Card
+    title="Domain Hooks"
+    href="/patterns/domain-hooks"
+    description="Encapsulate store interactions in a clean React hook API."
+  />
+  <Card
+    title="Async Loading States"
+    href="/patterns/async-loading-states"
+    description="A standard approach to async commands with loading and error handling."
+  />
+  <Card
+    title="Event-Driven Side Effects"
+    href="/patterns/event-driven-side-effects"
+    description="Trigger notifications, navigation, and analytics from store events without coupling logic to views."
+  />
+</Cards>
