@@ -57,6 +57,18 @@ export class StoreImpl<S> {
     return this._state;
   }
 
+  replaceState(next: S): void {
+    if (next === this._state) return;
+    const prev = this._state;
+    this._state = next;
+    void this._broadcast(
+      this._createEvent(BuiltinEvent.StateChanged, { prev, next }),
+    );
+    void this._broadcast(
+      this._createEvent(BuiltinEvent.StateReset, undefined as void),
+    );
+  }
+
   addCommandHandler<D = unknown>(
     name: string,
     handler: CommandHandler<S, D>,
