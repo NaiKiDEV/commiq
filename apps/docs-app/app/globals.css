@@ -1,1 +1,41 @@
-@import 'fumadocs-ui/style.css';
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+@theme {
+  --color-fd-background: hsl(225, 15%, 97%);
+  --color-fd-foreground: hsl(225, 20%, 10%);
+  --color-fd-muted: hsl(225, 15%, 94%);
+  --color-fd-muted-foreground: hsl(225, 12%, 45%);
+  --color-fd-popover: hsl(225, 15%, 98%);
+  --color-fd-popover-foreground: hsl(225, 15%, 15%);
+  --color-fd-card: hsl(225, 15%, 95%);
+  --color-fd-card-foreground: hsl(225, 20%, 10%);
+  --color-fd-border: hsla(225, 20%, 80%, 50%);
+  --color-fd-primary: hsl(239, 84%, 67%); /* #6366f1 - accent */
+  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-secondary: hsl(225, 15%, 91%);
+  --color-fd-secondary-foreground: hsl(225, 20%, 10%);
+  --color-fd-accent: hsla(239, 84%, 67%, 15%);
+  --color-fd-accent-foreground: hsl(239, 70%, 50%);
+  --color-fd-ring: hsl(239, 84%, 67%);
+}
+
+.dark {
+  --color-fd-background: hsl(216, 28%, 7%); /* #0d1117 - bg */
+  --color-fd-foreground: hsl(227, 30%, 87%); /* #d4d8e8 - text */
+  --color-fd-muted: hsl(220, 22%, 11%); /* #151921 - bgPanel */
+  --color-fd-muted-foreground: hsla(224, 15%, 60%, 80%); /* #8b93a8 - textSecondary */
+  --color-fd-popover: hsl(222, 23%, 14%); /* #1c2130 - bgHeader */
+  --color-fd-popover-foreground: hsl(227, 30%, 87%);
+  --color-fd-card: hsl(222, 20%, 11%); /* #161b24 - bgToolbar */
+  --color-fd-card-foreground: hsl(227, 30%, 87%);
+  --color-fd-border: hsla(222, 23%, 21%, 60%); /* #2a3040 - border */
+  --color-fd-primary: hsl(239, 84%, 67%); /* #6366f1 - accent */
+  --color-fd-primary-foreground: hsl(0, 0%, 100%);
+  --color-fd-secondary: hsl(226, 25%, 20%); /* #232940 - bgActive */
+  --color-fd-secondary-foreground: hsl(227, 30%, 87%);
+  --color-fd-accent: hsla(239, 84%, 67%, 12%); /* accentBg */
+  --color-fd-accent-foreground: hsl(239, 84%, 77%); /* #818cf8 - accentLight */
+  --color-fd-ring: hsl(239, 84%, 67%);
+}
