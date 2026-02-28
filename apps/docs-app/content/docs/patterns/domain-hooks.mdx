@@ -3,6 +3,8 @@ title: Domain Hooks
 description: Encapsulate store interactions in a clean, reusable React hook API.
 ---
 
+import { File, Folder, Files } from 'fumadocs-ui/components/files';
+
 # Domain Hooks
 
 Using `useSelector`, `useQueue`, and command factories directly in every component that interacts with a store leads to repetition and couples the UI to implementation details. A domain hook wraps this into a single, reusable function.
@@ -133,33 +135,41 @@ For `CommiqProvider`-based testing to work, the domain hook must read the store 
 
 Place domain hooks in a `hooks/` directory alongside your components, or co-locate them with the feature they serve:
 
-```
-src/
-  stores/
-    counter.ts
-    user.ts
-  hooks/
-    use-counter.ts
-    use-user.ts
-  components/
-    Counter.tsx
-    UserProfile.tsx
-```
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="stores" defaultOpen>
+      <File name="counter.ts" />
+      <File name="user.ts" />
+    </Folder>
+    <Folder name="hooks" defaultOpen>
+      <File name="use-counter.ts" />
+      <File name="use-user.ts" />
+    </Folder>
+    <Folder name="components" defaultOpen>
+      <File name="Counter.tsx" />
+      <File name="UserProfile.tsx" />
+    </Folder>
+  </Folder>
+</Files>
 
 For feature-based project structures, co-locate the hook with the feature:
 
-```
-src/
-  features/
-    counter/
-      counter.store.ts
-      use-counter.ts
-      Counter.tsx
-    user/
-      user.store.ts
-      use-user.ts
-      UserProfile.tsx
-```
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="features" defaultOpen>
+      <Folder name="counter" defaultOpen>
+        <File name="counter.store.ts" />
+        <File name="use-counter.ts" />
+        <File name="Counter.tsx" />
+      </Folder>
+      <Folder name="user" defaultOpen>
+        <File name="user.store.ts" />
+        <File name="use-user.ts" />
+        <File name="UserProfile.tsx" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
 
 ## Benefits
 

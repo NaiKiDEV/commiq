@@ -1,11 +1,12 @@
 {
-  "title": "Patterns",
+  "title": "Usage Patterns",
   "pages": [
     "index",
     "store-file-structure",
     "typed-command-factories",
     "domain-hooks",
     "async-loading-states",
-    "event-driven-side-effects"
+    "event-driven-side-effects",
+    "real-time-transports"
   ]
 }
