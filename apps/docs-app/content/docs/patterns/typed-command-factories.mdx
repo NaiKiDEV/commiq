@@ -24,8 +24,7 @@ There is also no central place to discover what commands a store accepts.
 
 Define a factory function for each command in the store file:
 
-```ts
-// stores/counter.ts
+```ts title="stores/counter.ts"
 import { createCommand } from "@naikidev/commiq";
 
 export const CounterCommand = {
@@ -102,9 +101,7 @@ export const CartCommand = {
 
 Place the command factory object in the same file as the store. It is part of the store's public API, alongside the sealed store and event definitions.
 
-```ts
-// stores/counter.ts
-
+```ts title="stores/counter.ts"
 // Types
 type CounterState = { count: number };
 

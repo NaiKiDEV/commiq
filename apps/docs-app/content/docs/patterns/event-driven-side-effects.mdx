@@ -27,8 +27,7 @@ Managing flag resets adds commands, adds complexity, and still does not prevent 
 
 Emit a semantic event from the command handler:
 
-```ts
-// stores/form.ts
+```ts title="stores/form.ts"
 export const FormEvent = {
   Saved: createEvent<{ id: string }>("form:saved"),
   SaveFailed: createEvent<{ message: string }>("form:save-failed"),

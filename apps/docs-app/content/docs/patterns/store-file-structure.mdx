@@ -25,8 +25,7 @@ For most stores, a single file per domain is the right choice. Place all command
 
 A complete single-file store follows this structure:
 
-```ts
-// stores/counter.ts
+```ts title="stores/counter.ts"
 import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -99,8 +98,7 @@ As a store grows — more commands, event handlers, or complex types — split i
   </Folder>
 </Files>
 
-```ts
-// stores/user/events.ts
+```ts title="stores/user/events.ts"
 import { createEvent } from "@naikidev/commiq";
 
 export const UserEvent = {
@@ -110,8 +108,7 @@ export const UserEvent = {
 };
 ```
 
-```ts
-// stores/user/commands.ts
+```ts title="stores/user/commands.ts"
 import { createCommand } from "@naikidev/commiq";
 
 export const UserCommand = {
@@ -120,8 +117,7 @@ export const UserCommand = {
 };
 ```
 
-```ts
-// stores/user/store.ts
+```ts title="stores/user/store.ts"
 import { createStore } from "@naikidev/commiq";
 import { UserEvent } from "./events";
 
@@ -153,8 +149,7 @@ _store
   });
 ```
 
-```ts
-// stores/user/index.ts
+```ts title="stores/user/index.ts"
 import { sealStore } from "@naikidev/commiq";
 import { _store } from "./store";
 
