@@ -6,6 +6,7 @@ import { counterStore } from "./stores/counter.store";
 import { todoStore } from "./stores/todo.store";
 import { inventoryStore, cartStore } from "./stores/shop.store";
 import { asyncStore } from "./stores/async.store";
+import { cartPersistStore } from "./stores/cart.store";
 import {
   orderStore,
   paymentStore,
@@ -20,6 +21,7 @@ import { AsyncPage } from "./components/AsyncCommands";
 import { StreamPage } from "./components/EventStream";
 import { DevtoolsPage } from "./components/DevtoolsPanel";
 import { OrderPipelinePage } from "./components/OrderPipeline";
+import { ShoppingCartPage } from "./components/ShoppingCart";
 
 const stores = {
   counter: counterStore,
@@ -31,6 +33,7 @@ const stores = {
   payment: paymentStore,
   fulfillment: fulfillmentStore,
   notification: notificationStore,
+  persistedCart: cartPersistStore,
 };
 
 export function App() {
@@ -44,6 +47,7 @@ export function App() {
           <Route path="async" element={<AsyncPage />} />
           <Route path="stream" element={<StreamPage />} />
           <Route path="pipeline" element={<OrderPipelinePage />} />
+          <Route path="cart" element={<ShoppingCartPage />} />
           <Route path="devtools" element={<DevtoolsPage />} />
         </Route>
       </Routes>

@@ -11,6 +11,7 @@
   "dependencies": {
     "@naikidev/commiq": "workspace:*",
     "@naikidev/commiq-react": "workspace:*",
+    "@naikidev/commiq-persist": "workspace:*",
     "@naikidev/commiq-devtools-core": "workspace:*",
     "@naikidev/commiq-devtools": "workspace:*",
     "@naikidev/commiq-otel": "workspace:*",

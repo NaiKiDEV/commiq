@@ -19,6 +19,10 @@ const nav = [
       { to: "/devtools", label: "Devtools" },
     ],
   },
+  {
+    label: "Plugins",
+    children: [{ to: "/cart", label: "Persistent Cart" }],
+  },
 ];
 
 function SidebarLink({ to, label }: { to: string; label: string }) {

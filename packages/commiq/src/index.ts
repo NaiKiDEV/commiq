@@ -1,5 +1,5 @@
 export { createCommand, createEvent, handledEvent } from "./types";
-export { createStore, BuiltinEvent, BuiltinEventName } from "./store";
+export { createStore, StoreImpl, BuiltinEvent, BuiltinEventName } from "./store";
 export { sealStore } from "./proxy";
 export { createEventBus } from "./event-bus";
 export type {
