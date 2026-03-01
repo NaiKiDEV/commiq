@@ -7,9 +7,7 @@
     "api",
     "react",
     "---",
-    "devtools",
-    "devtools-react",
-    "opentelemetry",
+    "plugins",
     "---",
     "patterns",
     "examples"
