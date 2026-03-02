@@ -159,6 +159,30 @@ export function instrumentStore(
         break;
       }
 
+      case BuiltinEventName.CommandInterrupted: {
+        const { command: cmd, phase } = event.data as {
+          command: { correlationId: string; name: string };
+          phase: "queued" | "running";
+        };
+        const span = spanRegistry.get(cmd.correlationId);
+        if (span) {
+          span.setAttribute("commiq.command.interrupted", true);
+          span.setAttribute("commiq.command.interrupted_phase", phase);
+          span.setStatus({ code: SpanStatusCode.OK, message: "interrupted" });
+          span.end();
+          _liveSpans.delete(span);
+          spanRegistry.delete(cmd.correlationId);
+          ownedIds.delete(cmd.correlationId);
+
+          if (_activeCommandSpan === span) {
+            const prev = _prevActiveSpans.get(cmd.correlationId) ?? null;
+            _activeCommandSpan = prev && _liveSpans.has(prev) ? prev : null;
+          }
+          _prevActiveSpans.delete(cmd.correlationId);
+        }
+        break;
+      }
+
       case BuiltinEventName.StateChanged: {
         const parentSpan = event.causedBy
           ? spanRegistry.get(event.causedBy)

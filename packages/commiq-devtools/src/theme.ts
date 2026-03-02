@@ -32,6 +32,8 @@ export const colors = {
   stateChangeBg: "rgba(251, 191, 36, 0.10)",
   error: "#f87171",
   errorBg: "rgba(248, 113, 113, 0.10)",
+  interrupted: "#fb923c",
+  interruptedBg: "rgba(251, 146, 60, 0.10)",
 
   string: "#a5d6ff",
   number: "#79c0ff",
@@ -65,6 +67,8 @@ export const BUILTIN_EVENTS: Set<string> = new Set(Object.values(BuiltinEventNam
 export function getEventColor(name: string, type: "command" | "event") {
   if (name === BuiltinEventName.CommandHandlingError || name === BuiltinEventName.InvalidCommand)
     return { fg: colors.error, bg: colors.errorBg };
+  if (name === BuiltinEventName.CommandInterrupted)
+    return { fg: colors.interrupted, bg: colors.interruptedBg };
   if (name === BuiltinEventName.StateChanged)
     return { fg: colors.stateChange, bg: colors.stateChangeBg };
   if (type === "command") return { fg: colors.command, bg: colors.commandBg };

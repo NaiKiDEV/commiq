@@ -115,7 +115,8 @@ export class EventCollector {
       name === BuiltinEventName.CommandStarted ||
       name === BuiltinEventName.CommandHandled ||
       name === BuiltinEventName.InvalidCommand ||
-      name === BuiltinEventName.CommandHandlingError
+      name === BuiltinEventName.CommandHandlingError ||
+      name === BuiltinEventName.CommandInterrupted
     );
   }
 }

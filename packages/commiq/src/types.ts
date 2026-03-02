@@ -23,6 +23,7 @@ export type CommandContext<S> = {
   state: S;
   setState: (next: S) => void;
   emit: <D>(eventDef: EventDef<D>, data: D) => void;
+  signal?: AbortSignal;
 }
 
 export type EventContext<S> = {
@@ -44,6 +45,7 @@ export type StreamListener = (event: StoreEvent) => void;
 
 export type CommandHandlerOptions = {
   notify?: boolean;
+  interruptable?: boolean;
 }
 
 export type SealedStore<S> = {

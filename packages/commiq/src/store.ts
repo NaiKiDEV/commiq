@@ -21,6 +21,7 @@ export const BuiltinEventName = {
   InvalidCommand: "invalidCommand",
   CommandHandlingError: "commandHandlingError",
   StateReset: "stateReset",
+  CommandInterrupted: "commandInterrupted",
 } as const;
 
 export const BuiltinEvent = {
@@ -32,6 +33,9 @@ export const BuiltinEvent = {
     BuiltinEventName.CommandHandlingError,
   ),
   StateReset: createEvent(BuiltinEventName.StateReset),
+  CommandInterrupted: createEvent<{ command: Command; phase: "queued" | "running" }>(
+    BuiltinEventName.CommandInterrupted,
+  ),
 } as const;
 
 type HandlerEntry<S> = {
@@ -44,10 +48,11 @@ export class StoreImpl<S> {
   private _commandHandlers = new Map<string, HandlerEntry<S>>();
   private _eventHandlers = new Map<symbol, EventHandler<S, any>[]>();
   private _streamListeners = new Set<StreamListener>();
-  private _queue: Command[] = [];
+  private _queue: Command<string, any>[] = [];
   private _processing = false;
   private _flushResolvers: Array<() => void> = [];
   private _currentCorrelationId: string | null = null;
+  private _interruptControllers = new Map<string, AbortController>();
 
   constructor(initialState: S) {
     this._state = initialState;
@@ -92,6 +97,29 @@ export class StoreImpl<S> {
     command.correlationId = nanoid();
     command.causedBy =
       this._currentCorrelationId ?? command.causedBy ?? _causalContext;
+
+    const entry = this._commandHandlers.get(command.name);
+    if (entry?.options?.interruptable) {
+      const removed: Command[] = [];
+      this._queue = this._queue.filter((queued) => {
+        if (queued.name === command.name) {
+          removed.push(queued);
+          return false;
+        }
+        return true;
+      });
+      for (const cmd of removed) {
+        this._broadcastSync(
+          this._createEvent(BuiltinEvent.CommandInterrupted, { command: cmd, phase: "queued" as const }),
+        );
+      }
+
+      const existing = this._interruptControllers.get(command.name);
+      if (existing) {
+        existing.abort();
+      }
+    }
+
     this._queue.push(command);
     if (!this._processing) {
       this._processQueue();
@@ -148,6 +176,17 @@ export class StoreImpl<S> {
 
       const collectedEvents: StoreEvent[] = [];
       const prevState = this._state;
+      const isInterruptable = entry.options?.interruptable === true;
+
+      let abortController: AbortController | undefined;
+      if (isInterruptable) {
+        const existing = this._interruptControllers.get(command.name);
+        if (existing) {
+          existing.abort();
+        }
+        abortController = new AbortController();
+        this._interruptControllers.set(command.name, abortController);
+      }
 
       const ctx: CommandContext<S> = {
         state: this._state,
@@ -158,10 +197,20 @@ export class StoreImpl<S> {
         emit: <D>(eventDef: EventDef<D>, data: D) => {
           collectedEvents.push(this._createEvent(eventDef, data));
         },
+        signal: abortController?.signal,
       };
 
       try {
         await entry.handler(ctx, command);
+
+        if (isInterruptable && abortController!.signal.aborted) {
+          await this._broadcast(
+            this._createEvent(BuiltinEvent.CommandInterrupted, { command, phase: "running" as const }),
+          );
+          if (isInterruptable) this._interruptControllers.delete(command.name);
+          this._currentCorrelationId = null;
+          continue;
+        }
 
         if (this._state !== prevState) {
           await this._broadcast(
@@ -187,12 +236,20 @@ export class StoreImpl<S> {
           await this._broadcast(this._createEvent(notifyEventDef, { command }));
         }
       } catch (error) {
-        await this._broadcast(
-          this._createEvent(BuiltinEvent.CommandHandlingError, {
-            command,
-            error,
-          }),
-        );
+        if (isInterruptable && abortController!.signal.aborted) {
+          await this._broadcast(
+            this._createEvent(BuiltinEvent.CommandInterrupted, { command, phase: "running" as const }),
+          );
+        } else {
+          await this._broadcast(
+            this._createEvent(BuiltinEvent.CommandHandlingError, {
+              command,
+              error,
+            }),
+          );
+        }
+      } finally {
+        if (isInterruptable) this._interruptControllers.delete(command.name);
       }
 
       this._currentCorrelationId = null;
@@ -204,6 +261,15 @@ export class StoreImpl<S> {
     for (const resolve of resolvers) {
       resolve();
     }
+  }
+
+  private _broadcastSync(event: StoreEvent): void {
+    const prevCausalContext = _causalContext;
+    _causalContext = event.correlationId;
+    for (const listener of this._streamListeners) {
+      listener(event);
+    }
+    _causalContext = prevCausalContext;
   }
 
   private async _broadcast(event: StoreEvent): Promise<void> {
