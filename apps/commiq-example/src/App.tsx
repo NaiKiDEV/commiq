@@ -7,6 +7,7 @@ import { todoStore } from "./stores/todo.store";
 import { inventoryStore, cartStore } from "./stores/shop.store";
 import { asyncStore } from "./stores/async.store";
 import { cartPersistStore } from "./stores/cart.store";
+import { searchStore } from "./stores/search.store";
 import {
   orderStore,
   paymentStore,
@@ -22,6 +23,7 @@ import { StreamPage } from "./components/EventStream";
 import { DevtoolsPage } from "./components/DevtoolsPanel";
 import { OrderPipelinePage } from "./components/OrderPipeline";
 import { ShoppingCartPage } from "./components/ShoppingCart";
+import { LiveSearchPage } from "./components/LiveSearch";
 
 const stores = {
   counter: counterStore,
@@ -34,6 +36,7 @@ const stores = {
   fulfillment: fulfillmentStore,
   notification: notificationStore,
   persistedCart: cartPersistStore,
+  search: searchStore,
 };
 
 export function App() {
@@ -48,6 +51,7 @@ export function App() {
           <Route path="stream" element={<StreamPage />} />
           <Route path="pipeline" element={<OrderPipelinePage />} />
           <Route path="cart" element={<ShoppingCartPage />} />
+          <Route path="search" element={<LiveSearchPage />} />
           <Route path="devtools" element={<DevtoolsPage />} />
         </Route>
       </Routes>

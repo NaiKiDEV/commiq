@@ -21,7 +21,10 @@ const nav = [
   },
   {
     label: "Plugins",
-    children: [{ to: "/cart", label: "Persistent Cart" }],
+    children: [
+      { to: "/cart", label: "Persistent Cart" },
+      { to: "/search", label: "Live Search" },
+    ],
   },
 ];
 
