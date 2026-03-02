@@ -1,30 +1,22 @@
 import {
   createStore,
   createCommand,
-  createEvent,
   createEventBus,
   sealStore,
 } from "@naikidev/commiq";
 import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { InventoryEvent } from "./events";
 
-export interface Product {
+export type Product = {
   id: number;
   name: string;
   price: number;
   stock: number;
-}
+};
 
-export interface InventoryState {
+export type InventoryState = {
   products: Product[];
-}
-
-export const stockReserved = createEvent<{ productId: number; qty: number }>(
-  "stockReserved",
-);
-export const stockReleased = createEvent<{ productId: number; qty: number }>(
-  "stockReleased",
-);
-export const outOfStock = createEvent<{ productId: number }>("outOfStock");
+};
 
 const _inventoryStore = createStore<InventoryState>({
   products: [
@@ -37,12 +29,12 @@ const _inventoryStore = createStore<InventoryState>({
 
 _inventoryStore
   .addCommandHandler<{ productId: number; qty: number }>(
-    "reserveStock",
+    "inventory:reserve-stock",
     (ctx, cmd) => {
       const { productId, qty } = cmd.data;
       const product = ctx.state.products.find((p) => p.id === productId);
       if (!product || product.stock < qty) {
-        ctx.emit(outOfStock, { productId });
+        ctx.emit(InventoryEvent.OutOfStock, { productId });
         return;
       }
       ctx.setState({
@@ -50,12 +42,12 @@ _inventoryStore
           p.id === productId ? { ...p, stock: p.stock - qty } : p,
         ),
       });
-      ctx.emit(stockReserved, { productId, qty });
+      ctx.emit(InventoryEvent.StockReserved, { productId, qty });
     },
     { notify: true },
   )
   .addCommandHandler<{ productId: number; qty: number }>(
-    "releaseStock",
+    "inventory:release-stock",
     (ctx, cmd) => {
       const { productId, qty } = cmd.data;
       ctx.setState({
@@ -63,30 +55,28 @@ _inventoryStore
           p.id === productId ? { ...p, stock: p.stock + qty } : p,
         ),
       });
-      ctx.emit(stockReleased, { productId, qty });
+      ctx.emit(InventoryEvent.StockReleased, { productId, qty });
     },
     { notify: true },
   );
 
-export const inventoryStore = sealStore(_inventoryStore);
-
-export interface CartItem {
+export type ShopCartItem = {
   productId: number;
   name: string;
   price: number;
   qty: number;
-}
+};
 
-export interface CartState {
-  items: CartItem[];
+export type ShopCartState = {
+  items: ShopCartItem[];
   lastError: string;
-}
+};
 
-const _cartStore = createStore<CartState>({ items: [], lastError: "" });
+const _cartStore = createStore<ShopCartState>({ items: [], lastError: "" });
 
 _cartStore
   .addCommandHandler<{ productId: number; name: string; price: number }>(
-    "addToCart",
+    "shop-cart:add",
     (ctx, cmd) => {
       const { productId, name, price } = cmd.data;
       const existing = ctx.state.items.find((i) => i.productId === productId);
@@ -105,36 +95,30 @@ _cartStore
       }
     },
   )
-  .addCommandHandler<{ productId: number }>("removeFromCart", (ctx, cmd) => {
-    const item = ctx.state.items.find(
-      (i) => i.productId === cmd.data.productId,
-    );
-    if (!item) return;
+  .addCommandHandler<{ productId: number }>("shop-cart:remove", (ctx, cmd) => {
     ctx.setState({
       ...ctx.state,
       items: ctx.state.items.filter((i) => i.productId !== cmd.data.productId),
     });
   })
-  .addCommandHandler<string>("setError", (ctx, cmd) => {
+  .addCommandHandler<string>("shop-cart:set-error", (ctx, cmd) => {
     ctx.setState({ ...ctx.state, lastError: cmd.data });
   })
-  .addCommandHandler("clearError", (ctx) => {
+  .addCommandHandler("shop-cart:clear-error", (ctx) => {
     ctx.setState({ ...ctx.state, lastError: "" });
   });
-
-export const cartStore = sealStore(_cartStore);
 
 const shopBus = createEventBus();
 shopBus.connect(_inventoryStore);
 shopBus.connect(_cartStore);
 
-shopBus.on(stockReserved, (event) => {
+shopBus.on(InventoryEvent.StockReserved, (event) => {
   const product = _inventoryStore.state.products.find(
     (p) => p.id === event.data.productId,
   );
   if (!product) return;
   _cartStore.queue(
-    createCommand("addToCart", {
+    createCommand("shop-cart:add", {
       productId: product.id,
       name: product.name,
       price: product.price,
@@ -142,26 +126,21 @@ shopBus.on(stockReserved, (event) => {
   );
 });
 
-shopBus.on(outOfStock, (event) => {
+shopBus.on(InventoryEvent.OutOfStock, (event) => {
   const product = _inventoryStore.state.products.find(
     (p) => p.id === event.data.productId,
   );
   _cartStore.queue(
     createCommand(
-      "setError",
+      "shop-cart:set-error",
       `"${product?.name ?? "Product"}" is out of stock`,
     ),
   );
 });
 
+export const inventoryStore = sealStore(_inventoryStore);
+export const shopCartStore = sealStore(_cartStore);
+
 export const shopDevtools = createDevtools();
 shopDevtools.connect(_inventoryStore, "INVENTORY_STORE");
 shopDevtools.connect(_cartStore, "CART_STORE");
-
-export const reserveStock = (productId: number) =>
-  createCommand("reserveStock", { productId, qty: 1 });
-export const releaseStock = (productId: number, qty: number) =>
-  createCommand("releaseStock", { productId, qty });
-export const removeFromCart = (productId: number) =>
-  createCommand("removeFromCart", { productId });
-export const clearError = () => createCommand("clearError", undefined);

@@ -1,14 +1,14 @@
 import React from "react";
-import { useSelector, useQueue } from "@naikidev/commiq-react";
-import {
-  cartPersistStore,
-  products,
-  addToCart,
-  removeFromCart,
-  updateQty,
-  clearCart,
-} from "../stores/cart.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+import { products } from "./store";
+import { useCart } from "./hooks";
+import { Card, CardHeader, CardBody, Button } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./CartPage.tsx?raw";
 
 function formatPrice(cents: number) {
   return `$${cents.toFixed(2)}`;
@@ -19,21 +19,22 @@ function formatTime(ts: number | null) {
   return new Date(ts).toLocaleTimeString();
 }
 
-export function ShoppingCartPage() {
-  const items = useSelector(cartPersistStore, (s) => s.items);
-  const savedAt = useSelector(cartPersistStore, (s) => s.savedAt);
-  const queue = useQueue(cartPersistStore);
-
-  const total = items.reduce((sum, i) => sum + i.price * i.qty, 0);
-  const itemCount = items.reduce((sum, i) => sum + i.qty, 0);
+export function CartPage() {
+  const { items, savedAt, total, itemCount, add, remove, updateQty, clear } =
+    useCart();
 
   return (
-    <>
-      <PageHeader
-        title="Persistent Cart"
-        description="Shopping cart persisted to localStorage via commiq-persist. Add items, refresh the page — your cart survives."
-      />
-
+    <CodeExplorer
+      title="Persistent Cart"
+      description="Shopping cart persisted to localStorage via commiq-persist. Add items, refresh the page — your cart survives."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "CartPage.tsx", content: pageRaw },
+      ]}
+    >
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="h-max">
           <CardHeader title="Products" badge="persistStore" />
@@ -47,11 +48,7 @@ export function ShoppingCartPage() {
                 <span className="text-xs text-zinc-500 dark:text-zinc-400">
                   {formatPrice(p.price)}
                 </span>
-                <Button
-                  variant="primary"
-                  size="xs"
-                  onClick={() => queue(addToCart(p.id))}
-                >
+                <Button variant="primary" size="xs" onClick={() => add(p.id)}>
                   Add to Cart
                 </Button>
               </div>
@@ -84,7 +81,7 @@ export function ShoppingCartPage() {
                     <div className="flex items-center gap-1.5">
                       <Button
                         size="xs"
-                        onClick={() => queue(updateQty(item.id, item.qty - 1))}
+                        onClick={() => updateQty(item.id, item.qty - 1)}
                       >
                         −
                       </Button>
@@ -93,7 +90,7 @@ export function ShoppingCartPage() {
                       </span>
                       <Button
                         size="xs"
-                        onClick={() => queue(updateQty(item.id, item.qty + 1))}
+                        onClick={() => updateQty(item.id, item.qty + 1)}
                       >
                         +
                       </Button>
@@ -104,7 +101,7 @@ export function ShoppingCartPage() {
                     <Button
                       size="xs"
                       variant="danger"
-                      onClick={() => queue(removeFromCart(item.id))}
+                      onClick={() => remove(item.id)}
                     >
                       ✕
                     </Button>
@@ -127,7 +124,7 @@ export function ShoppingCartPage() {
               <Button
                 size="xs"
                 variant="danger"
-                onClick={() => queue(clearCart())}
+                onClick={clear}
                 disabled={items.length === 0}
               >
                 Clear Cart
@@ -136,6 +133,6 @@ export function ShoppingCartPage() {
           </CardBody>
         </Card>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

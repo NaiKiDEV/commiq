@@ -1,36 +1,47 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useSelector, useQueue } from "@naikidev/commiq-react";
 import { createCommand, type StoreEvent } from "@naikidev/commiq";
+import { counterStore } from "../counter";
+import { todoStore, TodoCommand } from "../todo";
+import { useCounter } from "../counter/hooks";
 import {
-  counterStore,
-  increment,
-  decrement,
-  reset,
-  throwUnhandledError,
-} from "../stores/counter.store";
-import { todoStore, addTodo } from "../stores/todo.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+  Card,
+  CardHeader,
+  CardBody,
+  Button,
+  Badge,
+} from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+import streamPageRaw from "./StreamPage.tsx?raw";
 
-interface LogEntry {
+type LogEntry = {
   id: number;
   storeName: string;
   eventName: string;
   data: unknown;
   time: string;
-}
+};
 
 let entryId = 0;
 
 export function StreamPage() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+
+  function toggleExpand(id: number) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const count = useSelector(counterStore, (s) => s.count);
+  const { count, increment, decrement, reset, throwError } = useCounter();
   const todoCount = useSelector(todoStore, (s) => s.todos.length);
-  const queueCounter = useQueue(counterStore);
   const queueTodo = useQueue(todoStore);
 
   useEffect(() => {
@@ -76,32 +87,23 @@ export function StreamPage() {
   };
 
   return (
-    <>
-      <PageHeader
-        title="Event Stream"
-        description="A real-time log of every event emitted by connected stores. Uses openStream() to tap into the store's event pipeline. Fire commands below and watch the stream update live."
-      />
-
+    <CodeExplorer
+      title="Event Stream"
+      description="A real-time log of every event emitted by connected stores. Uses openStream() to tap into the store's event pipeline. Fire commands below and watch the stream update live."
+      files={[{ name: "StreamPage.tsx", content: streamPageRaw }]}
+    >
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-4">
           <Card>
             <CardHeader title="Counter Commands" badge={`count: ${count}`} />
             <CardBody className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => queueCounter(increment())}
-                variant="primary"
-                size="xs"
-              >
+              <Button onClick={increment} variant="primary" size="xs">
                 + 1
               </Button>
-              <Button onClick={() => queueCounter(decrement())} size="xs">
+              <Button onClick={decrement} size="xs">
                 − 1
               </Button>
-              <Button
-                onClick={() => queueCounter(reset())}
-                variant="danger"
-                size="xs"
-              >
+              <Button onClick={reset} variant="danger" size="xs">
                 Reset
               </Button>
             </CardBody>
@@ -115,7 +117,9 @@ export function StreamPage() {
                 size="xs"
                 onClick={() =>
                   queueTodo(
-                    addTodo(`Task ${Date.now().toString(36).slice(-4)}`),
+                    TodoCommand.add(
+                      `Task ${Date.now().toString(36).slice(-4)}`,
+                    ),
                   )
                 }
               >
@@ -145,11 +149,7 @@ export function StreamPage() {
           <Card>
             <CardHeader title="Force Error" />
             <CardBody>
-              <Button
-                size="xs"
-                variant="danger"
-                onClick={() => queueCounter(throwUnhandledError())}
-              >
+              <Button size="xs" variant="danger" onClick={throwError}>
                 Throw in Handler
               </Button>
               <p className="mt-2 text-[11px] text-zinc-400">
@@ -183,29 +183,61 @@ export function StreamPage() {
                   Waiting for events…
                 </p>
               )}
-              <table className="w-full">
+              <table className="w-full table-fixed">
                 <tbody>
-                  {entries.map((e) => (
-                    <tr
-                      key={e.id}
-                      className="border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/30"
-                    >
-                      <td className="px-3 py-1.5 text-zinc-400 whitespace-nowrap w-20">
-                        {e.time}
-                      </td>
-                      <td className="px-2 py-1.5 whitespace-nowrap">
-                        <Badge color="zinc">{e.storeName}</Badge>
-                      </td>
-                      <td className="px-2 py-1.5 whitespace-nowrap">
-                        <Badge color={eventColor(e.eventName)}>
-                          {e.eventName}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-1.5 text-zinc-500 dark:text-zinc-400 truncate max-w-50">
-                        {JSON.stringify(e.data)}
-                      </td>
-                    </tr>
-                  ))}
+                  {entries.map((e) => {
+                    const expanded = expandedIds.has(e.id);
+                    const dataStr = JSON.stringify(e.data);
+                    const hasData = e.data !== undefined && e.data !== null && dataStr !== "{}" && dataStr !== "null";
+                    return (
+                      <React.Fragment key={e.id}>
+                        <tr
+                          onClick={() => hasData && toggleExpand(e.id)}
+                          className={`border-b border-zinc-50 dark:border-zinc-800/50 transition-colors ${
+                            hasData
+                              ? "cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/30"
+                              : ""
+                          } ${expanded ? "bg-zinc-50 dark:bg-zinc-800/20" : ""}`}
+                        >
+                          <td className="px-3 py-1.5 text-zinc-400 whitespace-nowrap w-28 overflow-hidden">
+                            {e.time}
+                          </td>
+                          <td className="px-2 py-1.5 whitespace-nowrap w-24">
+                            <Badge color="zinc">{e.storeName}</Badge>
+                          </td>
+                          <td className="px-2 py-1.5 whitespace-nowrap w-36">
+                            <Badge color={eventColor(e.eventName)}>
+                              {e.eventName}
+                            </Badge>
+                          </td>
+                          <td className="px-3 py-1.5 max-w-0 overflow-hidden text-zinc-500 dark:text-zinc-400">
+                            {hasData ? (
+                              <span className="flex items-center gap-1.5 overflow-hidden">
+                                <span className="text-zinc-400 dark:text-zinc-500 truncate flex-1">{dataStr}</span>
+                                <svg
+                                  className={`w-3 h-3 shrink-0 text-zinc-300 dark:text-zinc-600 transition-transform ${expanded ? "rotate-180" : ""}`}
+                                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </span>
+                            ) : (
+                              <span className="text-zinc-300 dark:text-zinc-600">—</span>
+                            )}
+                          </td>
+                        </tr>
+                        {expanded && hasData && (
+                          <tr className="border-b border-zinc-100 dark:border-zinc-800/50">
+                            <td colSpan={4} className="px-4 py-3">
+                              <pre className="text-[11px] leading-relaxed font-mono text-zinc-500 dark:text-zinc-400 bg-zinc-100/60 dark:bg-zinc-800/60 rounded-md px-3 py-2.5 overflow-x-auto whitespace-pre">
+                                {JSON.stringify(e.data, null, 2)}
+                              </pre>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
               <div ref={bottomRef} />
@@ -213,6 +245,6 @@ export function StreamPage() {
           </Card>
         </div>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

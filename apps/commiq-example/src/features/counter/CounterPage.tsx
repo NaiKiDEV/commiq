@@ -1,33 +1,39 @@
 import React, { useState } from "react";
-import { useSelector, useQueue, useEvent } from "@naikidev/commiq-react";
-import {
-  counterStore,
-  counterReset,
-  increment,
-  decrement,
-  reset,
-  incrementBy,
-} from "../stores/counter.store";
-import { PageHeader, Card, CardHeader, CardBody, Button } from "./ui";
+import { useEvent } from "@naikidev/commiq-react";
+import { counterStore } from "./store";
+import { CounterEvent } from "./events";
+import { useCounter } from "./hooks";
+import { Card, CardHeader, CardBody, Button } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./CounterPage.tsx?raw";
 
 export function CounterPage() {
-  const count = useSelector(counterStore, (s) => s.count);
-  const queue = useQueue(counterStore);
+  const { count, increment, decrement, incrementBy, reset } = useCounter();
   const [amount, setAmount] = useState(5);
   const [resetMessage, setResetMessage] = useState("");
 
-  useEvent(counterStore, counterReset, () => {
+  useEvent(counterStore, CounterEvent.Reset, () => {
     setResetMessage("Counter was reset!");
     setTimeout(() => setResetMessage(""), 2000);
   });
 
   return (
-    <>
-      <PageHeader
-        title="Counter"
-        description="Basic command-driven counter. Demonstrates createStore, addCommandHandler, useSelector, useQueue, and useEvent."
-      />
-
+    <CodeExplorer
+      title="Counter"
+      description="Basic command-driven counter. Demonstrates createStore, addCommandHandler, useSelector, useQueue, and useEvent."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "CounterPage.tsx", content: pageRaw },
+      ]}
+    >
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader title="Value" badge="useSelector" />
@@ -36,14 +42,12 @@ export function CounterPage() {
               {count}
             </span>
             <div className="flex items-center gap-2">
-              <Button onClick={() => queue(decrement())}>− 1</Button>
-              <Button onClick={() => queue(increment())} variant="primary">
+              <Button onClick={decrement}>− 1</Button>
+              <Button onClick={increment} variant="primary">
                 + 1
               </Button>
-              <Button onClick={() => queue(incrementBy(amount))}>
-                + {amount}
-              </Button>
-              <Button onClick={() => queue(reset())} variant="danger">
+              <Button onClick={() => incrementBy(amount)}>+ {amount}</Button>
+              <Button onClick={reset} variant="danger">
                 Reset
               </Button>
             </div>
@@ -74,11 +78,11 @@ export function CounterPage() {
                 store.state = {"{"} count: {count} {"}"}
               </p>
               <p>handlers: increment, decrement, incrementBy, reset</p>
-              <p>events: counterReset (custom)</p>
+              <p>events: CounterEvent.Reset</p>
             </div>
           </CardBody>
         </Card>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

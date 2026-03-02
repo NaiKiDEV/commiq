@@ -42,9 +42,9 @@ export function CardHeader({
 }) {
   return (
     <div className="flex items-center gap-2 px-5 py-3.5 border-b border-zinc-100 dark:border-zinc-800">
-      <h2 className="text-sm font-semibold">{title}</h2>
+      <h2 className="text-sm font-semibold min-w-0 truncate">{title}</h2>
       {badge && (
-        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
+        <span className="shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
           {badge}
         </span>
       )}

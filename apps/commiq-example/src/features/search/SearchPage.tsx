@@ -1,12 +1,16 @@
 import React, { useState } from "react";
-import { useSelector, useQueue, useEvent } from "@naikidev/commiq-react";
-import {
-  searchStore,
-  search,
-  clearSearch,
-  searchCompleted,
-} from "../stores/search.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+import { useEvent } from "@naikidev/commiq-react";
+import { searchStore } from "./store";
+import { SearchEvent } from "./events";
+import { useSearchState, useSearchActions } from "./hooks";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./SearchPage.tsx?raw";
 
 const categoryColors: Record<string, "indigo" | "green" | "amber"> = {
   Guide: "indigo",
@@ -14,29 +18,32 @@ const categoryColors: Record<string, "indigo" | "green" | "amber"> = {
   Plugin: "green",
 };
 
-export function LiveSearchPage() {
-  const query = useSelector(searchStore, (s) => s.query);
-  const results = useSelector(searchStore, (s) => s.results);
-  const loading = useSelector(searchStore, (s) => s.loading);
-  const recentSearches = useSelector(searchStore, (s) => s.recentSearches);
-  const stats = useSelector(searchStore, (s) => s.stats);
-  const queue = useQueue(searchStore);
+export function SearchPage() {
+  const { query, results, loading, recentSearches, stats } = useSearchState();
+  const { search, clear } = useSearchActions();
   const [log, setLog] = useState<string[]>([]);
 
-  useEvent(searchStore, searchCompleted, (e) => {
-    setLog((prev) => [
-      `Found ${e.data.count} result${e.data.count !== 1 ? "s" : ""} for "${e.data.query}"`,
-      ...prev,
-    ].slice(0, 8));
+  useEvent(searchStore, SearchEvent.Completed, (e) => {
+    setLog((prev) =>
+      [
+        `Found ${e.data.count} result${e.data.count !== 1 ? "s" : ""} for "${e.data.query}"`,
+        ...prev,
+      ].slice(0, 8),
+    );
   });
 
   return (
-    <>
-      <PageHeader
-        title="Live Search"
-        description="Type to search — each keystroke queues an interruptable command. Previous in-flight searches are automatically cancelled. Effects listen to search completion events with debounce to track recent searches."
-      />
-
+    <CodeExplorer
+      title="Live Search"
+      description="Type to search — each keystroke queues an interruptable command. Previous in-flight searches are automatically cancelled. Effects listen to search completion events with debounce to track recent searches."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "SearchPage.tsx", content: pageRaw },
+      ]}
+    >
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
           <Card>
@@ -47,7 +54,7 @@ export function LiveSearchPage() {
                   type="text"
                   placeholder="Try typing fast: guide, pattern, plugin…"
                   className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent placeholder:text-zinc-400"
-                  onChange={(e) => queue(search(e.target.value))}
+                  onChange={(e) => search(e.target.value)}
                 />
                 {loading && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -76,7 +83,7 @@ export function LiveSearchPage() {
 
               {!loading && query && results.length === 0 && (
                 <p className="text-sm text-zinc-400 dark:text-zinc-500 text-center py-4">
-                  No results for "{query}"
+                  No results for &ldquo;{query}&rdquo;
                 </p>
               )}
 
@@ -91,7 +98,9 @@ export function LiveSearchPage() {
                   {results.map((r) => (
                     <div key={r.id} className="flex items-center gap-3 py-2.5">
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{r.title}</p>
+                        <p className="text-sm font-medium truncate">
+                          {r.title}
+                        </p>
                       </div>
                       <Badge color={categoryColors[r.category] ?? "zinc"}>
                         {r.category}
@@ -103,7 +112,7 @@ export function LiveSearchPage() {
 
               {query && (
                 <div className="flex justify-end">
-                  <Button size="xs" onClick={() => queue(clearSearch())}>
+                  <Button size="xs" onClick={clear}>
                     Clear
                   </Button>
                 </div>
@@ -133,7 +142,8 @@ export function LiveSearchPage() {
                 </div>
               </div>
               <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-3 text-center">
-                Type fast to see interruptions climb — only the last search runs to completion.
+                Type fast to see interruptions climb — only the last search runs
+                to completion.
               </p>
             </CardBody>
           </Card>
@@ -163,7 +173,10 @@ export function LiveSearchPage() {
                 </div>
               )}
               <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-3">
-                Saved by a debounced effect on <code className="text-[11px] px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">searchCompleted</code>
+                Saved by a debounced effect on{" "}
+                <code className="text-[11px] px-1 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 font-mono">
+                  SearchEvent.Completed
+                </code>
               </p>
             </CardBody>
           </Card>
@@ -189,21 +202,8 @@ export function LiveSearchPage() {
               )}
             </CardBody>
           </Card>
-
-          <div className="rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
-            <p>// interruptable command</p>
-            <p>addCommandHandler("search",</p>
-            <p>&nbsp; async (ctx, cmd) =&gt; {"{"}</p>
-            <p>&nbsp;&nbsp;&nbsp; await fetch(…, {"{"} signal: ctx.signal {"}"});</p>
-            <p>&nbsp; {"}"}, {"{"} interruptable: true {"}"})</p>
-            <p className="mt-2">// effect with debounce</p>
-            <p>effects.on(searchCompleted,</p>
-            <p>&nbsp; (data, ctx) =&gt; {"{"}</p>
-            <p>&nbsp;&nbsp;&nbsp; ctx.queue(addRecent(data.query));</p>
-            <p>&nbsp; {"}"}, {"{"} debounce: 200 {"}"})</p>
-          </div>
         </div>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

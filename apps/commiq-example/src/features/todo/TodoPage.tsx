@@ -1,35 +1,36 @@
 import React, { useState } from "react";
-import { useSelector, useQueue } from "@naikidev/commiq-react";
-import {
-  todoStore,
-  addTodo,
-  toggleTodo,
-  removeTodo,
-} from "../stores/todo.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+import { useTodos } from "./hooks";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./TodoPage.tsx?raw";
 
 export function TodoPage() {
-  const todos = useSelector(todoStore, (s) => s.todos);
-  const queue = useQueue(todoStore);
+  const { todos, done, add, toggle, remove } = useTodos();
   const [text, setText] = useState("");
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = text.trim();
     if (!trimmed) return;
-    queue(addTodo(trimmed));
+    add(trimmed);
     setText("");
   };
 
-  const done = todos.filter((t) => t.done).length;
-
   return (
-    <>
-      <PageHeader
-        title="Todo List"
-        description="CRUD commands with addTodo, toggleTodo, and removeTodo handlers. Shows how multiple command handlers compose on a single store."
-      />
-
+    <CodeExplorer
+      title="Todo List"
+      description="CRUD commands with add, toggle, and remove handlers. Shows how multiple command handlers compose on a single store."
+      files={[
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "TodoPage.tsx", content: pageRaw },
+      ]}
+    >
       <Card>
         <CardHeader title="Todos" badge={`${done}/${todos.length} done`} />
         <CardBody className="space-y-4">
@@ -54,7 +55,7 @@ export function TodoPage() {
                 <input
                   type="checkbox"
                   checked={todo.done}
-                  onChange={() => queue(toggleTodo(todo.id))}
+                  onChange={() => toggle(todo.id)}
                   className="h-4 w-4 rounded border-zinc-300 dark:border-zinc-600 text-indigo-600 focus:ring-indigo-500"
                 />
                 <span
@@ -72,7 +73,7 @@ export function TodoPage() {
                 <Button
                   variant="ghost"
                   size="xs"
-                  onClick={() => queue(removeTodo(todo.id))}
+                  onClick={() => remove(todo.id)}
                 >
                   ✕
                 </Button>
@@ -87,6 +88,6 @@ export function TodoPage() {
           )}
         </CardBody>
       </Card>
-    </>
+    </CodeExplorer>
   );
 }

@@ -1,50 +1,59 @@
 import React, { useState } from "react";
-import { useSelector, useQueue, useEvent } from "@naikidev/commiq-react";
-import {
-  asyncStore,
-  fetchUsers,
-  clearUsers,
-  removeUser,
-  fetchCompleted,
-  fetchFailed,
-} from "../stores/async.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+import { useEvent } from "@naikidev/commiq-react";
+import { userStore } from "./store";
+import { UserEvent } from "./events";
+import { useUserState, useUserActions } from "./hooks";
+import { Card, CardHeader, CardBody, Button } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
 
-export function AsyncPage() {
-  const { users, loading, error } = useSelector(asyncStore, (s) => s);
-  const queue = useQueue(asyncStore);
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./UsersPage.tsx?raw";
+
+export function UsersPage() {
+  const { users, status, errorMessage } = useUserState();
+  const { fetch, clear, remove } = useUserActions();
   const [log, setLog] = useState<string[]>([]);
 
-  useEvent(asyncStore, fetchCompleted, (e) => {
+  useEvent(userStore, UserEvent.Fetched, (e) => {
     setLog((prev) => [...prev, `✓ Fetched ${e.data.count} users`]);
   });
 
-  useEvent(asyncStore, fetchFailed, (e) => {
-    setLog((prev) => [...prev, `✗ ${e.data.error}`]);
+  useEvent(userStore, UserEvent.FetchFailed, (e) => {
+    setLog((prev) => [...prev, `✗ ${e.data.message}`]);
   });
 
   return (
-    <>
-      <PageHeader
-        title="Async Commands"
-        description="Command handlers can be async. This example simulates an API fetch with artificial delay and a 20% chance of failure. The store transitions through loading states and emits success/failure events."
-      />
-
+    <CodeExplorer
+      title="Async Commands"
+      description="Command handlers can be async. This example simulates an API fetch with artificial delay and a 20% chance of failure. The store transitions through loading states and emits success/failure events."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "UsersPage.tsx", content: pageRaw },
+      ]}
+    >
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card>
             <CardHeader
               title="Users"
-              badge={loading ? "loading…" : `${users.length} loaded`}
+              badge={
+                status === "loading" ? "loading…" : `${users.length} loaded`
+              }
             />
             <CardBody className="space-y-3">
               <div className="flex gap-2">
                 <Button
                   variant="primary"
-                  onClick={() => queue(fetchUsers())}
-                  disabled={loading}
+                  onClick={fetch}
+                  disabled={status === "loading"}
                 >
-                  {loading ? (
+                  {status === "loading" ? (
                     <span className="flex items-center gap-1.5">
                       <svg
                         className="animate-spin h-3.5 w-3.5"
@@ -71,18 +80,18 @@ export function AsyncPage() {
                     "Fetch Users"
                   )}
                 </Button>
-                <Button onClick={() => queue(clearUsers())} disabled={loading}>
+                <Button onClick={clear} disabled={status === "loading"}>
                   Clear All
                 </Button>
               </div>
 
-              {error && (
+              {status === "error" && errorMessage && (
                 <div className="rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 px-3 py-2 text-sm text-red-600 dark:text-red-400">
-                  {error}
+                  {errorMessage}
                 </div>
               )}
 
-              {users.length === 0 && !loading && !error && (
+              {users.length === 0 && status === "idle" && (
                 <p className="text-center text-sm text-zinc-400 py-6">
                   No users loaded yet — hit Fetch.
                 </p>
@@ -101,7 +110,7 @@ export function AsyncPage() {
                     <Button
                       size="xs"
                       variant="ghost"
-                      onClick={() => queue(removeUser(u.id))}
+                      onClick={() => remove(u.id)}
                     >
                       ✕
                     </Button>
@@ -135,20 +144,8 @@ export function AsyncPage() {
               </ul>
             </CardBody>
           </Card>
-
-          <div className="mt-4 rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
-            <p>handler: async (ctx) =&gt; {"{"}</p>
-            <p>
-              &nbsp; ctx.setState({"{"} loading: true {"}"})
-            </p>
-            <p>&nbsp; await fetch(…)</p>
-            <p>
-              &nbsp; ctx.emit(fetchCompleted, {"{"} count {"}"})
-            </p>
-            <p>{"}"}</p>
-          </div>
         </div>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

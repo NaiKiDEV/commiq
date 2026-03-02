@@ -1,39 +1,37 @@
 import React, { useEffect } from "react";
-import { useSelector, useQueue, useEvent } from "@naikidev/commiq-react";
-import {
-  inventoryStore,
-  cartStore,
-  reserveStock,
-  removeFromCart,
-  releaseStock,
-  clearError,
-  outOfStock,
-} from "../stores/shop.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+import { useInventory, useShopCart } from "./hooks";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
 
-export function StoreDepsPage() {
-  const products = useSelector(inventoryStore, (s) => s.products);
-  const cartItems = useSelector(cartStore, (s) => s.items);
-  const lastError = useSelector(cartStore, (s) => s.lastError);
-  const queueInventory = useQueue(inventoryStore);
-  const queueCart = useQueue(cartStore);
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./ShopPage.tsx?raw";
+
+export function ShopPage() {
+  const { products, reserveStock, releaseStock } = useInventory();
+  const { items, lastError, total, remove, clearError } = useShopCart();
 
   useEffect(() => {
     if (lastError) {
-      const t = setTimeout(() => queueCart(clearError()), 3000);
+      const t = setTimeout(clearError, 3000);
       return () => clearTimeout(t);
     }
   }, [lastError]);
 
-  const total = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
-
   return (
-    <>
-      <PageHeader
-        title="Store Dependencies"
-        description="Two stores (Inventory + Cart) communicate through an Event Bus. Adding to cart reserves stock via a command on the inventory store, which emits stockReserved — the bus then routes it to add the item to the cart store."
-      />
-
+    <CodeExplorer
+      title="Store Dependencies"
+      description="Two stores (Inventory + Cart) communicate through an Event Bus. Adding to cart reserves stock via a command on the inventory store, which emits stockReserved — the bus then routes it to add the item to the cart store."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "ShopPage.tsx", content: pageRaw },
+      ]}
+    >
       {lastError && (
         <div className="mb-6 flex items-center gap-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 px-4 py-3 text-sm text-red-700 dark:text-red-300">
           <svg
@@ -76,7 +74,7 @@ export function StoreDepsPage() {
                         size="xs"
                         variant="primary"
                         disabled={p.stock === 0}
-                        onClick={() => queueInventory(reserveStock(p.id))}
+                        onClick={() => reserveStock(p.id)}
                       >
                         Add
                       </Button>
@@ -90,14 +88,14 @@ export function StoreDepsPage() {
 
         <div className="lg:col-span-2">
           <Card>
-            <CardHeader title="Cart" badge="cartStore" />
+            <CardHeader title="Cart" badge="shopCartStore" />
             <CardBody className="space-y-3">
-              {cartItems.length === 0 && (
+              {items.length === 0 && (
                 <p className="text-sm text-zinc-400 text-center py-4">
                   Cart is empty
                 </p>
               )}
-              {cartItems.map((item) => (
+              {items.map((item) => (
                 <div
                   key={item.productId}
                   className="flex items-center justify-between text-sm"
@@ -114,8 +112,8 @@ export function StoreDepsPage() {
                       size="xs"
                       variant="danger"
                       onClick={() => {
-                        queueCart(removeFromCart(item.productId));
-                        queueInventory(releaseStock(item.productId, item.qty));
+                        remove(item.productId);
+                        releaseStock(item.productId, item.qty);
                       }}
                     >
                       Remove
@@ -123,7 +121,7 @@ export function StoreDepsPage() {
                   </div>
                 </div>
               ))}
-              {cartItems.length > 0 && (
+              {items.length > 0 && (
                 <div className="pt-3 border-t border-zinc-100 dark:border-zinc-800 flex justify-between text-sm font-semibold">
                   <span>Total</span>
                   <span>${total}</span>
@@ -131,14 +129,8 @@ export function StoreDepsPage() {
               )}
             </CardBody>
           </Card>
-
-          <div className="mt-4 rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
-            <p>flow: Add button → inventoryStore.queue(reserveStock)</p>
-            <p>→ handler emits stockReserved event</p>
-            <p>→ eventBus.on(stockReserved) → cartStore.queue(addToCart)</p>
-          </div>
         </div>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

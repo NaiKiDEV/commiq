@@ -1,13 +1,18 @@
 import React from "react";
-import { useSelector, useQueue } from "@naikidev/commiq-react";
 import {
-  orderStore,
-  paymentStore,
-  fulfillmentStore,
-  notificationStore,
-  placeOrder,
-} from "../stores/pipeline.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+  useOrders,
+  usePayments,
+  useShipments,
+  useNotifications,
+} from "./hooks";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+
+import eventsRaw from "./events.ts?raw";
+import commandsRaw from "./commands.ts?raw";
+import storeRaw from "./store.ts?raw";
+import hooksRaw from "./hooks.ts?raw";
+import pageRaw from "./PipelinePage.tsx?raw";
 
 const SAMPLE_ITEMS = [
   { item: "Mechanical Keyboard", total: 149 },
@@ -15,43 +20,47 @@ const SAMPLE_ITEMS = [
   { item: "USB-C Dock", total: 89 },
 ];
 
-export function OrderPipelinePage() {
-  const orders = useSelector(orderStore, (s) => s.orders);
-  const transactions = useSelector(paymentStore, (s) => s.transactions);
-  const shipments = useSelector(fulfillmentStore, (s) => s.shipments);
-  const notifications = useSelector(notificationStore, (s) => s.log);
-  const queueOrder = useQueue(orderStore);
+function statusColor(
+  status: string,
+): "zinc" | "green" | "red" | "amber" | "indigo" {
+  switch (status) {
+    case "pending":
+    case "processing":
+    case "preparing":
+      return "amber";
+    case "validated":
+    case "paid":
+    case "completed":
+    case "shipped":
+      return "indigo";
+    case "done":
+      return "green";
+    case "rejected":
+    case "failed":
+      return "red";
+    default:
+      return "zinc";
+  }
+}
 
-  const statusColor = (
-    status: string,
-  ): "zinc" | "green" | "red" | "amber" | "indigo" => {
-    switch (status) {
-      case "pending":
-      case "processing":
-      case "preparing":
-        return "amber";
-      case "validated":
-      case "paid":
-      case "completed":
-      case "shipped":
-        return "indigo";
-      case "done":
-        return "green";
-      case "rejected":
-      case "failed":
-        return "red";
-      default:
-        return "zinc";
-    }
-  };
+export function PipelinePage() {
+  const { orders, placeOrder } = useOrders();
+  const { transactions } = usePayments();
+  const { shipments } = useShipments();
+  const { notifications } = useNotifications();
 
   return (
-    <>
-      <PageHeader
-        title="Order Pipeline"
-        description="Four stores chained 4 levels deep: placeOrder → orderValidated → processPayment → paymentCompleted → shipOrder → orderShipped → sendNotification → notificationSent → done. Watch the devtools Timeline and Graph tabs to see the full causality chain."
-      />
-
+    <CodeExplorer
+      title="Order Pipeline"
+      description="Four stores chained 4 levels deep: placeOrder → orderValidated → processPayment → paymentCompleted → shipOrder → orderShipped → sendNotification → notificationSent → done. Watch the devtools Timeline and Graph tabs to see the full causality chain."
+      files={[
+        { name: "events.ts", content: eventsRaw },
+        { name: "commands.ts", content: commandsRaw },
+        { name: "store.ts", content: storeRaw },
+        { name: "hooks.ts", content: hooksRaw },
+        { name: "PipelinePage.tsx", content: pageRaw },
+      ]}
+    >
       <div className="mb-6">
         <Card>
           <CardHeader title="Place an Order" badge="orderStore" />
@@ -61,7 +70,7 @@ export function OrderPipelinePage() {
                 key={s.item}
                 variant="primary"
                 size="sm"
-                onClick={() => queueOrder(placeOrder(s.item, s.total))}
+                onClick={() => placeOrder(s.item, s.total)}
               >
                 {s.item} — ${s.total}
               </Button>
@@ -171,16 +180,6 @@ export function OrderPipelinePage() {
           </CardBody>
         </Card>
       </div>
-
-      <div className="mt-6 rounded-lg bg-zinc-100 dark:bg-zinc-800/50 p-4 text-xs text-zinc-500 dark:text-zinc-400 font-mono space-y-1">
-        <p>L1: placeOrder → orderStore → emits orderValidated</p>
-        <p>L2: → paymentStore.processPayment → emits paymentCompleted</p>
-        <p>L3: → fulfillmentStore.shipOrder → emits orderShipped</p>
-        <p>
-          L4: → notificationStore.sendNotification → emits notificationSent →
-          done
-        </p>
-      </div>
-    </>
+    </CodeExplorer>
   );
 }

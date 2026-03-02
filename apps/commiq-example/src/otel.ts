@@ -7,16 +7,16 @@ import {
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 import { instrumentStore } from "@naikidev/commiq-otel";
-import { counterStore } from "./stores/counter.store";
-import { todoStore } from "./stores/todo.store";
-import { inventoryStore, cartStore } from "./stores/shop.store";
-import { asyncStore } from "./stores/async.store";
+import { counterStore } from "./features/counter";
+import { todoStore } from "./features/todo";
+import { inventoryStore, shopCartStore } from "./features/shop";
+import { userStore } from "./features/users";
 import {
   orderStore,
   paymentStore,
   fulfillmentStore,
   notificationStore,
-} from "./stores/pipeline.store";
+} from "./features/pipeline";
 
 export function setupOtel(): void {
   const exporter = new OTLPTraceExporter({
@@ -37,8 +37,8 @@ export function setupOtel(): void {
     instrumentStore(counterStore, { storeName: "counter" }),
     instrumentStore(todoStore, { storeName: "todo" }),
     instrumentStore(inventoryStore, { storeName: "inventory" }),
-    instrumentStore(cartStore, { storeName: "cart" }),
-    instrumentStore(asyncStore, { storeName: "async" }),
+    instrumentStore(shopCartStore, { storeName: "shopCart" }),
+    instrumentStore(userStore, { storeName: "users" }),
     instrumentStore(orderStore, { storeName: "order" }),
     instrumentStore(paymentStore, { storeName: "payment" }),
     instrumentStore(fulfillmentStore, { storeName: "fulfillment" }),

@@ -1,16 +1,19 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useSelector, useQueue } from "@naikidev/commiq-react";
-import type { TimelineEntry, StateSnapshot } from "@naikidev/commiq-devtools-core";
+import type {
+  TimelineEntry,
+  StateSnapshot,
+} from "@naikidev/commiq-devtools-core";
+import { shopDevtools } from "../shop/store";
+import { useInventory, useShopCart } from "../shop/hooks";
 import {
-  inventoryStore,
-  cartStore,
-  shopDevtools,
-  reserveStock,
-  removeFromCart,
-  releaseStock,
-  clearError,
-} from "../stores/shop.store";
-import { PageHeader, Card, CardHeader, CardBody, Button, Badge } from "./ui";
+  Card,
+  CardHeader,
+  CardBody,
+  Button,
+  Badge,
+} from "../../components/ui";
+import { CodeExplorer } from "../../components/CodeExplorer";
+import devtoolsPageRaw from "./DevtoolsPage.tsx?raw";
 
 function truncId(id: string | null): string {
   if (!id) return "-";
@@ -19,6 +22,34 @@ function truncId(id: string | null): string {
 
 function formatTime(ts: number): string {
   return new Date(ts).toISOString().slice(11, 23);
+}
+
+function SnapRow({ snap, index }: { snap: StateSnapshot; index: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-b border-zinc-100 dark:border-zinc-800/50 last:border-0">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/30 transition-colors"
+      >
+        <span className="font-mono text-zinc-400 whitespace-nowrap shrink-0">
+          {formatTime(snap.timestamp)}
+        </span>
+        <span className="text-zinc-500 flex-1">snapshot #{index + 1}</span>
+        <svg
+          className={`w-3 h-3 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && (
+        <pre className="px-3 pb-3 pt-1 font-mono text-[11px] leading-relaxed text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800/30 overflow-x-auto whitespace-pre">
+          {JSON.stringify(snap.state, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
 }
 
 function eventColor(
@@ -32,11 +63,8 @@ function eventColor(
 }
 
 export function DevtoolsPage() {
-  const products = useSelector(inventoryStore, (s) => s.products);
-  const cartItems = useSelector(cartStore, (s) => s.items);
-  const lastError = useSelector(cartStore, (s) => s.lastError);
-  const queueInventory = useQueue(inventoryStore);
-  const queueCart = useQueue(cartStore);
+  const { products, reserveStock, releaseStock } = useInventory();
+  const { items, lastError, total, remove, clearError } = useShopCart();
 
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [chain, setChain] = useState<TimelineEntry[]>([]);
@@ -66,7 +94,7 @@ export function DevtoolsPage() {
 
   useEffect(() => {
     if (lastError) {
-      const t = setTimeout(() => queueCart(clearError()), 3000);
+      const t = setTimeout(clearError, 3000);
       return () => clearTimeout(t);
     }
   }, [lastError]);
@@ -76,16 +104,12 @@ export function DevtoolsPage() {
     setChain(shopDevtools.getChain(id));
   }
 
-  const total = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
-
   return (
-    <>
-      <PageHeader
-        title="Devtools"
-        description="Live devtools query API showcase. Interact with the shop stores below and watch the timeline, causality chains, and state history update."
-      />
-
-      {/* Store Controls */}
+    <CodeExplorer
+      title="Devtools"
+      description="Live devtools query API showcase. Interact with the shop stores below and watch the timeline, causality chains, and state history update."
+      files={[{ name: "DevtoolsPage.tsx", content: devtoolsPageRaw }]}
+    >
       <Card className="mb-6">
         <CardHeader title="Shop Controls" badge="interact" />
         <CardBody>
@@ -101,33 +125,32 @@ export function DevtoolsPage() {
                 size="xs"
                 variant="primary"
                 disabled={p.stock === 0}
-                onClick={() => queueInventory(reserveStock(p.id))}
+                onClick={() => reserveStock(p.id)}
               >
                 + {p.name} ({p.stock})
               </Button>
             ))}
             <span className="text-zinc-300 dark:text-zinc-700 mx-1">|</span>
-            {cartItems.map((item) => (
+            {items.map((item) => (
               <Button
                 key={item.productId}
                 size="xs"
                 variant="danger"
                 onClick={() => {
-                  queueCart(removeFromCart(item.productId));
-                  queueInventory(releaseStock(item.productId, item.qty));
+                  remove(item.productId);
+                  releaseStock(item.productId, item.qty);
                 }}
               >
                 - {item.name} x{item.qty}
               </Button>
             ))}
-            {cartItems.length > 0 && (
+            {items.length > 0 && (
               <span className="text-xs text-zinc-500 ml-2">Cart: ${total}</span>
             )}
           </div>
         </CardBody>
       </Card>
 
-      {/* Refresh controls */}
       <div className="flex items-center gap-3 mb-4">
         <Button size="xs" onClick={refresh}>
           Refresh
@@ -146,13 +169,12 @@ export function DevtoolsPage() {
         </span>
       </div>
 
-      {/* Timeline */}
       <Card className="mb-6">
         <CardHeader title="Event Timeline" badge="getTimeline()" />
         <CardBody className="p-0">
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-72">
             <table className="w-full text-xs">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-white dark:bg-zinc-900">
                 <tr className="border-b border-zinc-100 dark:border-zinc-800 text-left text-zinc-400">
                   <th className="px-4 py-2 font-medium">Time</th>
                   <th className="px-4 py-2 font-medium">Store</th>
@@ -224,9 +246,7 @@ export function DevtoolsPage() {
         </CardBody>
       </Card>
 
-      {/* Bottom: Causality + State History */}
       <div className="grid gap-6 lg:grid-cols-2">
-        {/* Causality Explorer */}
         <Card>
           <CardHeader title="Causality Chain" badge="getChain()" />
           <CardBody>
@@ -278,7 +298,6 @@ export function DevtoolsPage() {
           </CardBody>
         </Card>
 
-        {/* State History */}
         <Card>
           <CardHeader title="State History" badge="getStateHistory()" />
           <CardBody className="space-y-4">
@@ -293,19 +312,9 @@ export function DevtoolsPage() {
                 {history.length === 0 ? (
                   <p className="text-xs text-zinc-400">No state changes yet.</p>
                 ) : (
-                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                  <div className="rounded border border-zinc-100 dark:border-zinc-800 overflow-hidden">
                     {history.map((snap, i) => (
-                      <div
-                        key={`${snap.correlationId}-${i}`}
-                        className="flex items-start gap-2 text-xs bg-zinc-50 dark:bg-zinc-800/30 rounded px-2 py-1.5"
-                      >
-                        <span className="font-mono text-zinc-400 whitespace-nowrap shrink-0">
-                          {formatTime(snap.timestamp)}
-                        </span>
-                        <pre className="font-mono text-zinc-500 overflow-x-auto whitespace-pre-wrap break-all">
-                          {JSON.stringify(snap.state, null, 2).slice(0, 200)}
-                        </pre>
-                      </div>
+                      <SnapRow key={`${snap.correlationId}-${i}`} snap={snap} index={i} />
                     ))}
                   </div>
                 )}
@@ -314,6 +323,6 @@ export function DevtoolsPage() {
           </CardBody>
         </Card>
       </div>
-    </>
+    </CodeExplorer>
   );
 }

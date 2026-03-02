@@ -1,72 +1,58 @@
 import {
   createStore,
   createCommand,
-  createEvent,
   createEventBus,
   sealStore,
 } from "@naikidev/commiq";
+import {
+  OrderEvent,
+  PaymentEvent,
+  FulfillmentEvent,
+  NotificationEvent,
+} from "./events";
 
-export const orderValidated = createEvent<{ orderId: string; total: number }>(
-  "orderValidated",
-);
-export const orderRejected = createEvent<{ orderId: string; reason: string }>(
-  "orderRejected",
-);
-export const paymentCompleted = createEvent<{
-  orderId: string;
-  transactionId: string;
-}>("paymentCompleted");
-export const paymentFailed = createEvent<{
-  orderId: string;
-  reason: string;
-}>("paymentFailed");
-export const orderShipped = createEvent<{
-  orderId: string;
-  trackingCode: string;
-}>("orderShipped");
-export const notificationSent = createEvent<{
-  orderId: string;
-  channel: string;
-  message: string;
-}>("notificationSent");
+export type OrderStatus =
+  | "pending"
+  | "validated"
+  | "rejected"
+  | "paid"
+  | "shipped"
+  | "done";
 
-export interface OrderState {
+export type OrderState = {
   orders: Array<{
     id: string;
     item: string;
     total: number;
-    status: "pending" | "validated" | "rejected" | "paid" | "shipped" | "done";
+    status: OrderStatus;
   }>;
-}
+};
 
 const _orderStore = createStore<OrderState>({ orders: [] });
 
 let orderSeq = 0;
 
 _orderStore.addCommandHandler<{ item: string; total: number }>(
-  "placeOrder",
+  "order:place",
   (ctx, cmd) => {
     const id = `ORD-${String(++orderSeq).padStart(3, "0")}`;
     const { item, total } = cmd.data;
 
     if (total <= 0) {
-      ctx.emit(orderRejected, { orderId: id, reason: "Invalid total" });
+      ctx.emit(OrderEvent.Rejected, { orderId: id, reason: "Invalid total" });
       return;
     }
 
     ctx.setState({
       orders: [...ctx.state.orders, { id, item, total, status: "pending" }],
     });
-    ctx.emit(orderValidated, { orderId: id, total });
+    ctx.emit(OrderEvent.Validated, { orderId: id, total });
   },
   { notify: true },
 );
 
-_orderStore.addCommandHandler<{
-  orderId: string;
-  status: OrderState["orders"][number]["status"];
-}>(
-  "updateOrderStatus",
+_orderStore.addCommandHandler<{ orderId: string; status: OrderStatus }>(
+  "order:update-status",
   (ctx, cmd) => {
     ctx.setState({
       orders: ctx.state.orders.map((o) =>
@@ -77,23 +63,21 @@ _orderStore.addCommandHandler<{
   { notify: true },
 );
 
-export const orderStore = sealStore(_orderStore);
-
-export interface PaymentState {
+export type PaymentState = {
   transactions: Array<{
     id: string;
     orderId: string;
     amount: number;
     status: "processing" | "completed" | "failed";
   }>;
-}
+};
 
 const _paymentStore = createStore<PaymentState>({ transactions: [] });
 
 let txSeq = 0;
 
 _paymentStore.addCommandHandler<{ orderId: string; amount: number }>(
-  "processPayment",
+  "payment:process",
   async (ctx, cmd) => {
     const txId = `TX-${String(++txSeq).padStart(3, "0")}`;
     const { orderId, amount } = cmd.data;
@@ -113,7 +97,7 @@ _paymentStore.addCommandHandler<{ orderId: string; amount: number }>(
           t.id === txId ? { ...t, status: "failed" as const } : t,
         ),
       });
-      ctx.emit(paymentFailed, { orderId, reason: "Card declined" });
+      ctx.emit(PaymentEvent.Failed, { orderId, reason: "Card declined" });
       return;
     }
 
@@ -122,20 +106,18 @@ _paymentStore.addCommandHandler<{ orderId: string; amount: number }>(
         t.id === txId ? { ...t, status: "completed" as const } : t,
       ),
     });
-    ctx.emit(paymentCompleted, { orderId, transactionId: txId });
+    ctx.emit(PaymentEvent.Completed, { orderId, transactionId: txId });
   },
   { notify: true },
 );
 
-export const paymentStore = sealStore(_paymentStore);
-
-export interface FulfillmentState {
+export type FulfillmentState = {
   shipments: Array<{
     orderId: string;
     trackingCode: string;
     status: "preparing" | "shipped";
   }>;
-}
+};
 
 const _fulfillmentStore = createStore<FulfillmentState>({ shipments: [] });
 
@@ -143,7 +125,7 @@ _fulfillmentStore.addCommandHandler<{
   orderId: string;
   transactionId: string;
 }>(
-  "shipOrder",
+  "fulfillment:ship",
   async (ctx, cmd) => {
     const { orderId } = cmd.data;
     const trackingCode = `TRK-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -162,21 +144,19 @@ _fulfillmentStore.addCommandHandler<{
         s.orderId === orderId ? { ...s, status: "shipped" as const } : s,
       ),
     });
-    ctx.emit(orderShipped, { orderId, trackingCode });
+    ctx.emit(FulfillmentEvent.Shipped, { orderId, trackingCode });
   },
   { notify: true },
 );
 
-export const fulfillmentStore = sealStore(_fulfillmentStore);
-
-export interface NotificationState {
+export type NotificationState = {
   log: Array<{
     orderId: string;
     channel: string;
     message: string;
     sentAt: number;
   }>;
-}
+};
 
 const _notificationStore = createStore<NotificationState>({ log: [] });
 
@@ -184,7 +164,7 @@ _notificationStore.addCommandHandler<{
   orderId: string;
   trackingCode: string;
 }>(
-  "sendNotification",
+  "notification:send",
   (ctx, cmd) => {
     const { orderId, trackingCode } = cmd.data;
     const message = `Order ${orderId} shipped! Track: ${trackingCode}`;
@@ -194,12 +174,10 @@ _notificationStore.addCommandHandler<{
         { orderId, channel: "email", message, sentAt: Date.now() },
       ],
     });
-    ctx.emit(notificationSent, { orderId, channel: "email", message });
+    ctx.emit(NotificationEvent.Sent, { orderId, channel: "email", message });
   },
   { notify: true },
 );
-
-export const notificationStore = sealStore(_notificationStore);
 
 const pipelineBus = createEventBus();
 pipelineBus.connect(_orderStore);
@@ -207,62 +185,64 @@ pipelineBus.connect(_paymentStore);
 pipelineBus.connect(_fulfillmentStore);
 pipelineBus.connect(_notificationStore);
 
-pipelineBus.on(orderValidated, (event) => {
+pipelineBus.on(OrderEvent.Validated, (event) => {
   _paymentStore.queue(
-    createCommand("processPayment", {
+    createCommand("payment:process", {
       orderId: event.data.orderId,
       amount: event.data.total,
     }),
   );
 });
 
-pipelineBus.on(paymentCompleted, (event) => {
+pipelineBus.on(PaymentEvent.Completed, (event) => {
   _orderStore.queue(
-    createCommand("updateOrderStatus", {
+    createCommand("order:update-status", {
       orderId: event.data.orderId,
       status: "paid" as const,
     }),
   );
   _fulfillmentStore.queue(
-    createCommand("shipOrder", {
+    createCommand("fulfillment:ship", {
       orderId: event.data.orderId,
       transactionId: event.data.transactionId,
     }),
   );
 });
 
-pipelineBus.on(paymentFailed, (event) => {
+pipelineBus.on(PaymentEvent.Failed, (event) => {
   _orderStore.queue(
-    createCommand("updateOrderStatus", {
+    createCommand("order:update-status", {
       orderId: event.data.orderId,
       status: "rejected" as const,
     }),
   );
 });
 
-pipelineBus.on(orderShipped, (event) => {
+pipelineBus.on(FulfillmentEvent.Shipped, (event) => {
   _orderStore.queue(
-    createCommand("updateOrderStatus", {
+    createCommand("order:update-status", {
       orderId: event.data.orderId,
       status: "shipped" as const,
     }),
   );
   _notificationStore.queue(
-    createCommand("sendNotification", {
+    createCommand("notification:send", {
       orderId: event.data.orderId,
       trackingCode: event.data.trackingCode,
     }),
   );
 });
 
-pipelineBus.on(notificationSent, (event) => {
+pipelineBus.on(NotificationEvent.Sent, (event) => {
   _orderStore.queue(
-    createCommand("updateOrderStatus", {
+    createCommand("order:update-status", {
       orderId: event.data.orderId,
       status: "done" as const,
     }),
   );
 });
 
-export const placeOrder = (item: string, total: number) =>
-  createCommand("placeOrder", { item, total });
+export const orderStore = sealStore(_orderStore);
+export const paymentStore = sealStore(_paymentStore);
+export const fulfillmentStore = sealStore(_fulfillmentStore);
+export const notificationStore = sealStore(_notificationStore);
