@@ -1,10 +1,8 @@
 import { useSelector, useQueue } from "@naikidev/commiq-react";
-import {
-  orderStore,
-  paymentStore,
-  fulfillmentStore,
-  notificationStore,
-} from "./store";
+import { orderStore } from "./orderStore";
+import { paymentStore } from "./paymentStore";
+import { fulfillmentStore } from "./fulfillmentStore";
+import { notificationStore } from "./notificationStore";
 import { PipelineCommand } from "./commands";
 
 export function useOrders() {

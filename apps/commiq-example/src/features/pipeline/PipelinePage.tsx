@@ -10,7 +10,11 @@ import { CodeExplorer } from "../../components/CodeExplorer";
 
 import eventsRaw from "./events.ts?raw";
 import commandsRaw from "./commands.ts?raw";
-import storeRaw from "./store.ts?raw";
+import orderStoreRaw from "./orderStore.ts?raw";
+import paymentStoreRaw from "./paymentStore.ts?raw";
+import fulfillmentStoreRaw from "./fulfillmentStore.ts?raw";
+import notificationStoreRaw from "./notificationStore.ts?raw";
+import busRaw from "./bus.ts?raw";
 import hooksRaw from "./hooks.ts?raw";
 import pageRaw from "./PipelinePage.tsx?raw";
 
@@ -56,7 +60,11 @@ export function PipelinePage() {
       files={[
         { name: "events.ts", content: eventsRaw },
         { name: "commands.ts", content: commandsRaw },
-        { name: "store.ts", content: storeRaw },
+        { name: "orderStore.ts", content: orderStoreRaw },
+        { name: "paymentStore.ts", content: paymentStoreRaw },
+        { name: "fulfillmentStore.ts", content: fulfillmentStoreRaw },
+        { name: "notificationStore.ts", content: notificationStoreRaw },
+        { name: "bus.ts", content: busRaw },
         { name: "hooks.ts", content: hooksRaw },
         { name: "PipelinePage.tsx", content: pageRaw },
       ]}
