@@ -28,17 +28,19 @@ store.addCommandHandler("increment", (ctx) => {
 
 ### Handler Context (`CommandContext<S>`)
 
-| Property   | Type                       | Description                  |
-| ---------- | -------------------------- | ---------------------------- |
-| `state`    | `S`                        | Current state (updated live) |
-| `setState` | `(next: S) => void`        | Replace the state            |
-| `emit`     | `(eventDef, data) => void` | Emit a custom event          |
+| Property   | Type                       | Description                                         |
+| ---------- | -------------------------- | --------------------------------------------------- |
+| `state`    | `S`                        | Current state (updated live)                        |
+| `setState` | `(next: S) => void`        | Replace the state                                   |
+| `emit`     | `(eventDef, data) => void` | Emit a custom event                                 |
+| `signal`   | `AbortSignal \| undefined` | Abort signal (present only for interruptable handlers) |
 
 ### Options
 
-| Option   | Type      | Default | Description                               |
-| -------- | --------- | ------- | ----------------------------------------- |
-| `notify` | `boolean` | `false` | Auto-emit a `<commandName>:handled` event |
+| Option          | Type      | Default | Description                               |
+| --------------- | --------- | ------- | ----------------------------------------- |
+| `notify`        | `boolean` | `false` | Auto-emit a `<commandName>:handled` event |
+| `interruptable` | `boolean` | `false` | Enable cancellation on re-queue           |
 
 ## `store.addEventHandler(eventDef, handler)`
 
@@ -112,6 +114,27 @@ store.replaceState(saved);
 
 Use cases: persistence rehydration, undo/redo, state synchronization.
 
+## Interruptable Commands
+
+Mark a handler as `interruptable` to enable automatic cancellation when the same command is re-queued.
+
+```ts
+store.addCommandHandler("search", async (ctx, cmd) => {
+  const res = await fetch(`/api/search?q=${cmd.data}`, { signal: ctx.signal });
+  const data = await res.json();
+  ctx.setState({ results: data });
+}, { interruptable: true });
+```
+
+When a new command with the same name is queued:
+
+1. Any queued (not-yet-started) instances are removed — a `commandInterrupted` event is emitted with `phase: "queued"` for each.
+2. If an instance is currently running, its `AbortController` is aborted — a `commandInterrupted` event is emitted with `phase: "running"` when it completes.
+
+The handler receives `ctx.signal` (an `AbortSignal`) to pass to cancellable APIs like `fetch`. Non-interruptable handlers have `ctx.signal` set to `undefined`.
+
+If an interruptable handler throws due to abort (e.g. `AbortError` from `fetch`), `commandInterrupted` is emitted instead of `commandHandlingError`.
+
 ## Builtin Events
 
 These events are emitted automatically by the store:
@@ -123,6 +146,7 @@ These events are emitted automatically by the store:
 | `commandHandled`       | `{ command }`        | A command was successfully handled    |
 | `invalidCommand`       | `{ command }`        | No handler registered for the command |
 | `commandHandlingError` | `{ command, error }` | A handler threw an error              |
+| `commandInterrupted`   | `{ command, phase }`  | An interruptable command was cancelled |
 | `stateReset`           | `void`               | State was replaced via `replaceState` |
 
 Access them via:

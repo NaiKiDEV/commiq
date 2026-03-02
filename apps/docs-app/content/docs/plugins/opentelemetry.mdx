@@ -79,7 +79,7 @@ function instrumentStore(
 
 ### Spans
 
-Each command creates a span that lives from `commandStarted` to `commandHandled` (or `commandHandlingError`):
+Each command creates a span that lives from `commandStarted` to `commandHandled` (or `commandHandlingError` / `commandInterrupted`):
 
 ```
 commiq.command:increment
@@ -99,6 +99,8 @@ State changes and custom events emitted during a command are recorded as **span 
 | `commiq.command.name`           | Command name                    |
 | `commiq.command.correlation_id` | Unique correlation ID           |
 | `commiq.command.caused_by`      | Parent event ID (if applicable) |
+| `commiq.command.interrupted`       | `true` if the command was interrupted |
+| `commiq.command.interrupted_phase` | `"queued"` or `"running"` (only when interrupted) |
 
 **Standalone event spans** (`commiq.event:{name}`):
 
@@ -108,6 +110,16 @@ State changes and custom events emitted during a command are recorded as **span 
 | `commiq.event.name`           | Event name                      |
 | `commiq.event.correlation_id` | Unique correlation ID           |
 | `commiq.event.caused_by`      | Parent event ID (if applicable) |
+
+## Interrupted Commands
+
+When an interruptable command is cancelled, the command span is:
+
+1. Set to `OK` status with message `"interrupted"`
+2. Attributes `commiq.command.interrupted` (`true`) and `commiq.command.interrupted_phase` (`"queued"` or `"running"`) are added
+3. The span is ended
+
+This distinguishes intentional cancellation from errors in your tracing backend.
 
 ## Error Handling
 

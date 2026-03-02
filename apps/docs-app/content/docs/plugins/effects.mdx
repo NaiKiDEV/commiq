@@ -1,0 +1,143 @@
+---
+title: Effects
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# Effects API
+
+`@naikidev/commiq-effects` provides structured side effects triggered by store events. Effects run outside the store's command processing loop and support cancellation, restart, and debounce patterns.
+
+## Installation
+
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @naikidev/commiq-effects
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @naikidev/commiq-effects
+    ```
+  </Tab>
+  <Tab value="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-effects
+    ```
+  </Tab>
+  <Tab value="Bun">
+    ```bash
+    bun add @naikidev/commiq-effects
+    ```
+  </Tab>
+</Tabs>
+
+## Basic Usage
+
+```ts
+import { createStore, createEvent, createCommand, sealStore } from "@naikidev/commiq";
+import { createEffects } from "@naikidev/commiq-effects";
+
+const store = createStore({ results: [] });
+const searchRequested = createEvent<string>("searchRequested");
+
+store.addCommandHandler("search", (ctx, cmd) => {
+  ctx.emit(searchRequested, cmd.data);
+});
+
+store.addCommandHandler("setResults", (ctx, cmd) => {
+  ctx.setState({ results: cmd.data });
+});
+
+const sealed = sealStore(store);
+const effects = createEffects(sealed);
+
+effects.on(searchRequested, async (query, ctx) => {
+  const res = await fetch(`/api/search?q=${query}`, { signal: ctx.signal });
+  const data = await res.json();
+  ctx.queue(createCommand("setResults", data));
+}, { restartOnNew: true });
+```
+
+## `createEffects(store)`
+
+Creates an effects manager attached to a sealed store. Returns an `Effects` handle.
+
+```ts
+const effects = createEffects(sealedStore);
+```
+
+## `effects.on(eventDef, handler, options?)`
+
+Registers an effect handler that runs when the given event is emitted.
+
+```ts
+effects.on(myEvent, (data, ctx) => {
+  // data is the event payload
+  // ctx.signal is an AbortSignal for cancellation
+  // ctx.queue() dispatches commands to the store
+}, options);
+```
+
+### Effect Context (`EffectContext`)
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `queue` | `(command: Command) => void` | Queue a command on the store |
+| `signal` | `AbortSignal` | Signals when the effect is cancelled |
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `restartOnNew` | `boolean` | `false` | Cancel the running effect if the same event fires again |
+| `cancelOn` | `EventDef` | — | Cancel the running effect when this event fires |
+| `debounce` | `number` | — | Delay execution in ms; resets on each new trigger (last-wins) |
+
+## `effects.destroy()`
+
+Aborts all running effects, clears pending debounce timers, and disconnects from the store stream.
+
+```ts
+effects.destroy();
+```
+
+## Cancellation
+
+Effects receive an `AbortSignal` via `ctx.signal`. Use it to cancel in-flight work:
+
+```ts
+effects.on(fetchRequested, async (url, ctx) => {
+  const res = await fetch(url, { signal: ctx.signal });
+  const data = await res.json();
+  ctx.queue(createCommand("setData", data));
+}, { restartOnNew: true });
+```
+
+When an effect is cancelled (via `restartOnNew`, `cancelOn`, or `destroy`), `AbortError` exceptions are silently swallowed.
+
+## Cancel on Event
+
+Use `cancelOn` to abort a running effect when a specific event fires:
+
+```ts
+const uploadStarted = createEvent("uploadStarted");
+const uploadCancelled = createEvent("uploadCancelled");
+
+effects.on(uploadStarted, async (file, ctx) => {
+  await uploadFile(file, { signal: ctx.signal });
+  ctx.queue(createCommand("uploadComplete", file.name));
+}, { cancelOn: uploadCancelled });
+```
+
+## Debounce
+
+Delay effect execution. Each new trigger resets the timer — only the last event's data is used:
+
+```ts
+effects.on(inputChanged, async (query, ctx) => {
+  const results = await search(query, { signal: ctx.signal });
+  ctx.queue(createCommand("setResults", results));
+}, { debounce: 300 });
+```

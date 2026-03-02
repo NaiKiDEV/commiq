@@ -92,7 +92,22 @@ devtools.connect(store, "counter");
 // [12:34:56.789] counter | commandStarted a3K9mX7p
 // [12:34:56.789] counter | stateChanged b7yP2nX1 (caused by a3K9mX7p)
 // [12:34:56.790] counter | commandHandled c1zR4qW8 (caused by a3K9mX7p)
+// [12:34:57.001] counter | commandInterrupted d2xT5mQ9 (caused by a3K9mX7p)
 ```
+
+## Event Classification
+
+Timeline entries are classified by type for filtering and color-coding:
+
+| Classification | Events | Color |
+| --- | --- | --- |
+| Command | `commandStarted`, `commandHandled` | Indigo |
+| Error | `commandHandlingError`, `invalidCommand` | Red |
+| Interrupted | `commandInterrupted` | Orange |
+| State change | `stateChanged` | Amber |
+| Event | Custom events, `stateReset` | Green |
+
+Interruptable commands that are cancelled (either while queued or running) appear as `commandInterrupted` entries with a `phase` field (`"queued"` or `"running"`).
 
 ## Custom Transports
 
