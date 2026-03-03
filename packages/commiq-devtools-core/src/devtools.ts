@@ -1,5 +1,5 @@
 import type { StoreEvent, StreamListener } from "@naikidev/commiq";
-import { BuiltinEventName } from "@naikidev/commiq";
+import { BuiltinEvent, BuiltinEventName, matchEvent } from "@naikidev/commiq";
 import type { DevtoolsOptions, TimelineEntry, StateSnapshot, Transport } from "./types";
 import { EventCollector } from "./collector";
 import { windowMessageTransport } from "./transport";
@@ -41,10 +41,9 @@ export function createDevtools(options: DevtoolsOptions = {}) {
         timestamp: event.timestamp,
       };
 
-      if (event.name === BuiltinEventName.StateChanged) {
-        const stateData = event.data as { prev: unknown; next: unknown };
-        entry.stateBefore = stateData.prev;
-        entry.stateAfter = stateData.next;
+      if (matchEvent(event, BuiltinEvent.StateChanged)) {
+        entry.stateBefore = event.data.prev;
+        entry.stateAfter = event.data.next;
       }
 
       transport.send({ type: "EVENT", entry });

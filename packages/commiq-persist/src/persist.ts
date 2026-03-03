@@ -1,4 +1,4 @@
-import { BuiltinEvent, StoreImpl } from "@naikidev/commiq";
+import { BuiltinEvent, matchEvent, StoreImpl } from "@naikidev/commiq";
 import type { StoreEvent } from "@naikidev/commiq";
 import type { PersistOptions, PersistResult } from "./types";
 
@@ -20,9 +20,9 @@ export function persistStore<S>(
 
   const listener = (event: StoreEvent) => {
     if (destroyed || hydrating) return;
-    if (event.id !== BuiltinEvent.StateChanged.id) return;
+    if (!matchEvent(event, BuiltinEvent.StateChanged)) return;
 
-    const { next } = event.data as { prev: unknown; next: unknown };
+    const { next } = event.data;
 
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {

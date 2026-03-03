@@ -1,5 +1,5 @@
 import type { StoreEvent, StreamListener } from "@naikidev/commiq";
-import { BuiltinEventName } from "@naikidev/commiq";
+import { BuiltinEvent, BuiltinEventName, matchEvent } from "@naikidev/commiq";
 import type { TimelineEntry, StateSnapshot } from "./types";
 
 type Streamable = {
@@ -88,15 +88,14 @@ export class EventCollector {
       timestamp: event.timestamp,
     };
 
-    if (event.name === BuiltinEventName.StateChanged) {
-      const stateData = event.data as { prev: unknown; next: unknown };
-      entry.stateBefore = stateData.prev;
-      entry.stateAfter = stateData.next;
+    if (matchEvent(event, BuiltinEvent.StateChanged)) {
+      entry.stateBefore = event.data.prev;
+      entry.stateAfter = event.data.next;
 
       const history = this._stateHistory.get(storeName) ?? [];
       history.push({
         storeName,
-        state: stateData.next,
+        state: event.data.next,
         timestamp: event.timestamp,
         correlationId: event.correlationId,
       });
