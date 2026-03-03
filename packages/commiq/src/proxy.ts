@@ -7,6 +7,7 @@ export function sealStore<S>(store: StoreImpl<S>): SealedStore<S> {
       return store.state;
     },
     queue: (command: Command) => store.queue(command),
+    flush: () => store.flush(),
     openStream: (listener: StreamListener) => store.openStream(listener),
     closeStream: (listener: StreamListener) => store.closeStream(listener),
   };

@@ -86,7 +86,7 @@ const itemAdded = createEvent<{ text: string }>("itemAdded");
 
 ### Sealing
 
-`sealStore` wraps a store to expose only `state`, `queue`, `openStream`, and `closeStream`. This prevents direct mutation or handler registration from consumers.
+`sealStore` wraps a store to expose only `state`, `queue`, `flush`, `openStream`, and `closeStream`. This prevents direct mutation or handler registration from consumers.
 
 ```ts
 export const store = sealStore(internalStore);

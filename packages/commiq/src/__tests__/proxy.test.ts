@@ -19,6 +19,17 @@ describe("sealStore", () => {
     expect(sealed.state).toEqual({ count: 1 });
   });
 
+  it("exposes flush", async () => {
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+    const sealed = sealStore(store);
+    sealed.queue(createCommand("inc", undefined));
+    await sealed.flush();
+    expect(sealed.state).toEqual({ count: 1 });
+  });
+
   it("exposes openStream and closeStream", () => {
     const store = createStore({});
     const sealed = sealStore(store);

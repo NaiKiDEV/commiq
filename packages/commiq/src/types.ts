@@ -51,6 +51,7 @@ export type CommandHandlerOptions = {
 export type SealedStore<S> = {
   readonly state: S;
   queue: (command: Command) => void;
+  flush: () => Promise<void>;
   openStream: (listener: StreamListener) => void;
   closeStream: (listener: StreamListener) => void;
 }
