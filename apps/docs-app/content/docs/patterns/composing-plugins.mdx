@@ -1,0 +1,196 @@
+---
+title: Composing Plugins
+description: Wire multiple plugins on the same store with correct initialization order and cleanup.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+# Composing Plugins
+
+Commiq plugins — devtools, effects, persist — each attach to a sealed store independently. As your application grows, a single store may use two or three plugins simultaneously. Getting the initialization order right and cleaning up correctly prevents subtle bugs.
+
+## Plugin initialization order
+
+All plugins consume a sealed store. The sequence is always:
+
+<Steps>
+<Step>
+
+### Create and configure the raw store
+
+Register all command handlers and event handlers on the raw `StoreImpl`:
+
+```ts
+const _store = createStore<AppState>(initialState);
+_store.addCommandHandler("app:load", /* ... */);
+_store.addEventHandler(AppEvent.Loaded, /* ... */);
+```
+
+</Step>
+<Step>
+
+### Seal the store
+
+Create the read-only proxy that plugins will consume:
+
+```ts
+export const appStore = sealStore(_store);
+```
+
+</Step>
+<Step>
+
+### Attach plugins to the sealed store
+
+Each plugin receives the sealed store and subscribes to its event stream internally:
+
+```ts
+const devtools = createDevtools({ stores: [{ name: "app", store: appStore }] });
+const effects = createEffects(appStore);
+```
+
+</Step>
+</Steps>
+
+<Callout type="info">
+Plugins must be created _after_ `sealStore`. They depend on the sealed store's `openStream` and `queue` methods. Passing a raw `StoreImpl` directly will work at runtime but bypasses the sealed interface, which defeats the purpose of encapsulation.
+</Callout>
+
+## Devtools + Effects
+
+The most common combination. Devtools observes all events (including those triggered by effects), and effects react to events emitted by command handlers:
+
+```ts title="stores/search.ts"
+import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { createEffects } from "@naikidev/commiq-effects";
+
+// ── Store setup ──
+
+const SearchEvent = {
+  Completed: createEvent<{ query: string; count: number }>("search:completed"),
+};
+
+const _store = createStore<SearchState>(initialState);
+
+_store.addCommandHandler<string>("search:query", async (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, loading: true });
+  const results = await searchApi(cmd.data);
+  ctx.setState({ ...ctx.state, results, loading: false });
+  ctx.emit(SearchEvent.Completed, { query: cmd.data, count: results.length });
+});
+
+export const searchStore = sealStore(_store);
+
+// ── Plugins ──
+
+const devtools = createDevtools({
+  stores: [{ name: "search", store: searchStore }],
+});
+
+const effects = createEffects(searchStore);
+
+effects.on(
+  SearchEvent.Completed,
+  (data, ctx) => {
+    ctx.queue(createCommand("search:add-recent", data.query));
+  },
+  { debounce: 300 },
+);
+```
+
+Devtools will capture every event in the timeline, including `search:add-recent` commands queued by the effect. This gives full visibility into the cause-and-effect chain.
+
+## Full composition example
+
+A store with devtools, effects, and OpenTelemetry:
+
+```ts title="stores/order.ts"
+import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { createEffects } from "@naikidev/commiq-effects";
+import { createOtelPlugin } from "@naikidev/commiq-otel";
+
+// ── Store ──
+
+const _store = createStore<OrderState>(initialState);
+// ... command and event handlers ...
+
+export const orderStore = sealStore(_store);
+
+// ── Plugins ──
+
+const devtools = createDevtools({
+  stores: [{ name: "order", store: orderStore }],
+  maxEvents: 500,
+});
+
+const effects = createEffects(orderStore);
+effects.on(OrderEvent.Placed, async (data, ctx) => {
+  await sendConfirmationEmail(data.orderId);
+});
+
+const otel = createOtelPlugin(orderStore, {
+  serviceName: "order-service",
+});
+```
+
+Each plugin operates independently. They share the same event stream but do not interfere with each other.
+
+## Cleanup
+
+Destroy plugins in reverse initialization order. This matters in tests and during hot-module replacement:
+
+```ts
+// Teardown
+effects.destroy();  // Stop effects first — prevents new commands from being queued
+devtools.destroy();  // Then disconnect devtools
+```
+
+In tests, always clean up to prevent event listeners from leaking between test cases:
+
+```ts title="order.test.ts"
+let effects: Effects;
+
+beforeEach(() => {
+  effects = createEffects(orderStore);
+  // ... register effects
+});
+
+afterEach(() => {
+  effects.destroy();
+});
+```
+
+## Writing plugin-friendly stores
+
+Plugins work best when stores follow these conventions:
+
+**Keep the raw store private.** Only export the sealed store. This ensures plugins — and consumers — cannot bypass the sealed interface:
+
+```ts
+// Internal — not exported
+const _store = createStore<AppState>(initialState);
+
+// Public — plugins and components use this
+export const appStore = sealStore(_store);
+```
+
+**Register handlers before sealing.** All `addCommandHandler` and `addEventHandler` calls must happen on the raw store before `sealStore` is called. The sealed store does not expose registration methods.
+
+**Emit events for meaningful transitions.** Plugins like effects react to events. If a command handler silently mutates state without emitting events, effects cannot observe it. Emit events for transitions that other parts of the system — or plugins — need to know about.
+
+```ts
+// Silent mutation — effects and devtools see only stateChanged
+_store.addCommandHandler("counter:increment", (ctx) => {
+  ctx.setState({ count: ctx.state.count + 1 });
+});
+
+// Explicit event — effects can react, devtools shows the semantic event
+_store.addCommandHandler("counter:increment", (ctx) => {
+  ctx.setState({ count: ctx.state.count + 1 });
+  ctx.emit(CounterEvent.Incremented, { value: ctx.state.count + 1 });
+});
+```
+
+The second version gives plugins and other stores something to work with. The first version still triggers `BuiltinEvent.StateChanged`, but that event carries no domain semantics.

@@ -74,6 +74,7 @@ Wraps a store in a read-only proxy that only exposes:
 
 - `state` — current state (getter)
 - `queue(command)` — dispatch a command
+- `flush()` — wait for all queued commands to complete
 - `openStream(listener)` / `closeStream(listener)` — subscribe to events
 
 ```ts
@@ -82,6 +83,7 @@ import { sealStore } from "@naikidev/commiq";
 const sealed = sealStore(store);
 sealed.state; // allowed
 sealed.queue(cmd); // allowed
+await sealed.flush(); // allowed
 sealed.addCommandHandler; // undefined (not exposed)
 ```
 

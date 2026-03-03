@@ -5,13 +5,7 @@ import type {
 } from "@naikidev/commiq-devtools-core";
 import { shopDevtools } from "../shop/store";
 import { useInventory, useShopCart } from "../shop/hooks";
-import {
-  Card,
-  CardHeader,
-  CardBody,
-  Button,
-  Badge,
-} from "../../components/ui";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
 import { CodeExplorer } from "../../components/CodeExplorer";
 import devtoolsPageRaw from "./DevtoolsPage.tsx?raw";
 
@@ -38,9 +32,16 @@ function SnapRow({ snap, index }: { snap: StateSnapshot; index: number }) {
         <span className="text-zinc-500 flex-1">snapshot #{index + 1}</span>
         <svg
           className={`w-3 h-3 shrink-0 text-zinc-400 transition-transform ${open ? "rotate-180" : ""}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
         >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M19 9l-7 7-7-7"
+          />
         </svg>
       </button>
       {open && (
@@ -314,7 +315,11 @@ export function DevtoolsPage() {
                 ) : (
                   <div className="rounded border border-zinc-100 dark:border-zinc-800 overflow-hidden">
                     {history.map((snap, i) => (
-                      <SnapRow key={`${snap.correlationId}-${i}`} snap={snap} index={i} />
+                      <SnapRow
+                        key={`${snap.correlationId}-${i}`}
+                        snap={snap}
+                        index={i}
+                      />
                     ))}
                   </div>
                 )}

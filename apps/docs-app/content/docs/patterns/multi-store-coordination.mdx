@@ -1,0 +1,234 @@
+---
+title: Multi-Store Coordination
+description: Coordinate independent stores through an event bus without coupling them directly.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+# Multi-Store Coordination
+
+A single store works well for a single domain. When two domains need to communicate — orders trigger payments, payments trigger fulfillment — coupling them into one store creates a tangled state object. The event bus provides a clean boundary: each store manages its own state, and events flow between them.
+
+## When to split stores
+
+| Signal | Approach |
+|---|---|
+| State fields belong to the same domain (user profile, avatar, preferences) | Single store |
+| Two features share no state but react to each other's events | Separate stores, connected via event bus |
+| A feature has grown beyond 5-6 command handlers | Consider splitting by subdomain |
+| Components from different pages read overlapping state | Single store with targeted selectors |
+
+The threshold is not about size — it is about ownership. If two groups of state fields change independently and are consumed by different parts of the UI, they are candidates for separate stores.
+
+## Connecting stores with EventBus
+
+`createEventBus()` returns a bus that listens to every event emitted by connected stores and lets you route them:
+
+```ts title="bus.ts"
+import { createEventBus, createCommand } from "@naikidev/commiq";
+import { orderStore, OrderEvent } from "./order";
+import { paymentStore } from "./payment";
+
+const bus = createEventBus();
+bus.connect(orderStore);
+bus.connect(paymentStore);
+
+bus.on(OrderEvent.Validated, (event) => {
+  paymentStore.queue(
+    createCommand("payment:process", {
+      orderId: event.data.orderId,
+      amount: event.data.total,
+    }),
+  );
+});
+
+export { bus };
+```
+
+Each `.on()` call registers a listener for a specific event definition. When any connected store emits that event, the handler fires.
+
+## Unidirectional event flow
+
+The strongest multi-store architectures are pipelines: events flow in one direction, and no store queues commands back to an upstream store.
+
+<Mermaid chart={`
+graph LR
+    A[Order Store] -->|OrderEvent.Validated| B[Payment Store]
+    B -->|PaymentEvent.Completed| C[Fulfillment Store]
+    C -->|FulfillmentEvent.Shipped| D[Notification Store]
+`} />
+
+Each store emits what happened. The bus decides who should react. No store imports another store directly.
+
+## Avoiding circular chains
+
+A circular chain — store A emits an event that queues a command on store B, which emits an event that queues a command back on store A — creates an infinite loop. Commiq does not detect this automatically.
+
+<Callout type="warn">
+If store A reacts to an event from store B, and store B reacts to an event from store A, the system will loop indefinitely. Design flows as directed acyclic graphs. If you need bidirectional communication, introduce a third store or use a terminal event that breaks the cycle.
+</Callout>
+
+Signs of a circular chain during development:
+- The browser tab freezes after queuing a single command
+- Devtools show unbounded event growth
+- `flush()` never resolves in tests
+
+To break a cycle, remove the return path. If store B needs to notify store A that processing is complete, have the component or a dedicated coordinator read from store B's state instead of routing an event back.
+
+## Initialization and teardown
+
+Create the bus in a dedicated module. Import that module once at application startup:
+
+```ts title="main.ts"
+import "./bus"; // Executes bus setup, connects stores
+import { createRoot } from "react-dom/client";
+import { App } from "./App";
+
+createRoot(document.getElementById("root")!).render(<App />);
+```
+
+For cleanup (relevant in tests or micro-frontends), call `disconnect`:
+
+```ts
+bus.disconnect(orderStore);
+bus.disconnect(paymentStore);
+```
+
+## Full example: order pipeline
+
+A four-store pipeline where each store handles one domain:
+
+<Steps>
+<Step>
+
+### Order receives and validates
+
+```ts title="stores/order.ts"
+export const OrderEvent = {
+  Validated: createEvent<{ orderId: string; total: number }>("order:validated"),
+};
+
+_store.addCommandHandler<{ items: Item[] }>("order:place", (ctx, cmd) => {
+  const orderId = generateId();
+  const total = cmd.data.items.reduce((sum, i) => sum + i.price, 0);
+  ctx.setState({ ...ctx.state, orderId, status: "validating", items: cmd.data.items });
+  ctx.emit(OrderEvent.Validated, { orderId, total });
+});
+```
+
+</Step>
+<Step>
+
+### Payment processes the charge
+
+```ts title="stores/payment.ts"
+export const PaymentEvent = {
+  Completed: createEvent<{ orderId: string; transactionId: string }>("payment:completed"),
+  Failed: createEvent<{ orderId: string; reason: string }>("payment:failed"),
+};
+
+_store.addCommandHandler<{ orderId: string; amount: number }>(
+  "payment:process",
+  async (ctx, cmd) => {
+    ctx.setState({ ...ctx.state, status: "processing" });
+    try {
+      const txn = await chargeCard(cmd.data.amount);
+      ctx.setState({ ...ctx.state, status: "completed", transactionId: txn.id });
+      ctx.emit(PaymentEvent.Completed, { orderId: cmd.data.orderId, transactionId: txn.id });
+    } catch (e) {
+      ctx.setState({ ...ctx.state, status: "failed" });
+      ctx.emit(PaymentEvent.Failed, { orderId: cmd.data.orderId, reason: (e as Error).message });
+    }
+  },
+);
+```
+
+</Step>
+<Step>
+
+### Fulfillment ships the order
+
+```ts title="stores/fulfillment.ts"
+export const FulfillmentEvent = {
+  Shipped: createEvent<{ orderId: string; trackingCode: string }>("fulfillment:shipped"),
+};
+
+_store.addCommandHandler<{ orderId: string; transactionId: string }>(
+  "fulfillment:ship",
+  async (ctx, cmd) => {
+    const trackingCode = await createShipment(cmd.data.orderId);
+    ctx.setState({ ...ctx.state, shipped: true, trackingCode });
+    ctx.emit(FulfillmentEvent.Shipped, { orderId: cmd.data.orderId, trackingCode });
+  },
+);
+```
+
+</Step>
+<Step>
+
+### Notification informs the customer
+
+```ts title="stores/notification.ts"
+_store.addCommandHandler<{ orderId: string; trackingCode: string }>(
+  "notification:send",
+  (ctx, cmd) => {
+    ctx.setState({
+      ...ctx.state,
+      messages: [...ctx.state.messages, {
+        orderId: cmd.data.orderId,
+        text: `Your order has shipped. Tracking: ${cmd.data.trackingCode}`,
+      }],
+    });
+  },
+);
+```
+
+</Step>
+</Steps>
+
+Wire them together in the bus:
+
+```ts title="bus.ts"
+import { createEventBus, createCommand } from "@naikidev/commiq";
+import { orderStore, OrderEvent } from "./stores/order";
+import { paymentStore, PaymentEvent } from "./stores/payment";
+import { fulfillmentStore, FulfillmentEvent } from "./stores/fulfillment";
+import { notificationStore } from "./stores/notification";
+
+const bus = createEventBus();
+bus.connect(orderStore);
+bus.connect(paymentStore);
+bus.connect(fulfillmentStore);
+bus.connect(notificationStore);
+
+bus.on(OrderEvent.Validated, (event) => {
+  paymentStore.queue(
+    createCommand("payment:process", {
+      orderId: event.data.orderId,
+      amount: event.data.total,
+    }),
+  );
+});
+
+bus.on(PaymentEvent.Completed, (event) => {
+  fulfillmentStore.queue(
+    createCommand("fulfillment:ship", {
+      orderId: event.data.orderId,
+      transactionId: event.data.transactionId,
+    }),
+  );
+});
+
+bus.on(FulfillmentEvent.Shipped, (event) => {
+  notificationStore.queue(
+    createCommand("notification:send", {
+      orderId: event.data.orderId,
+      trackingCode: event.data.trackingCode,
+    }),
+  );
+});
+
+export { bus };
+```
+
+Each store is independently testable. The bus file is the only place that knows the full flow. See [testing](/patterns/testing) for how to test multi-store setups with `flush()`.

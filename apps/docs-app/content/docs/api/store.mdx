@@ -102,7 +102,7 @@ Every event received by stream listeners includes instrumentation metadata:
 
 ## `store.replaceState(next)`
 
-Directly replaces the store's state without going through a command handler. This is an advanced API available only on `StoreImpl` — it is **not** exposed on `SealedStore`.
+Directly replaces the store's state without going through a command handler. This is an advanced API available only on `StoreImpl` — it is not exposed on `SealedStore`.
 
 Emits `stateChanged` (with `{ prev, next }`) and `stateReset` events. No-op if `next` is the same reference as the current state.
 

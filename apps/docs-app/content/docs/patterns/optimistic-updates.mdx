@@ -1,0 +1,176 @@
+---
+title: Optimistic Updates
+description: Update state immediately for responsiveness and reconcile when the async operation completes.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+# Optimistic Updates
+
+Users expect immediate feedback. An optimistic update applies the expected state change synchronously — before the server confirms — and corrects it if the operation fails. Commiq's command handler structure makes this natural: call `setState` at the top of the handler, then reconcile after the async work finishes.
+
+## The pattern
+
+<Steps>
+<Step>
+
+### Apply the optimistic state
+
+Capture the current state for rollback, then set the expected outcome immediately.
+
+</Step>
+<Step>
+
+### Run the async operation
+
+Call the API, write to the database, or perform any async work.
+
+</Step>
+<Step>
+
+### Reconcile
+
+On success, confirm with server-returned data if needed. On failure, restore the captured state and emit an error event.
+
+</Step>
+</Steps>
+
+## Optimistic list add
+
+Add an item to the list immediately. If the API call fails, remove it:
+
+```ts title="stores/todo.ts"
+import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+
+type Todo = { id: string; text: string; pending: boolean };
+
+type TodoState = {
+  items: Todo[];
+};
+
+export const TodoEvent = {
+  AddFailed: createEvent<{ tempId: string; message: string }>("todo:add-failed"),
+};
+
+const _store = createStore<TodoState>({ items: [] });
+
+_store.addCommandHandler<{ text: string }>("todo:add", async (ctx, cmd) => {
+  const tempId = `temp-${Date.now()}`;
+
+  // ── Optimistic: add immediately with a pending flag ──
+  ctx.setState({
+    items: [...ctx.state.items, { id: tempId, text: cmd.data.text, pending: true }],
+  });
+
+  try {
+    const created = await createTodoOnServer(cmd.data.text);
+
+    // ── Confirm: replace the temp item with the real one ──
+    ctx.setState({
+      items: ctx.state.items.map((item) =>
+        item.id === tempId ? { id: created.id, text: created.text, pending: false } : item,
+      ),
+    });
+  } catch (e) {
+    // ── Rollback: remove the temp item ──
+    ctx.setState({
+      items: ctx.state.items.filter((item) => item.id !== tempId),
+    });
+    ctx.emit(TodoEvent.AddFailed, { tempId, message: (e as Error).message });
+  }
+});
+
+export const todoStore = sealStore(_store);
+```
+
+The `pending` flag lets the UI render optimistic items differently — a reduced opacity or a spinner next to the item — so users understand the item is not yet confirmed.
+
+```tsx title="components/TodoItem.tsx"
+function TodoItem({ item }: { item: Todo }) {
+  return (
+    <li style={{ opacity: item.pending ? 0.6 : 1 }}>
+      {item.text}
+      {item.pending && <span> (saving...)</span>}
+    </li>
+  );
+}
+```
+
+## Optimistic toggle
+
+Toggle a boolean immediately and revert on failure:
+
+```ts title="stores/bookmark.ts"
+export const BookmarkEvent = {
+  ToggleFailed: createEvent<{ articleId: string }>("bookmark:toggle-failed"),
+};
+
+_store.addCommandHandler<{ articleId: string }>("bookmark:toggle", async (ctx, cmd) => {
+  const { articleId } = cmd.data;
+  const prev = ctx.state.bookmarked;
+
+  // ── Optimistic: flip immediately ──
+  ctx.setState({ ...ctx.state, bookmarked: !prev });
+
+  try {
+    if (!prev) {
+      await addBookmark(articleId);
+    } else {
+      await removeBookmark(articleId);
+    }
+  } catch (e) {
+    // ── Rollback: restore previous value ──
+    ctx.setState({ ...ctx.state, bookmarked: prev });
+    ctx.emit(BookmarkEvent.ToggleFailed, { articleId });
+  }
+});
+```
+
+Surface the failure as a transient notification using [event-driven side effects](/patterns/event-driven-side-effects):
+
+```tsx
+useEvent(bookmarkStore, BookmarkEvent.ToggleFailed, () => {
+  showToast("Could not update bookmark. Try again.", { type: "error" });
+});
+```
+
+## Rollback with captured snapshots
+
+For more complex state, capture a snapshot of the affected portion before the optimistic write:
+
+```ts title="stores/settings.ts"
+_store.addCommandHandler<Partial<Settings>>("settings:update", async (ctx, cmd) => {
+  const snapshot = { ...ctx.state.settings };
+
+  // ── Optimistic ──
+  ctx.setState({
+    ...ctx.state,
+    settings: { ...ctx.state.settings, ...cmd.data },
+  });
+
+  try {
+    await saveSettings(cmd.data);
+  } catch (e) {
+    // ── Rollback to snapshot ──
+    ctx.setState({ ...ctx.state, settings: snapshot });
+    ctx.emit(SettingsEvent.UpdateFailed, { message: (e as Error).message });
+  }
+});
+```
+
+<Callout>
+Capture the snapshot _before_ calling `setState`. After `setState`, `ctx.state` reflects the new value — the original is lost unless you save it first.
+</Callout>
+
+## When not to use optimistic updates
+
+Optimistic updates are not always appropriate:
+
+| Scenario | Why to avoid |
+|---|---|
+| The operation generates server-side data the UI needs (IDs, timestamps, computed values) | The optimistic state would be incomplete — components expecting the real ID would break |
+| The operation has visible side effects beyond state (sending an email, charging a card) | Rolling back state does not undo the real-world action |
+| The failure rate is high | Users see constant flicker between optimistic and rolled-back states |
+| Multiple users edit the same resource concurrently | The optimistic state may conflict with another user's update |
+
+In these cases, use a standard [async loading state](/patterns/async-loading-states) — show a loading indicator, wait for confirmation, then update.

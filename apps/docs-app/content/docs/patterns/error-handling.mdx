@@ -1,0 +1,213 @@
+---
+title: Error Handling and Recovery
+description: Handle command errors, detect invalid commands, and implement retry patterns.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+# Error Handling and Recovery
+
+Commiq provides builtin events for every error scenario: a command handler throws, a command has no registered handler, or an interruptable command is aborted. Building on these events gives you consistent error handling without scattering try-catch blocks across your application.
+
+## Structured error state
+
+Use a `status` discriminant to represent error states. This follows the same pattern described in [async loading states](/patterns/async-loading-states):
+
+```ts
+type FormState = {
+  data: FormData | null;
+  status: "idle" | "submitting" | "error";
+  errorMessage: string | null;
+};
+```
+
+Set the error state inside the command handler's catch block, and emit a semantic event for side effects:
+
+```ts title="stores/form.ts"
+export const FormEvent = {
+  SubmitFailed: createEvent<{ message: string }>("form:submit-failed"),
+};
+
+_store.addCommandHandler("form:submit", async (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, status: "submitting", errorMessage: null });
+
+  try {
+    await submitForm(cmd.data);
+    ctx.setState({ ...ctx.state, status: "idle" });
+  } catch (e) {
+    const message = (e as Error).message;
+    ctx.setState({ ...ctx.state, status: "error", errorMessage: message });
+    ctx.emit(FormEvent.SubmitFailed, { message });
+  }
+});
+```
+
+## CommandHandlingError
+
+When a command handler throws an unhandled exception, Commiq emits `BuiltinEvent.CommandHandlingError` with the original command and the error. This fires _in addition to_ the exception propagating — the store remains functional.
+
+Use it for centralized error logging:
+
+```ts title="stores/error-monitor.ts"
+import { BuiltinEvent } from "@naikidev/commiq";
+
+_store.openStream((event) => {
+  if (event.id === BuiltinEvent.CommandHandlingError.id) {
+    const { command, error } = event.data as { command: Command; error: unknown };
+    console.error(`Command "${command.name}" failed:`, error);
+    errorReportingService.capture(error, { command: command.name });
+  }
+});
+```
+
+This listener can live on any store — including a dedicated monitoring store — since `openStream` receives all events emitted by that store.
+
+## InvalidCommand
+
+When a command is queued but no handler is registered for its name, Commiq emits `BuiltinEvent.InvalidCommand`. This catches typos, missing registrations, and commands dispatched to the wrong store:
+
+```ts title="stores/diagnostics.ts"
+import { BuiltinEvent } from "@naikidev/commiq";
+
+_store.openStream((event) => {
+  if (event.id === BuiltinEvent.InvalidCommand.id) {
+    const { command } = event.data as { command: Command };
+    console.warn(`No handler registered for command "${command.name}"`);
+  }
+});
+```
+
+<Callout type="info">
+In production, invalid commands are typically programming errors. Log them as warnings during development and consider reporting them to your error tracking service.
+</Callout>
+
+## Retry pattern
+
+An event handler can re-queue a failed command. Track the attempt count in the command data to prevent infinite retries:
+
+```ts title="stores/sync.ts"
+const SyncEvent = {
+  Failed: createEvent<{ endpoint: string; attempt: number }>("sync:failed"),
+};
+
+_store.addCommandHandler<{ endpoint: string; attempt?: number }>(
+  "sync:push",
+  async (ctx, cmd) => {
+    const attempt = cmd.data.attempt ?? 1;
+
+    try {
+      await pushToServer(cmd.data.endpoint);
+      ctx.setState({ ...ctx.state, synced: true });
+    } catch (e) {
+      ctx.emit(SyncEvent.Failed, { endpoint: cmd.data.endpoint, attempt });
+    }
+  },
+);
+
+_store.addEventHandler(SyncEvent.Failed, (ctx, event) => {
+  if (event.data.attempt < 3) {
+    ctx.queue(
+      createCommand("sync:push", {
+        endpoint: event.data.endpoint,
+        attempt: event.data.attempt + 1,
+      }),
+    );
+  } else {
+    ctx.queue(createCommand("sync:set-error", "Sync failed after 3 attempts"));
+  }
+});
+```
+
+<Callout type="warn">
+Always cap retry attempts. An event handler that unconditionally re-queues a failing command creates an infinite loop. Use the attempt count or a maximum-retries constant to break the cycle.
+</Callout>
+
+The retry flow:
+
+<Steps>
+<Step>
+
+### Command fails
+
+The handler catches the error and emits `SyncEvent.Failed` with the current attempt number.
+
+</Step>
+<Step>
+
+### Event handler evaluates
+
+If the attempt count is below the limit, the event handler queues the same command with an incremented attempt.
+
+</Step>
+<Step>
+
+### Final failure
+
+After exhausting retries, the event handler queues a command that sets an error state for the UI to display.
+
+</Step>
+</Steps>
+
+## Surfacing errors to the UI
+
+Use [event-driven side effects](/patterns/event-driven-side-effects) to display transient error notifications. The store emits the error event; the component decides how to present it:
+
+```tsx title="pages/SyncPage.tsx"
+import { useEvent } from "@naikidev/commiq-react";
+import { syncStore, SyncEvent } from "../stores/sync";
+
+function SyncPage() {
+  useEvent(syncStore, SyncEvent.Failed, (event) => {
+    if (event.data.attempt >= 3) {
+      showToast(`Sync to ${event.data.endpoint} failed permanently`, { type: "error" });
+    }
+  });
+
+  return <SyncDashboard />;
+}
+```
+
+This keeps error presentation in the UI layer. The store defines what happened — the component chooses what to show.
+
+## Global error boundary
+
+For unexpected errors that slip through handler-level try-catch blocks, combine React error boundaries with the `CommandHandlingError` event:
+
+```tsx title="components/ErrorBoundary.tsx"
+import { Component, type ReactNode } from "react";
+
+class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <div>Something went wrong. Please reload the page.</div>;
+    }
+    return this.props.children;
+  }
+}
+```
+
+Pair it with a stream listener that logs unhandled command errors before they potentially affect rendering:
+
+```ts title="stores/setup.ts"
+import { BuiltinEvent } from "@naikidev/commiq";
+
+export function attachErrorMonitoring(store: StoreImpl<unknown>) {
+  store.openStream((event) => {
+    if (event.id === BuiltinEvent.CommandHandlingError.id) {
+      const { command, error } = event.data as { command: Command; error: unknown };
+      errorReportingService.capture(error, {
+        command: command.name,
+        correlationId: command.correlationId,
+      });
+    }
+  });
+}
+```
+
+The `correlationId` on the command links the error to the full causality chain in devtools, making it straightforward to trace what triggered the failure.

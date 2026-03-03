@@ -4,13 +4,7 @@ import { createCommand, type StoreEvent } from "@naikidev/commiq";
 import { counterStore } from "../counter";
 import { todoStore, TodoCommand } from "../todo";
 import { useCounter } from "../counter/hooks";
-import {
-  Card,
-  CardHeader,
-  CardBody,
-  Button,
-  Badge,
-} from "../../components/ui";
+import { Card, CardHeader, CardBody, Button, Badge } from "../../components/ui";
 import { CodeExplorer } from "../../components/CodeExplorer";
 import streamPageRaw from "./StreamPage.tsx?raw";
 
@@ -188,7 +182,11 @@ export function StreamPage() {
                   {entries.map((e) => {
                     const expanded = expandedIds.has(e.id);
                     const dataStr = JSON.stringify(e.data);
-                    const hasData = e.data !== undefined && e.data !== null && dataStr !== "{}" && dataStr !== "null";
+                    const hasData =
+                      e.data !== undefined &&
+                      e.data !== null &&
+                      dataStr !== "{}" &&
+                      dataStr !== "null";
                     return (
                       <React.Fragment key={e.id}>
                         <tr
@@ -213,16 +211,27 @@ export function StreamPage() {
                           <td className="px-3 py-1.5 max-w-0 overflow-hidden text-zinc-500 dark:text-zinc-400">
                             {hasData ? (
                               <span className="flex items-center gap-1.5 overflow-hidden">
-                                <span className="text-zinc-400 dark:text-zinc-500 truncate flex-1">{dataStr}</span>
+                                <span className="text-zinc-400 dark:text-zinc-500 truncate flex-1">
+                                  {dataStr}
+                                </span>
                                 <svg
                                   className={`w-3 h-3 shrink-0 text-zinc-300 dark:text-zinc-600 transition-transform ${expanded ? "rotate-180" : ""}`}
-                                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                  strokeWidth={2.5}
                                 >
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M19 9l-7 7-7-7"
+                                  />
                                 </svg>
                               </span>
                             ) : (
-                              <span className="text-zinc-300 dark:text-zinc-600">—</span>
+                              <span className="text-zinc-300 dark:text-zinc-600">
+                                —
+                              </span>
                             )}
                           </td>
                         </tr>

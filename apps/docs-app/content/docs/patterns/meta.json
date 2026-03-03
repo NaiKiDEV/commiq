@@ -7,6 +7,13 @@
     "domain-hooks",
     "async-loading-states",
     "event-driven-side-effects",
-    "real-time-transports"
+    "real-time-transports",
+    "testing",
+    "multi-store-coordination",
+    "effects-and-cancellation",
+    "error-handling",
+    "optimistic-updates",
+    "state-normalization",
+    "composing-plugins"
   ]
 }
