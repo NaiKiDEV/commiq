@@ -6,16 +6,17 @@ Commiq models state as a pipeline: commands enter a queue, handlers process them
 
 ## Packages
 
-| Package                                                         | Description                                                               |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`@naikidev/commiq`](packages/commiq)                           | Core library. Framework-agnostic.                                         |
-| [`@naikidev/commiq-react`](packages/commiq-react)               | React integration of commiq stores. |
-| [`@naikidev/commiq-devtools-core`](packages/commiq-devtools-core) | Instrumentation and debugging tools.                                      |
-| [`@naikidev/commiq-devtools`](packages/commiq-devtools)          | Embedded devtools panel inside your application.                                        |
-| [`@naikidev/commiq-otel`](packages/commiq-otel)                 | OpenTelemetry tracing integration.                                        |
-| [`@naikidev/commiq-persist`](packages/commiq-persist)           | State persistence and rehydration (localStorage, custom adapters).        |
-| [`@naikidev/commiq-example`](apps/commiq-example)               | Example application with basic and advanced usage patterns.               |
-| [`@naikidev/docs`](apps/docs-app)                               | Documentation site (Fumadocs / Next.js).                                  |
+| Package                                                           | Description                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ |
+| [`@naikidev/commiq`](packages/commiq)                             | Core library. Framework-agnostic.                                  |
+| [`@naikidev/commiq-react`](packages/commiq-react)                 | React integration of commiq stores.                                |
+| [`@naikidev/commiq-devtools-core`](packages/commiq-devtools-core) | Instrumentation and debugging tools.                               |
+| [`@naikidev/commiq-devtools`](packages/commiq-devtools)           | Embedded devtools panel inside your application.                   |
+| [`@naikidev/commiq-otel`](packages/commiq-otel)                   | OpenTelemetry tracing integration.                                 |
+| [`@naikidev/commiq-persist`](packages/commiq-persist)             | State persistence and rehydration (localStorage, custom adapters). |
+| [`@naikidev/commiq-effects`](packages/commiq-effects)             | Structured side effects with cancellation support.                 |
+| [`@naikidev/commiq-example`](apps/commiq-example)                 | Example application with basic and advanced usage patterns.        |
+| [`@naikidev/docs`](apps/docs-app)                                 | Documentation site (Fumadocs / Next.js).                           |
 
 ## Install
 
@@ -152,16 +153,16 @@ pnpm build
 pnpm test
 ```
 
-| Script            | Description                    |
-| ----------------- | ------------------------------ |
-| `pnpm build`      | Build all packages.            |
-| `pnpm test`       | Run all tests.                 |
-| `pnpm example`    | Start the example app.         |
-| `pnpm docs`       | Start the documentation site.  |
-| `pnpm build:core` | Build core library only.       |
-| `pnpm build:libs` | Build core and react packages. |
-| `pnpm test:core`  | Run core library tests only.   |
-| `pnpm test:react` | Run react bindings tests only. |
+| Script             | Description                    |
+| ------------------ | ------------------------------ |
+| `pnpm build`       | Build all packages.            |
+| `pnpm test`        | Run all tests.                 |
+| `pnpm run example` | Start the example app.         |
+| `pnpm run docs`    | Start the documentation site.  |
+| `pnpm build:core`  | Build core library only.       |
+| `pnpm build:libs`  | Build core and react packages. |
+| `pnpm test:core`   | Run core library tests only.   |
+| `pnpm test:react`  | Run react bindings tests only. |
 
 ## License
 
