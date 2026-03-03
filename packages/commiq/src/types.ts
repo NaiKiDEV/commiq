@@ -71,3 +71,10 @@ export function createEvent<D = void>(name: string): EventDef<D> {
 export function handledEvent<D = unknown>(commandName: string): EventDef<D> {
   return { id: Symbol(`${commandName}:handled`), name: `${commandName}:handled` };
 }
+
+export function matchEvent<D>(
+  event: StoreEvent,
+  eventDef: EventDef<D>,
+): event is StoreEvent<D> {
+  return event.id === eventDef.id;
+}

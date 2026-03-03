@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createStore, createCommand, BuiltinEvent } from "../index";
+import { createStore, createCommand, BuiltinEvent, matchEvent } from "../index";
 import { sealStore } from "../proxy";
 
 describe("createStore", () => {
@@ -55,8 +55,8 @@ describe("replaceState", () => {
     const store = createStore({ count: 0 });
     const events: { prev: unknown; next: unknown }[] = [];
     store.openStream((event) => {
-      if (event.id === BuiltinEvent.StateChanged.id) {
-        events.push(event.data as { prev: unknown; next: unknown });
+      if (matchEvent(event, BuiltinEvent.StateChanged)) {
+        events.push(event.data);
       }
     });
     const next = { count: 5 };

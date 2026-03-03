@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createStore, createCommand, BuiltinEvent } from "../index";
+import { createStore, createCommand, BuiltinEvent, matchEvent } from "../index";
 import type { StoreEvent, Command } from "../types";
 
 describe("interruptable commands", () => {
@@ -40,8 +40,8 @@ describe("interruptable commands", () => {
     const interrupted: Array<{ command: Command; phase: string }> = [];
 
     store.openStream((event: StoreEvent) => {
-      if (event.id === BuiltinEvent.CommandInterrupted.id) {
-        interrupted.push(event.data as { command: Command; phase: string });
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        interrupted.push(event.data);
       }
     });
 
@@ -68,8 +68,8 @@ describe("interruptable commands", () => {
     const interrupted: Array<{ command: Command; phase: string }> = [];
 
     store.openStream((event: StoreEvent) => {
-      if (event.id === BuiltinEvent.CommandInterrupted.id) {
-        interrupted.push(event.data as { command: Command; phase: string });
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        interrupted.push(event.data);
       }
     });
 
@@ -101,8 +101,8 @@ describe("interruptable commands", () => {
     const phases: string[] = [];
 
     store.openStream((event: StoreEvent) => {
-      if (event.id === BuiltinEvent.CommandInterrupted.id) {
-        phases.push((event.data as { phase: string }).phase);
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        phases.push(event.data.phase);
       }
     });
 
