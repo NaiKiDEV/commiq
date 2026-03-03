@@ -113,21 +113,11 @@ Interruptable commands and effects serve different purposes and work well togeth
 A common pattern pairs an interruptable search command with an effect that reacts to its completion:
 
 ```ts title="stores/search.ts"
-import { createStore, createCommand, createEvent, sealStore, BuiltinEvent } from "@naikidev/commiq";
-import { createEffects } from "@naikidev/commiq-effects";
-
-const SearchEvent = {
-  Completed: createEvent<{ query: string; count: number }>("search:completed"),
-};
-
-const _store = createStore<SearchState>(initialState);
-
 // The command is interruptable — typing a new query cancels the previous search
 _store.addCommandHandler<string>(
   "search:query",
   async (ctx, cmd) => {
     ctx.setState({ ...ctx.state, query: cmd.data, loading: true });
-    await new Promise((r) => setTimeout(r, 500));
     if (ctx.signal!.aborted) return;
 
     const results = await searchApi(cmd.data);
@@ -137,11 +127,7 @@ _store.addCommandHandler<string>(
   { interruptable: true },
 );
 
-const searchStore = sealStore(_store);
-
 // The effect tracks completed searches — debounced to avoid noise from rapid queries
-const effects = createEffects(searchStore);
-
 effects.on(
   SearchEvent.Completed,
   (data, ctx) => {

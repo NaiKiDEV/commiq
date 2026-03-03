@@ -88,23 +88,7 @@ function UserProfile({ userId }: { userId: string }) {
 }
 ```
 
-Each `useSelector` call subscribes independently. A component that only reads `status` will not re-render when `name` changes.
-
-Wrapped in a [domain hook](/patterns/domain-hooks):
-
-```ts
-export function useUser(userId: string) {
-  const status = useSelector(userStore, (s) => s.status);
-  const name = useSelector(userStore, (s) => s.name);
-  const queue = useQueue(userStore);
-
-  useEffect(() => {
-    queue(UserCommand.fetchUser(userId));
-  }, [userId]);
-
-  return { status, name };
-}
-```
+Each `useSelector` call subscribes independently. A component that only reads `status` will not re-render when `name` changes. For encapsulating this into a reusable hook, see [domain hooks](/patterns/domain-hooks).
 
 ## Reset
 

@@ -40,19 +40,9 @@ On success, confirm with server-returned data if needed. On failure, restore the
 Add an item to the list immediately. If the API call fails, remove it:
 
 ```ts title="stores/todo.ts"
-import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
-
-type Todo = { id: string; text: string; pending: boolean };
-
-type TodoState = {
-  items: Todo[];
-};
-
-export const TodoEvent = {
+const TodoEvent = {
   AddFailed: createEvent<{ tempId: string; message: string }>("todo:add-failed"),
 };
-
-const _store = createStore<TodoState>({ items: [] });
 
 _store.addCommandHandler<{ text: string }>("todo:add", async (ctx, cmd) => {
   const tempId = `temp-${Date.now()}`;
@@ -79,8 +69,6 @@ _store.addCommandHandler<{ text: string }>("todo:add", async (ctx, cmd) => {
     ctx.emit(TodoEvent.AddFailed, { tempId, message: (e as Error).message });
   }
 });
-
-export const todoStore = sealStore(_store);
 ```
 
 The `pending` flag lets the UI render optimistic items differently — a reduced opacity or a spinner next to the item — so users understand the item is not yet confirmed.

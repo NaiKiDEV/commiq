@@ -98,93 +98,23 @@ bus.disconnect(paymentStore);
 
 A four-store pipeline where each store handles one domain:
 
-<Steps>
-<Step>
+Each store defines its own events and handlers following the standard [async loading states](/patterns/async-loading-states) pattern. The key detail is the events each store emits — those are what the bus routes:
 
-### Order receives and validates
-
-```ts title="stores/order.ts"
+```ts
+// Each store exports its domain events
 export const OrderEvent = {
   Validated: createEvent<{ orderId: string; total: number }>("order:validated"),
 };
 
-_store.addCommandHandler<{ items: Item[] }>("order:place", (ctx, cmd) => {
-  const orderId = generateId();
-  const total = cmd.data.items.reduce((sum, i) => sum + i.price, 0);
-  ctx.setState({ ...ctx.state, orderId, status: "validating", items: cmd.data.items });
-  ctx.emit(OrderEvent.Validated, { orderId, total });
-});
-```
-
-</Step>
-<Step>
-
-### Payment processes the charge
-
-```ts title="stores/payment.ts"
 export const PaymentEvent = {
   Completed: createEvent<{ orderId: string; transactionId: string }>("payment:completed"),
   Failed: createEvent<{ orderId: string; reason: string }>("payment:failed"),
 };
 
-_store.addCommandHandler<{ orderId: string; amount: number }>(
-  "payment:process",
-  async (ctx, cmd) => {
-    ctx.setState({ ...ctx.state, status: "processing" });
-    try {
-      const txn = await chargeCard(cmd.data.amount);
-      ctx.setState({ ...ctx.state, status: "completed", transactionId: txn.id });
-      ctx.emit(PaymentEvent.Completed, { orderId: cmd.data.orderId, transactionId: txn.id });
-    } catch (e) {
-      ctx.setState({ ...ctx.state, status: "failed" });
-      ctx.emit(PaymentEvent.Failed, { orderId: cmd.data.orderId, reason: (e as Error).message });
-    }
-  },
-);
-```
-
-</Step>
-<Step>
-
-### Fulfillment ships the order
-
-```ts title="stores/fulfillment.ts"
 export const FulfillmentEvent = {
   Shipped: createEvent<{ orderId: string; trackingCode: string }>("fulfillment:shipped"),
 };
-
-_store.addCommandHandler<{ orderId: string; transactionId: string }>(
-  "fulfillment:ship",
-  async (ctx, cmd) => {
-    const trackingCode = await createShipment(cmd.data.orderId);
-    ctx.setState({ ...ctx.state, shipped: true, trackingCode });
-    ctx.emit(FulfillmentEvent.Shipped, { orderId: cmd.data.orderId, trackingCode });
-  },
-);
 ```
-
-</Step>
-<Step>
-
-### Notification informs the customer
-
-```ts title="stores/notification.ts"
-_store.addCommandHandler<{ orderId: string; trackingCode: string }>(
-  "notification:send",
-  (ctx, cmd) => {
-    ctx.setState({
-      ...ctx.state,
-      messages: [...ctx.state.messages, {
-        orderId: cmd.data.orderId,
-        text: `Your order has shipped. Tracking: ${cmd.data.trackingCode}`,
-      }],
-    });
-  },
-);
-```
-
-</Step>
-</Steps>
 
 Wire them together in the bus:
 

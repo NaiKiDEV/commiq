@@ -104,8 +104,7 @@ _store
   );
 
 _store.addEventHandler(BuiltinEvent.CommandInterrupted, (ctx, event) => {
-  const data = event.data as { command: { name: string }; phase: string };
-  if (data.command.name === "search:query") {
+  if (event.data.command.name === "search:query") {
     ctx.queue(createCommand("search:incrementStat", "interrupted" as const));
   }
 });

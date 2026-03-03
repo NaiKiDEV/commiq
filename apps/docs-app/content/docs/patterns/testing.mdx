@@ -3,8 +3,6 @@ title: Testing Stores and Hooks
 description: How to unit test command handlers, event flows, React hooks, and effects.
 ---
 
-import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
-
 # Testing Stores and Hooks
 
 Commiq stores are plain TypeScript objects. Testing them is straightforward: import your store, queue a command, await `flush()`, and assert state. No mocking framework is required for store-level tests.
@@ -166,8 +164,6 @@ Interruptable command tests rely on timing. Use short timeouts (10-50ms) and kee
 
 React hooks are tested with `renderHook` from `@testing-library/react`. Use `act` to wrap store mutations so React processes the updates:
 
-<Tabs items={["Vitest", "Jest"]}>
-<Tab value="Vitest">
 ```tsx title="stores/counter/hooks.test.tsx"
 import { renderHook, act } from "@testing-library/react";
 import { useSelector } from "@naikidev/commiq-react";
@@ -186,31 +182,10 @@ test("useSelector reflects state after command", async () => {
   expect(result.current).toBe(1);
 });
 ```
-</Tab>
-<Tab value="Jest">
-```tsx title="stores/counter/hooks.test.tsx"
-import { renderHook, act } from "@testing-library/react";
-import { useSelector } from "@naikidev/commiq-react";
-import { CounterCommand } from "./commands";
-import { counterStore } from "./store";
 
-// Jest requires explicit jsdom environment
-// Add to jest.config: testEnvironment: "jsdom"
-
-test("useSelector reflects state after command", async () => {
-  const { result } = renderHook(() => useSelector(counterStore, (s) => s.count));
-  expect(result.current).toBe(0);
-
-  await act(async () => {
-    counterStore.queue(CounterCommand.increment());
-    await counterStore.flush();
-  });
-
-  expect(result.current).toBe(1);
-});
-```
-</Tab>
-</Tabs>
+<Callout type="info">
+If using Jest instead of Vitest, set `testEnvironment: "jsdom"` in your jest config. The test code is otherwise identical.
+</Callout>
 
 Testing `useEvent` requires triggering an event and asserting the callback was invoked:
 

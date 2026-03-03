@@ -11,36 +11,9 @@ Commiq provides builtin events for every error scenario: a command handler throw
 
 ## Structured error state
 
-Use a `status` discriminant to represent error states. This follows the same pattern described in [async loading states](/patterns/async-loading-states):
+Use a `status` discriminant with an `errorMessage` field, as described in [async loading states](/patterns/async-loading-states). Set the error state inside the handler's catch block, and emit a semantic error event so the UI can react via [event-driven side effects](/patterns/event-driven-side-effects).
 
-```ts
-type FormState = {
-  data: FormData | null;
-  status: "idle" | "submitting" | "error";
-  errorMessage: string | null;
-};
-```
-
-Set the error state inside the command handler's catch block, and emit a semantic event for side effects:
-
-```ts title="stores/form.ts"
-export const FormEvent = {
-  SubmitFailed: createEvent<{ message: string }>("form:submit-failed"),
-};
-
-_store.addCommandHandler("form:submit", async (ctx, cmd) => {
-  ctx.setState({ ...ctx.state, status: "submitting", errorMessage: null });
-
-  try {
-    await submitForm(cmd.data);
-    ctx.setState({ ...ctx.state, status: "idle" });
-  } catch (e) {
-    const message = (e as Error).message;
-    ctx.setState({ ...ctx.state, status: "error", errorMessage: message });
-    ctx.emit(FormEvent.SubmitFailed, { message });
-  }
-});
-```
+This section focuses on errors that go _beyond_ individual handler try-catch blocks — builtin error events, retries, and centralized monitoring.
 
 ## CommandHandlingError
 
@@ -49,11 +22,11 @@ When a command handler throws an unhandled exception, Commiq emits `BuiltinEvent
 Use it for centralized error logging:
 
 ```ts title="stores/error-monitor.ts"
-import { BuiltinEvent } from "@naikidev/commiq";
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
 
 _store.openStream((event) => {
-  if (event.id === BuiltinEvent.CommandHandlingError.id) {
-    const { command, error } = event.data as { command: Command; error: unknown };
+  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+    const { command, error } = event.data;
     console.error(`Command "${command.name}" failed:`, error);
     errorReportingService.capture(error, { command: command.name });
   }
@@ -67,11 +40,11 @@ This listener can live on any store — including a dedicated monitoring store �
 When a command is queued but no handler is registered for its name, Commiq emits `BuiltinEvent.InvalidCommand`. This catches typos, missing registrations, and commands dispatched to the wrong store:
 
 ```ts title="stores/diagnostics.ts"
-import { BuiltinEvent } from "@naikidev/commiq";
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
 
 _store.openStream((event) => {
-  if (event.id === BuiltinEvent.InvalidCommand.id) {
-    const { command } = event.data as { command: Command };
+  if (matchEvent(event, BuiltinEvent.InvalidCommand)) {
+    const { command } = event.data;
     console.warn(`No handler registered for command "${command.name}"`);
   }
 });
@@ -150,54 +123,24 @@ After exhausting retries, the event handler queues a command that sets an error 
 
 ## Surfacing errors to the UI
 
-Use [event-driven side effects](/patterns/event-driven-side-effects) to display transient error notifications. The store emits the error event; the component decides how to present it:
+Use `useEvent` to display transient error notifications — the store emits what happened, the component decides how to present it. See [event-driven side effects](/patterns/event-driven-side-effects) for the full pattern.
 
 ```tsx title="pages/SyncPage.tsx"
-import { useEvent } from "@naikidev/commiq-react";
-import { syncStore, SyncEvent } from "../stores/sync";
-
-function SyncPage() {
-  useEvent(syncStore, SyncEvent.Failed, (event) => {
-    if (event.data.attempt >= 3) {
-      showToast(`Sync to ${event.data.endpoint} failed permanently`, { type: "error" });
-    }
-  });
-
-  return <SyncDashboard />;
-}
+useEvent(syncStore, SyncEvent.Failed, (event) => {
+  if (event.data.attempt >= 3) {
+    showToast(`Sync to ${event.data.endpoint} failed permanently`, { type: "error" });
+  }
+});
 ```
 
-This keeps error presentation in the UI layer. The store defines what happened — the component chooses what to show.
+## Centralized error monitoring
 
-## Global error boundary
-
-For unexpected errors that slip through handler-level try-catch blocks, combine React error boundaries with the `CommandHandlingError` event:
-
-```tsx title="components/ErrorBoundary.tsx"
-import { Component, type ReactNode } from "react";
-
-class AppErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
-  state = { hasError: false };
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return <div>Something went wrong. Please reload the page.</div>;
-    }
-    return this.props.children;
-  }
-}
-```
-
-Pair it with a stream listener that logs unhandled command errors before they potentially affect rendering:
+For unexpected errors that slip through handler-level try-catch blocks, attach a `CommandHandlingError` listener that reports to your error tracking service. The `correlationId` on the command links the error to the full causality chain in devtools:
 
 ```ts title="stores/setup.ts"
 import { BuiltinEvent } from "@naikidev/commiq";
 
-export function attachErrorMonitoring(store: StoreImpl<unknown>) {
+export function attachErrorMonitoring(store: SealedStore<unknown>) {
   store.openStream((event) => {
     if (event.id === BuiltinEvent.CommandHandlingError.id) {
       const { command, error } = event.data as { command: Command; error: unknown };
@@ -209,5 +152,3 @@ export function attachErrorMonitoring(store: StoreImpl<unknown>) {
   });
 }
 ```
-
-The `correlationId` on the command links the error to the full causality chain in devtools, making it straightforward to trace what triggered the failure.

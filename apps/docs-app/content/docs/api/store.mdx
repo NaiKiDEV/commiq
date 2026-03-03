@@ -149,14 +149,15 @@ These events are emitted automatically by the store:
 | `commandInterrupted`   | `{ command, phase }`  | An interruptable command was cancelled |
 | `stateReset`           | `void`               | State was replaced via `replaceState` |
 
-Access them via:
+Access them via `matchEvent` for type-safe narrowing:
 
 ```ts
-import { builtinEvents } from "@naikidev/commiq";
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
 
 store.openStream((event) => {
-  if (event.id === builtinEvents.stateChanged.id) {
-    console.log("State changed:", event.data);
+  if (matchEvent(event, BuiltinEvent.StateChanged)) {
+    // event.data is typed as { prev: unknown; next: unknown }
+    console.log("State changed:", event.data.prev, "→", event.data.next);
   }
 });
 ```
