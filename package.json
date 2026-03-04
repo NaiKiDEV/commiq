@@ -1,6 +1,9 @@
 {
   "name": "commiq-monorepo",
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
@@ -13,7 +16,14 @@
     "test:core": "pnpm --filter @naikidev/commiq test",
     "test:react": "pnpm --filter @naikidev/commiq-react test",
     "aspire": "docker compose up -d",
-    "aspire:stop": "docker compose down"
+    "aspire:stop": "docker compose down",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "pnpm build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
