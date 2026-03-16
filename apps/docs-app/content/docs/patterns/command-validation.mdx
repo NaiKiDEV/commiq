@@ -1,0 +1,130 @@
+---
+title: Command Validation
+description: Validate command data with guards for business rules and assertions for developer invariants.
+---
+
+Commands carry data from the outside world — user input, API responses, URL parameters. Validating that data before acting on it prevents invalid state transitions and produces clear error messages. Commiq's context extensions provide two complementary tools: `withGuard` for business rule validation and `withAssert` for developer-time invariants.
+
+## Guards for business rules
+
+`withGuard` adds `ctx.guard(condition, message)` to command handlers. When the condition is false, the guard throws an error that stops the handler. The store emits `commandHandlingError` with your message, and subsequent code in the handler does not execute.
+
+```ts title="stores/cart.ts"
+import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+import { withGuard, withPatch } from "@naikidev/commiq-context";
+
+type CartState = {
+  items: Array<{ id: string; name: string; quantity: number }>;
+  maxItems: number;
+};
+
+const CartEvent = {
+  ItemAdded: createEvent<{ id: string }>("cart:itemAdded"),
+  ItemRemoved: createEvent<{ id: string }>("cart:itemRemoved"),
+};
+
+const _store = createStore<CartState>({ items: [], maxItems: 20 })
+  .useExtension(withGuard<CartState>())
+  .useExtension(withPatch<CartState>())
+  .addCommandHandler<{ id: string; name: string }>("cart:addItem", (ctx, cmd) => {
+    ctx.guard(
+      ctx.state.items.length < ctx.state.maxItems,
+      `Cart is full (max ${ctx.state.maxItems} items)`,
+    );
+    ctx.guard(
+      !ctx.state.items.some((i) => i.id === cmd.data.id),
+      `Item "${cmd.data.name}" is already in cart`,
+    );
+
+    ctx.patch({
+      items: [...ctx.state.items, { ...cmd.data, quantity: 1 }],
+    });
+    ctx.emit(CartEvent.ItemAdded, { id: cmd.data.id });
+  })
+  .addCommandHandler<{ id: string; quantity: number }>("cart:setQuantity", (ctx, cmd) => {
+    ctx.guard(cmd.data.quantity > 0, "Quantity must be positive");
+    ctx.guard(cmd.data.quantity <= 99, "Quantity cannot exceed 99");
+
+    const item = ctx.state.items.find((i) => i.id === cmd.data.id);
+    ctx.guard(item !== undefined, `Item "${cmd.data.id}" not found in cart`);
+
+    ctx.patch({
+      items: ctx.state.items.map((i) =>
+        i.id === cmd.data.id ? { ...i, quantity: cmd.data.quantity } : i,
+      ),
+    });
+  });
+
+export const cartStore = sealStore(_store);
+```
+
+Guards read like preconditions. If a guard fails, nothing below it runs — the cart is never left in an inconsistent state.
+
+## Reacting to guard failures
+
+Guard failures produce `commandHandlingError` events. Use a stream listener or `useEvent` to show error messages to users:
+
+```ts title="stores/cart-errors.ts"
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
+
+cartStore.openStream((event) => {
+  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+    const message = (event.data.error as Error).message;
+    showToast(message, { type: "error" });
+  }
+});
+```
+
+Or in a React component:
+
+```tsx title="components/Cart.tsx"
+import { useEvent } from "@naikidev/commiq-react";
+import { BuiltinEvent } from "@naikidev/commiq";
+
+function Cart() {
+  useEvent(cartStore, BuiltinEvent.CommandHandlingError, (event) => {
+    showToast((event.data.error as Error).message);
+  });
+
+  // ...
+}
+```
+
+## Assertions for developer invariants
+
+`withAssert` adds `ctx.assert(condition, message)` for conditions that should never be false in correct code. Unlike guards, assertions indicate programming errors — a missing initialization step, a broken state machine, a handler called in the wrong order.
+
+```ts title="stores/checkout.ts"
+import { withAssert, withGuard } from "@naikidev/commiq-context";
+
+const _store = createStore<CheckoutState>(initialState)
+  .useExtension(withGuard<CheckoutState>())
+  .useExtension(withAssert<CheckoutState>({ enabled: import.meta.env.DEV }))
+  .addCommandHandler("checkout:submit", async (ctx) => {
+    ctx.assert(ctx.state.step === "review", "checkout must be in review step");
+    ctx.assert(ctx.state.paymentMethod !== null, "payment method must be set");
+
+    ctx.guard(ctx.state.items.length > 0, "Cannot checkout with empty cart");
+    ctx.guard(ctx.state.total > 0, "Cart total must be positive");
+
+    ctx.setState({ ...ctx.state, step: "processing" });
+    // ... submit order
+  });
+```
+
+In this example:
+- **Assertions** check internal invariants (`step` and `paymentMethod` should already be set by previous steps). These are programming errors if violated.
+- **Guards** check business rules (`items` and `total`). These are user-facing validation that can legitimately fail.
+
+In production (`enabled: false`), assertions become no-ops — zero runtime cost. Guards always run.
+
+## Guard vs Assert: when to use which
+
+| | `withGuard` | `withAssert` |
+| --- | --- | --- |
+| **Purpose** | Business rule validation | Developer invariant checking |
+| **Failure means** | Invalid user action or data | Bug in the code |
+| **User-facing** | Yes — show the message to users | No — log or report it |
+| **Production** | Always active | Can be disabled |
+| **Message style** | User-friendly: `"Cart is full"` | Developer-friendly: `"items array should be initialized"` |
+| **Error prefix** | None | `"Assertion failed: "` |

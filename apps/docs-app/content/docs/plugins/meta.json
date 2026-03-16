@@ -1,4 +1,4 @@
 {
   "title": "Plugins",
-  "pages": ["devtools", "devtools-react", "opentelemetry", "persist", "effects"]
+  "pages": ["context", "devtools", "devtools-react", "opentelemetry", "persist", "effects"]
 }

@@ -1,11 +1,9 @@
 ---
 title: Composing Plugins
-description: Wire multiple plugins on the same store with correct initialization order and cleanup.
+description: Initialize multiple plugins on a single store with correct ordering and cleanup.
 ---
 
 import { Steps, Step } from 'fumadocs-ui/components/steps';
-
-# Composing Plugins
 
 Commiq plugins — devtools, effects, persist — each attach to a sealed store independently. As your application grows, a single store may use two or three plugins simultaneously. Getting the initialization order right and cleaning up correctly prevents subtle bugs.
 
@@ -18,13 +16,16 @@ All plugins consume a sealed store. The sequence is always:
 
 ### Create and configure the raw store
 
-Register all command handlers and event handlers on the raw `StoreImpl`:
+Register context extensions first (if any), then command handlers and event handlers on the raw `StoreImpl`:
 
 ```ts
-const _store = createStore<AppState>(initialState);
-_store.addCommandHandler("app:load", /* ... */);
-_store.addEventHandler(AppEvent.Loaded, /* ... */);
+const _store = createStore<AppState>(initialState)
+  .useExtension(myExtension)       // extensions first
+  .addCommandHandler("app:load", /* ... */)
+  .addEventHandler(AppEvent.Loaded, /* ... */);
 ```
+
+Context extensions must be registered before the first command is processed. See [context extensions](/plugins/context) for details.
 
 </Step>
 <Step>

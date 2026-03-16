@@ -100,6 +100,70 @@ Every event received by stream listeners includes instrumentation metadata:
 | `correlationId` | `string`         | Unique identifier for this event                 |
 | `causedBy`      | `string \| null` | Correlation ID of the parent command/event        |
 
+## `store.useExtension(ext)`
+
+Registers a context extension that adds custom properties to `CommandContext` and/or `EventContext`. Returns `this` with an expanded type, so extensions compose via chaining.
+
+```ts
+import { createStore, createCommand } from "@naikidev/commiq";
+import type { ContextExtensionDef } from "@naikidev/commiq";
+
+type AppState = { count: number };
+
+const logger: ContextExtensionDef<AppState, { log: (msg: string) => void }> = {
+  command: () => ({
+    log: (msg: string) => console.log(`[cmd] ${msg}`),
+  }),
+  event: () => ({
+    log: (msg: string) => console.log(`[evt] ${msg}`),
+  }),
+};
+
+const store = createStore<AppState>({ count: 0 })
+  .useExtension(logger)
+  .addCommandHandler("increment", (ctx) => {
+    ctx.log("incrementing");
+    ctx.setState({ count: ctx.state.count + 1 });
+  });
+```
+
+After `useExtension(ext)`, all handlers registered on the store see the extra properties on `ctx`.
+
+### `ContextExtensionDef<S, T>`
+
+| Property  | Type                                          | Description                          |
+| --------- | --------------------------------------------- | ------------------------------------ |
+| `command`   | `(ctx: CommandContext<S>, command: Command) => T` | Builder called per command execution |
+| `event`     | `(ctx: EventContext<S>, event: StoreEvent) => T`  | Builder called per event handling    |
+| `afterCommand` | `() => void \| Promise<void>`              | Lifecycle hook called after each command handler completes (including on error) |
+| `afterEvent`   | `() => void \| Promise<void>`              | Lifecycle hook called after each event handler completes (including on error) |
+
+All fields are optional. An extension that only provides `command` will not appear in event handler contexts. The `afterCommand` and `afterEvent` hooks run in a `finally` block — they execute even when the handler throws, and errors from the hooks themselves are swallowed.
+
+The builder receives the base context — extensions can use `ctx.setState`, `ctx.emit`, or `ctx.queue` to build utilities that wrap built-in behavior.
+
+### Constraints
+
+- **No overriding built-in keys.** Extension keys that collide with `state`, `setState`, `emit`, `signal` (command context) or `state`, `queue` (event context) cause a `commandHandlingError` event at runtime.
+- **No duplicate keys across extensions.** If two extensions produce the same key, a `commandHandlingError` event is emitted.
+- **Locked after first command.** `useExtension` throws if called after the first command has been queued. Register all extensions before queuing.
+
+### Multiple extensions
+
+Chain multiple `useExtension` calls. The type accumulates across calls:
+
+```ts
+const store = createStore<AppState>({ count: 0 })
+  .useExtension(loggerExt)
+  .useExtension(metaExt)
+  .addCommandHandler("test", (ctx) => {
+    ctx.log("hello");     // from loggerExt
+    ctx.meta.commandName; // from metaExt
+  });
+```
+
+See [`@naikidev/commiq-context`](/plugins/context) for pre-built extensions and composition utilities.
+
 ## `store.replaceState(next)`
 
 Directly replaces the store's state without going through a command handler. This is an advanced API available only on `StoreImpl` — it is not exposed on `SealedStore`.
