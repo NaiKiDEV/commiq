@@ -9,14 +9,11 @@ export default defineConfig({
       formats: ["es", "cjs"],
       fileName: "index",
     },
-    rollupOptions: {
-      external: [
-        "react",
-        "react-dom",
-        "react/jsx-runtime",
-        "@naikidev/commiq",
-        "@naikidev/commiq-devtools-core",
-      ],
+    rolldownOptions: {
+      external: (id) =>
+        /^(react|react-dom|react\/jsx-runtime|@naikidev\/commiq|@naikidev\/commiq-devtools-core)(\/|$)/.test(
+          id,
+        ),
     },
   },
 });

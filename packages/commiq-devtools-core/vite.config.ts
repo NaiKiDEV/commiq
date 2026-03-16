@@ -9,7 +9,7 @@ export default defineConfig({
       formats: ["es", "cjs"],
       fileName: "index",
     },
-    rollupOptions: {
+    rolldownOptions: {
       external: ["@naikidev/commiq"],
     },
   },
