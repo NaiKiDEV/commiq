@@ -12,5 +12,6 @@ export type {
   EventHandler,
   StreamListener,
   CommandHandlerOptions,
+  ContextExtensionDef,
   SealedStore,
 } from "./types";

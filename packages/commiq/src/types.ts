@@ -31,15 +31,22 @@ export type EventContext<S> = {
   queue: (command: Command) => void;
 }
 
-export type CommandHandler<S, D = unknown> = (
-  ctx: CommandContext<S>,
+export type CommandHandler<S, D = unknown, Ctx extends Record<string, unknown> = {}> = (
+  ctx: CommandContext<S> & Ctx,
   cmd: Command<string, D>
 ) => void | Promise<void>;
 
-export type EventHandler<S, D = unknown> = (
-  ctx: EventContext<S>,
+export type EventHandler<S, D = unknown, Ctx extends Record<string, unknown> = {}> = (
+  ctx: EventContext<S> & Ctx,
   event: StoreEvent<D>
 ) => void | Promise<void>;
+
+export type ContextExtensionDef<S, T extends Record<string, unknown> = Record<string, unknown>> = {
+  command?: (ctx: CommandContext<S>, command: Command) => T;
+  event?: (ctx: EventContext<S>, event: StoreEvent) => T;
+  afterCommand?: () => void | Promise<void>;
+  afterEvent?: () => void | Promise<void>;
+}
 
 export type StreamListener = (event: StoreEvent) => void;
 

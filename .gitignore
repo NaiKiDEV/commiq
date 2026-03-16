@@ -25,6 +25,8 @@ Thumbs.db
 .idea
 
 .claude
+doc
+**/Claude.md
 spec.md
 tech.md
 resume_session.txt

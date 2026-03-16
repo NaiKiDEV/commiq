@@ -4,6 +4,7 @@ import {
   CommandContext,
   CommandHandler,
   CommandHandlerOptions,
+  ContextExtensionDef,
   EventContext,
   EventDef,
   EventHandler,
@@ -13,7 +14,6 @@ import {
 } from "./types";
 
 let _causalContext: string | null = null;
-
 export const BuiltinEventName = {
   StateChanged: "stateChanged",
   CommandHandled: "commandHandled",
@@ -38,21 +38,26 @@ export const BuiltinEvent = {
   ),
 } as const;
 
+const RESERVED_COMMAND_CONTEXT_KEYS = new Set(["state", "setState", "emit", "signal"]);
+const RESERVED_EVENT_CONTEXT_KEYS = new Set(["state", "queue"]);
+
 type HandlerEntry<S> = {
   handler: CommandHandler<S>;
   options?: CommandHandlerOptions;
 }
 
-export class StoreImpl<S> {
+export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _state: S;
   private _commandHandlers = new Map<string, HandlerEntry<S>>();
-  private _eventHandlers = new Map<symbol, EventHandler<S, any>[]>();
+  private _eventHandlers = new Map<symbol, EventHandler<S>[]>();
   private _streamListeners = new Set<StreamListener>();
-  private _queue: Command<string, any>[] = [];
+  private _queue: Command<string, unknown>[] = [];
   private _processing = false;
   private _flushResolvers: Array<() => void> = [];
   private _currentCorrelationId: string | null = null;
   private _interruptControllers = new Map<string, AbortController>();
+  private _contextExtensions: ContextExtensionDef<S>[] = [];
+  private _active = false;
 
   constructor(initialState: S) {
     this._state = initialState;
@@ -60,6 +65,16 @@ export class StoreImpl<S> {
 
   get state(): S {
     return this._state;
+  }
+
+  useExtension<T extends Record<string, unknown>>(
+    ext: ContextExtensionDef<S, T>,
+  ): StoreImpl<S, Ctx & T> {
+    if (this._active) {
+      throw new Error("Cannot add extensions to an active store");
+    }
+    this._contextExtensions.push(ext as ContextExtensionDef<S>);
+    return this as StoreImpl<S, Ctx & T>;
   }
 
   replaceState(next: S): void {
@@ -76,7 +91,7 @@ export class StoreImpl<S> {
 
   addCommandHandler<D = unknown>(
     name: string,
-    handler: CommandHandler<S, D>,
+    handler: CommandHandler<S, D, Ctx>,
     options?: CommandHandlerOptions,
   ): this {
     this._commandHandlers.set(name, {
@@ -86,14 +101,15 @@ export class StoreImpl<S> {
     return this;
   }
 
-  addEventHandler<D>(eventDef: EventDef<D>, handler: EventHandler<S, D>): this {
+  addEventHandler<D>(eventDef: EventDef<D>, handler: EventHandler<S, D, Ctx>): this {
     const handlers = this._eventHandlers.get(eventDef.id) ?? [];
-    handlers.push(handler);
+    handlers.push(handler as EventHandler<S>);
     this._eventHandlers.set(eventDef.id, handlers);
     return this;
   }
 
   queue(command: Command): void {
+    this._active = true;
     command.correlationId = nanoid();
     command.causedBy =
       this._currentCorrelationId ?? command.causedBy ?? _causalContext;
@@ -154,6 +170,36 @@ export class StoreImpl<S> {
     };
   }
 
+  private _applyCommandExtensions(ctx: CommandContext<S>, command: Command): void {
+    const claimed = new Set<string>();
+    for (const ext of this._contextExtensions) {
+      if (!ext.command) continue;
+      const props = ext.command(ctx, command);
+      for (const key of Object.keys(props)) {
+        if (RESERVED_COMMAND_CONTEXT_KEYS.has(key) || claimed.has(key)) {
+          throw new Error(`Context extension key "${key}" conflicts with existing context property`);
+        }
+        claimed.add(key);
+      }
+      Object.assign(ctx, props);
+    }
+  }
+
+  private _applyEventExtensions(ctx: EventContext<S>, event: StoreEvent): void {
+    const claimed = new Set<string>();
+    for (const ext of this._contextExtensions) {
+      if (!ext.event) continue;
+      const props = ext.event(ctx, event);
+      for (const key of Object.keys(props)) {
+        if (RESERVED_EVENT_CONTEXT_KEYS.has(key) || claimed.has(key)) {
+          throw new Error(`Context extension key "${key}" conflicts with existing context property`);
+        }
+        claimed.add(key);
+      }
+      Object.assign(ctx, props);
+    }
+  }
+
   private async _processQueue(): Promise<void> {
     this._processing = true;
 
@@ -201,6 +247,7 @@ export class StoreImpl<S> {
       };
 
       try {
+        this._applyCommandExtensions(ctx, command);
         await entry.handler(ctx, command);
 
         if (isInterruptable && abortController!.signal.aborted) {
@@ -249,6 +296,15 @@ export class StoreImpl<S> {
           );
         }
       } finally {
+        for (const ext of this._contextExtensions) {
+          if (ext.afterCommand) {
+            try {
+              await ext.afterCommand();
+            } catch {
+              // lifecycle hook errors are swallowed
+            }
+          }
+        }
         if (isInterruptable) this._interruptControllers.delete(command.name);
       }
 
@@ -301,14 +357,28 @@ export class StoreImpl<S> {
       },
     };
 
-    for (const handler of handlers) {
-      await handler(eventCtx, event);
+    this._applyEventExtensions(eventCtx, event);
+
+    try {
+      for (const handler of handlers) {
+        await handler(eventCtx, event);
+      }
+    } finally {
+      for (const ext of this._contextExtensions) {
+        if (ext.afterEvent) {
+          try {
+            await ext.afterEvent();
+          } catch {
+            // lifecycle hook errors are swallowed
+          }
+        }
+      }
     }
 
     this._currentCorrelationId = prevCorrelationId;
   }
 }
 
-export function createStore<S>(initialState: S): StoreImpl<S> {
+export function createStore<S>(initialState: S): StoreImpl<S, {}> {
   return new StoreImpl(initialState);
 }
