@@ -1,5 +1,12 @@
 # @naikidev/commiq-otel
 
+## 0.1.1
+
+### Patch Changes
+
+- Updated dependencies [[`1eb206c`](https://github.com/NaiKiDEV/commiq/commit/1eb206c525d51f5abb47b22b5775a8abb431c1ad)]:
+  - @naikidev/commiq@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes

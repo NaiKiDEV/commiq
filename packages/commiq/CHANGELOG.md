@@ -1,5 +1,11 @@
 # @naikidev/commiq
 
+## 0.2.0
+
+### Minor Changes
+
+- [`1eb206c`](https://github.com/NaiKiDEV/commiq/commit/1eb206c525d51f5abb47b22b5775a8abb431c1ad) Thanks [@NaiKiDEV](https://github.com/NaiKiDEV)! - Add context extensions support to core and pre-built extensions package
+
 ## 0.1.0
 
 ### Minor Changes
