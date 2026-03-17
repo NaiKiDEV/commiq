@@ -478,6 +478,7 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
           scroll to zoom · drag to pan · drag nodes to move
         </span>
         <button
+          className="commiq-label-btn"
           onClick={fitToView}
           style={styles.fitButton}
           title="Fit to view"

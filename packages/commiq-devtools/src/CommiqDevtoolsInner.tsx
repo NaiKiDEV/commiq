@@ -5,6 +5,15 @@ import { useDevtoolsEngine } from "./hooks/useDevtoolsEngine";
 import { DevtoolsPanel } from "./DevtoolsPanel";
 import type { CommiqDevtoolsProps } from "./CommiqDevtools";
 
+type Toast = {
+  id: number;
+  name: string;
+  storeName: string;
+}
+
+const MAX_TOASTS = 3;
+const TOAST_DURATION = 4000;
+
 function CommiqDevtoolsInner({
   stores,
   position = "bottom-right",
@@ -16,9 +25,52 @@ function CommiqDevtoolsInner({
   const [open, setOpen] = useState(initialOpen);
   const [mounted, setMounted] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [errorFilter, setErrorFilter] = useState(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const portalRef = useRef<HTMLDivElement | null>(null);
+  const lastErrorCountRef = useRef(0);
 
   const engine = useDevtoolsEngine(stores, maxEvents);
+
+  useEffect(() => {
+    const newErrors = engine.errors.filter((e) => e.id >= lastErrorCountRef.current);
+    if (newErrors.length === 0) return;
+    lastErrorCountRef.current = engine.errors.length > 0
+      ? engine.errors[engine.errors.length - 1].id + 1
+      : 0;
+
+    const newToasts = newErrors.map((err) => ({
+      id: err.id,
+      name: err.entry.name,
+      storeName: err.entry.storeName,
+    }));
+
+    setToasts((prev) => [...prev, ...newToasts].slice(-MAX_TOASTS));
+
+    const timers = newToasts.map((t) =>
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((p) => p.id !== t.id));
+      }, TOAST_DURATION),
+    );
+
+    return () => timers.forEach(clearTimeout);
+  }, [engine.errors]);
+
+  function handleClose() {
+    setOpen(false);
+    setErrorFilter(false);
+  }
+
+  function handleToastClick() {
+    setToasts([]);
+    setErrorFilter(true);
+    setOpen(true);
+  }
+
+  function handleDismissToast(id: number, e: React.MouseEvent) {
+    e.stopPropagation();
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }
 
   useEffect(() => {
     const el = document.createElement("div");
@@ -44,6 +96,9 @@ function CommiqDevtoolsInner({
 
   const positionStyles = getPositionStyles(position);
 
+  const toastPosition = position.startsWith("bottom") ? "bottom" : "top";
+  const toastAlign = position.endsWith("right") ? "right" : "left";
+
   return createPortal(
     <>
       {!open && (
@@ -66,6 +121,11 @@ function CommiqDevtoolsInner({
               {engine.eventCount > 99 ? "99+" : engine.eventCount}
             </span>
           )}
+          {engine.errorCount > 0 && (
+            <span style={styles.triggerErrorBadge}>
+              {engine.errorCount > 99 ? "99+" : engine.errorCount}
+            </span>
+          )}
         </button>
       )}
 
@@ -73,9 +133,41 @@ function CommiqDevtoolsInner({
         <DevtoolsPanel
           engine={engine}
           stores={stores}
-          onClose={() => setOpen(false)}
+          onClose={handleClose}
           initialHeight={panelHeight}
+          initialErrorFilter={errorFilter}
         />
+      )}
+
+      {toasts.length > 0 && (
+        <div
+          style={{
+            ...styles.toastContainer,
+            [toastPosition]: open ? panelHeight + 12 : 76,
+            [toastAlign]: 16,
+          }}
+        >
+          {toasts.map((toast) => (
+            <div
+              key={toast.id}
+              className="commiq-toast"
+              style={styles.toast}
+              onClick={handleToastClick}
+            >
+              <span style={styles.toastIcon}>●</span>
+              <span style={styles.toastText}>
+                <strong>{toast.name}</strong> in {toast.storeName}
+              </span>
+              <span
+                className="commiq-toast-close"
+                style={styles.toastClose}
+                onClick={(e) => handleDismissToast(toast.id, e)}
+              >
+                ✕
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </>,
     portalRef.current,
@@ -135,6 +227,25 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 18,
     height: 18,
     borderRadius: 9999,
+    backgroundColor: colors.accent,
+    color: colors.textInverse,
+    fontSize: 9,
+    fontWeight: 700,
+    fontFamily: fonts.mono,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "0 4px",
+    lineHeight: 1,
+    boxShadow: "0 2px 6px rgba(99, 102, 241, 0.4)",
+  },
+  triggerErrorBadge: {
+    position: "absolute" as const,
+    top: -4,
+    left: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9999,
     backgroundColor: colors.error,
     color: colors.textInverse,
     fontSize: 9,
@@ -146,6 +257,48 @@ const styles: Record<string, CSSProperties> = {
     padding: "0 4px",
     lineHeight: 1,
     boxShadow: "0 2px 6px rgba(248, 113, 113, 0.4)",
+  },
+  toastContainer: {
+    position: "fixed" as const,
+    zIndex: 100000,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 6,
+    pointerEvents: "auto" as const,
+  },
+  toast: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "8px 12px",
+    backgroundColor: colors.bgHeader,
+    border: `1px solid ${colors.error}`,
+    borderRadius: 8,
+    boxShadow: "0 4px 20px rgba(248, 113, 113, 0.25)",
+    cursor: "pointer",
+    minWidth: 220,
+    maxWidth: 360,
+    animation: "commiq-toast-in 0.2s ease-out",
+  },
+  toastIcon: {
+    color: colors.error,
+    fontSize: 10,
+    flexShrink: 0,
+  },
+  toastText: {
+    fontSize: 11,
+    fontFamily: fonts.sans,
+    color: colors.text,
+    flex: 1,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  toastClose: {
+    fontSize: 10,
+    color: colors.textMuted,
+    flexShrink: 0,
+    padding: "0 2px",
   },
 };
 

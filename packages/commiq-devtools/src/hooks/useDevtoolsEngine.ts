@@ -9,6 +9,11 @@ import {
   type DevtoolsMessage,
 } from "@naikidev/commiq-devtools-core";
 
+export type ErrorEntry = {
+  entry: TimelineEntry;
+  id: number;
+}
+
 export type DevtoolsEngine = {
   timeline: TimelineEntry[];
   getChain: (correlationId: string) => TimelineEntry[];
@@ -16,13 +21,21 @@ export type DevtoolsEngine = {
   storeStates: Record<string, unknown>;
   storeNames: string[];
   eventCount: number;
+  errorCount: number;
+  errors: ErrorEntry[];
+  clearErrors: () => void;
   clear: () => void;
 }
+
+const ERROR_EVENTS = new Set(["commandHandlingError", "invalidCommand"]);
 
 type Internals = {
   devtools: ReturnType<typeof createDevtools>;
   transport: Transport & { messages: DevtoolsMessage[] };
   eventCount: number;
+  errorCount: number;
+  errors: ErrorEntry[];
+  nextErrorId: number;
   unsubscribe: (() => void) | null;
 }
 
@@ -41,6 +54,9 @@ export function useDevtoolsEngine(
       devtools,
       transport,
       eventCount: 0,
+      errorCount: 0,
+      errors: [],
+      nextErrorId: 0,
       unsubscribe: null,
     };
   }
@@ -63,8 +79,15 @@ export function useDevtoolsEngine(
   }, [stores, internals.devtools]);
 
   useEffect(() => {
-    const unsub = internals.transport.onMessage(() => {
+    const unsub = internals.transport.onMessage((msg) => {
       internals.eventCount++;
+      if (msg.type === "EVENT" && ERROR_EVENTS.has(msg.entry.name)) {
+        internals.errorCount++;
+        internals.errors = [
+          ...internals.errors,
+          { entry: msg.entry, id: internals.nextErrorId++ },
+        ];
+      }
       setVersion((v) => v + 1);
     });
     internals.unsubscribe = unsub;
@@ -81,6 +104,12 @@ export function useDevtoolsEngine(
     [internals.devtools],
   );
 
+  const clearErrors = useCallback(() => {
+    internals.errorCount = 0;
+    internals.errors = [];
+    setVersion((v) => v + 1);
+  }, [internals]);
+
   const clear = useCallback(() => {
     internals.unsubscribe?.();
     internals.devtools.destroy();
@@ -90,6 +119,9 @@ export function useDevtoolsEngine(
     internals.devtools = devtools;
     internals.transport = transport;
     internals.eventCount = 0;
+    internals.errorCount = 0;
+    internals.errors = [];
+    internals.nextErrorId = 0;
 
     for (const [name, store] of Object.entries(stores)) {
       devtools.connect(store, name);
@@ -115,6 +147,9 @@ export function useDevtoolsEngine(
     ),
     storeNames: Object.keys(stores),
     eventCount: internals.eventCount,
+    errorCount: internals.errorCount,
+    errors: internals.errors,
+    clearErrors,
     clear,
   };
 }

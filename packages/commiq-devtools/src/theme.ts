@@ -85,6 +85,20 @@ export function formatTime(ts: number): string {
   return new Date(ts).toISOString().slice(11, 23);
 }
 
+export function matchesSearch(
+  entry: { name: string; storeName: string; correlationId: string; causedBy?: string | null; data?: unknown },
+  query: string,
+): boolean {
+  if (!query) return true;
+  const lower = query.toLowerCase();
+  if (entry.name.toLowerCase().includes(lower)) return true;
+  if (entry.storeName.toLowerCase().includes(lower)) return true;
+  if (entry.correlationId.toLowerCase().includes(lower)) return true;
+  if (entry.causedBy?.toLowerCase().includes(lower)) return true;
+  if (entry.data !== undefined && JSON.stringify(entry.data).toLowerCase().includes(lower)) return true;
+  return false;
+}
+
 export const sharedStyles = {
   container: {
     display: "flex",

@@ -7,6 +7,8 @@ type FilterToolbarProps = {
   storeFilter: string | null;
   onStoreFilterChange: (value: string | null) => void;
   storeNames: string[];
+  searchQuery?: string;
+  onSearchChange?: (value: string) => void;
   extraLeft?: ReactNode;
   trailing?: ReactNode;
 }
@@ -17,6 +19,8 @@ export function FilterToolbar({
   storeFilter,
   onStoreFilterChange,
   storeNames,
+  searchQuery,
+  onSearchChange,
   extraLeft,
   trailing,
 }: FilterToolbarProps) {
@@ -28,10 +32,14 @@ export function FilterToolbar({
     onShowBuiltinsChange(e.target.checked);
   }
 
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    onSearchChange?.(e.target.value);
+  }
+
   return (
     <div style={styles.toolbar}>
       <div style={styles.toolbarLeft}>
-        <label style={styles.checkLabel}>
+        <label className="commiq-check" style={styles.checkLabel}>
           <input
             type="checkbox"
             checked={showBuiltins}
@@ -42,6 +50,7 @@ export function FilterToolbar({
         </label>
 
         <select
+          className="commiq-select"
           value={storeFilter ?? "__all__"}
           onChange={handleStoreChange}
           style={styles.select}
@@ -53,6 +62,17 @@ export function FilterToolbar({
             </option>
           ))}
         </select>
+
+        {onSearchChange && (
+          <input
+            className="commiq-input"
+            type="text"
+            value={searchQuery ?? ""}
+            onChange={handleSearchChange}
+            placeholder="Search events…"
+            style={styles.searchInput}
+          />
+        )}
 
         {extraLeft}
       </div>
@@ -104,5 +124,16 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.sans,
     outline: "none",
     cursor: "pointer",
+  },
+  searchInput: {
+    fontSize: 11,
+    backgroundColor: colors.bgInput,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    padding: "3px 8px",
+    fontFamily: fonts.sans,
+    outline: "none",
+    width: 160,
   },
 };

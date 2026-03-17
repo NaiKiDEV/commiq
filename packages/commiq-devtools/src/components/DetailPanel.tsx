@@ -33,7 +33,7 @@ export function DetailPanel({
       </div>
       <div style={styles.header}>
         <span style={styles.title}>{event.name}</span>
-        <button onClick={onClose} style={styles.close}>
+        <button className="commiq-close-btn" onClick={onClose} style={styles.close}>
           ✕
         </button>
       </div>

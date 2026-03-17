@@ -29,6 +29,7 @@ type StoreStats = {
 
 export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"total" | "avg" | "max" | "count">(
     "total",
   );
@@ -126,9 +127,16 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
     }
 
     const result = [...statsMap.values()];
-    if (storeFilter) return result.filter((s) => s.storeName === storeFilter);
-    return result;
-  }, [timeline, storeNames, storeFilter, sortBy]);
+    const filtered = storeFilter ? result.filter((s) => s.storeName === storeFilter) : result;
+    if (!searchQuery) return filtered;
+    const lower = searchQuery.toLowerCase();
+    return filtered
+      .map((s) => ({
+        ...s,
+        commands: s.commands.filter((c) => c.name.toLowerCase().includes(lower)),
+      }))
+      .filter((s) => s.commands.length > 0);
+  }, [timeline, storeNames, storeFilter, sortBy, searchQuery]);
 
   const globalMax = useMemo(() => {
     let max = 0;
@@ -144,6 +152,10 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
     setStoreFilter(e.target.value === "__all__" ? null : e.target.value);
   }
 
+  function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setSearchQuery(e.target.value);
+  }
+
   function handleSortChange(e: React.ChangeEvent<HTMLSelectElement>) {
     setSortBy(e.target.value as typeof sortBy);
   }
@@ -152,6 +164,7 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
     <div style={sharedStyles.container}>
       <div style={styles.toolbar}>
         <select
+          className="commiq-select"
           value={storeFilter ?? "__all__"}
           onChange={handleStoreChange}
           style={styles.select}
@@ -164,8 +177,18 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
           ))}
         </select>
 
+        <input
+          className="commiq-input"
+          type="text"
+          value={searchQuery}
+          onChange={handleSearchChange}
+          placeholder="Search commands…"
+          style={styles.searchInput}
+        />
+
         <span style={styles.sortLabel}>Sort by</span>
         <select
+          className="commiq-select"
           value={sortBy}
           onChange={handleSortChange}
           style={styles.select}
@@ -326,6 +349,17 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.sans,
     outline: "none",
     cursor: "pointer",
+  },
+  searchInput: {
+    fontSize: 11,
+    backgroundColor: colors.bgInput,
+    color: colors.text,
+    border: `1px solid ${colors.border}`,
+    borderRadius: 4,
+    padding: "3px 8px",
+    fontFamily: fonts.sans,
+    outline: "none",
+    width: 160,
   },
   sortLabel: {
     fontSize: 11,

@@ -89,12 +89,13 @@ function CollapsibleNode({
   return (
     <span>
       <span
+        className="commiq-json-toggle"
         onClick={() => setExpanded(!expanded)}
         style={styles.toggle}
         role="button"
         tabIndex={0}
       >
-        <span style={styles.chevron}>{expanded ? "▼" : "▶"}</span>
+        <span className="commiq-expand" style={styles.chevron}>{expanded ? "▼" : "▶"}</span>
         {!expanded && (
           <span style={styles.bracket}>
             {bracketOpen}

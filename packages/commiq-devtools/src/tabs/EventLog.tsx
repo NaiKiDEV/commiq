@@ -7,34 +7,49 @@ import {
   getEventColor,
   truncId,
   formatTime,
+  matchesSearch,
   sharedStyles,
 } from "../theme";
 import { FilterToolbar } from "../components/FilterToolbar";
 import { DetailRow } from "../components/DetailPanel";
 import { JsonTree } from "../components/JsonTree";
 import { StateDiff } from "../components/StateDiff";
+import { entryKey, type PinActions } from "../types";
+
+const ERROR_EVENT_NAMES = new Set(["commandHandlingError", "invalidCommand"]);
 
 type EventLogProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
   onSelectCorrelation?: (id: string) => void;
+  errorFilter?: boolean;
+  onClearErrorFilter?: () => void;
+  pinActions?: PinActions;
 }
 
 export function EventLog({
   timeline,
   storeNames,
   onSelectCorrelation,
+  errorFilter = false,
+  onClearErrorFilter,
+  pinActions,
 }: EventLogProps) {
   const [showBuiltins, setShowBuiltins] = useState(true);
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [pinnedOnly, setPinnedOnly] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const filtered = timeline.filter((entry) => {
+    if (pinnedOnly && pinActions && !pinActions.pinnedKeys.has(entryKey(entry))) return false;
+    if (errorFilter && !ERROR_EVENT_NAMES.has(entry.name)) return false;
     if (!showBuiltins && BUILTIN_EVENTS.has(entry.name)) return false;
     if (storeFilter && entry.storeName !== storeFilter) return false;
+    if (!matchesSearch(entry, searchQuery)) return false;
     return true;
   });
 
@@ -45,12 +60,21 @@ export function EventLog({
   }, [filtered.length, autoScroll]);
 
   function toggleExpand(entry: TimelineEntry) {
-    const key = `${entry.correlationId}-${entry.timestamp}`;
+    const key = entryKey(entry);
     setExpandedId(expandedId === key ? null : key);
   }
 
   function handleAutoScrollChange(e: React.ChangeEvent<HTMLInputElement>) {
     setAutoScroll(e.target.checked);
+  }
+
+  function handlePinnedOnlyChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setPinnedOnly(e.target.checked);
+  }
+
+  function handleTogglePin(entry: TimelineEntry, e: React.MouseEvent) {
+    e.stopPropagation();
+    pinActions?.onTogglePin(entryKey(entry));
   }
 
   return (
@@ -61,19 +85,46 @@ export function EventLog({
         storeFilter={storeFilter}
         onStoreFilterChange={setStoreFilter}
         storeNames={storeNames}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
         extraLeft={
-          <label style={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={autoScroll}
-              onChange={handleAutoScrollChange}
-              style={styles.checkbox}
-            />
-            Auto-scroll
-          </label>
+          <>
+            <label className="commiq-check" style={styles.checkLabel}>
+              <input
+                type="checkbox"
+                checked={autoScroll}
+                onChange={handleAutoScrollChange}
+                style={styles.checkbox}
+              />
+              Auto-scroll
+            </label>
+            {pinActions && pinActions.pinnedKeys.size > 0 && (
+              <label className="commiq-check" style={styles.checkLabel}>
+                <input
+                  type="checkbox"
+                  checked={pinnedOnly}
+                  onChange={handlePinnedOnlyChange}
+                  style={styles.checkbox}
+                />
+                Pinned ({pinActions.pinnedKeys.size})
+              </label>
+            )}
+          </>
         }
         trailing={
-          <span style={styles.eventCount}>{filtered.length} events</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {errorFilter && (
+              <button
+                className="commiq-error-pill"
+                onClick={onClearErrorFilter}
+                style={styles.errorFilterBadge}
+                title="Showing errors only — click to clear"
+              >
+                ✕ errors only
+              </button>
+            )}
+            <span style={styles.eventCount}>{filtered.length} events</span>
+          </div>
         }
       />
 
@@ -87,19 +138,35 @@ export function EventLog({
         )}
 
         {filtered.map((entry, i) => {
-          const key = `${entry.correlationId}-${entry.timestamp}`;
+          const key = entryKey(entry);
           const isExpanded = expandedId === key;
+          const isPinned = pinActions?.pinnedKeys.has(key) ?? false;
           const ec = getEventColor(entry.name, entry.type);
 
           return (
             <div key={`${key}-${i}`}>
               <div
+                className={`commiq-row${isExpanded ? " selected" : ""}`}
                 style={{
                   ...styles.row,
+                  ...(isPinned ? styles.rowPinned : {}),
                   ...(isExpanded ? styles.rowSelected : {}),
                 }}
                 onClick={() => toggleExpand(entry)}
               >
+                {pinActions && (
+                  <span
+                    className="commiq-pin"
+                    style={{
+                      ...styles.pinButton,
+                      ...(isPinned ? styles.pinButtonActive : {}),
+                    }}
+                    onClick={(e) => handleTogglePin(entry, e)}
+                    title={isPinned ? "Unpin" : "Pin"}
+                  >
+                    ●
+                  </span>
+                )}
                 <span style={styles.time}>{formatTime(entry.timestamp)}</span>
 
                 <span
@@ -124,6 +191,7 @@ export function EventLog({
 
                 <span style={styles.corrId}>
                   <span
+                    className="commiq-link"
                     onClick={(e) => {
                       e.stopPropagation();
                       onSelectCorrelation?.(entry.correlationId);
@@ -138,6 +206,7 @@ export function EventLog({
                   <span style={styles.causedBy}>
                     ←{" "}
                     <span
+                      className="commiq-link"
                       onClick={(e) => {
                         e.stopPropagation();
                         onSelectCorrelation?.(entry.causedBy!);
@@ -149,7 +218,7 @@ export function EventLog({
                   </span>
                 )}
 
-                <span style={styles.expandIcon}>{isExpanded ? "▼" : "▶"}</span>
+                <span className="commiq-expand" style={styles.expandIcon}>{isExpanded ? "▼" : "▶"}</span>
               </div>
 
               {isExpanded && (
@@ -229,6 +298,21 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.mono,
     whiteSpace: "nowrap" as const,
   },
+  errorFilterBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 10,
+    fontFamily: fonts.mono,
+    fontWeight: 600,
+    color: colors.error,
+    backgroundColor: colors.errorBg,
+    padding: "2px 8px",
+    borderRadius: 9999,
+    borderWidth: 0,
+    cursor: "pointer",
+    whiteSpace: "nowrap" as const,
+  },
   scrollArea: {
     flex: 1,
     overflowY: "auto" as const,
@@ -240,14 +324,31 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
     padding: "5px 12px",
     borderBottom: `1px solid ${colors.borderLight}`,
+    borderLeft: "2px solid transparent",
     cursor: "pointer",
-    transition: "background-color 0.1s",
+    transition: "background-color 0.1s, border-color 0.1s",
     fontSize: 11,
     fontFamily: fonts.sans,
+  },
+  rowPinned: {
+    borderLeftColor: colors.accent,
+    backgroundColor: "rgba(99, 102, 241, 0.05)",
   },
   rowSelected: {
     backgroundColor: colors.bgSelected,
     borderBottom: `1px solid ${colors.borderSelected}`,
+  },
+  pinButton: {
+    fontSize: 8,
+    color: colors.textMuted,
+    cursor: "pointer",
+    flexShrink: 0,
+    width: 14,
+    textAlign: "center" as const,
+    transition: "color 0.1s",
+  },
+  pinButtonActive: {
+    color: colors.accent,
   },
   time: {
     fontFamily: fonts.mono,
@@ -302,9 +403,6 @@ const styles: Record<string, CSSProperties> = {
     borderBottom: `1px solid ${colors.border}`,
   },
   detailGrid: {
-    display: "grid",
-    gridTemplateColumns: "120px 1fr",
-    gap: "4px 12px",
     marginBottom: 8,
   },
   detailSection: {

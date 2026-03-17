@@ -7,15 +7,17 @@ import {
   getEventColor,
   truncId,
   formatTime,
+  matchesSearch,
   sharedStyles,
 } from "../theme";
 import { FilterToolbar } from "../components/FilterToolbar";
 import { DetailPanel } from "../components/DetailPanel";
-import { getCommandFromEntry } from "../types";
+import { getCommandFromEntry, entryKey, type PinActions } from "../types";
 
 type CausalityGraphProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
+  pinActions?: PinActions;
 }
 
 type CommandGroup = {
@@ -27,9 +29,10 @@ type CommandGroup = {
   timestamp: number;
 }
 
-export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
+export function CausalityGraph({ timeline, storeNames, pinActions }: CausalityGraphProps) {
   const [showBuiltins, setShowBuiltins] = useState(true);
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(
     null,
   );
@@ -38,9 +41,9 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
 
   const filteredChains = useMemo(() => {
     return chains
-      .map((chain) => filterChain(chain, showBuiltins, storeFilter))
+      .map((chain) => filterChain(chain, showBuiltins, storeFilter, searchQuery))
       .filter(Boolean) as CommandGroup[];
-  }, [chains, showBuiltins, storeFilter]);
+  }, [chains, showBuiltins, storeFilter, searchQuery]);
 
   return (
     <div style={sharedStyles.container}>
@@ -50,6 +53,8 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
         storeFilter={storeFilter}
         onStoreFilterChange={setStoreFilter}
         storeNames={storeNames}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
         trailing={
           <span style={styles.chainCount}>{filteredChains.length} chains</span>
         }
@@ -72,6 +77,7 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
             selectedEvent={selectedEvent}
             onSelectEvent={setSelectedEvent}
             showBuiltins={showBuiltins}
+            pinActions={pinActions}
           />
         ))}
       </div>
@@ -92,12 +98,14 @@ function ChainNode({
   selectedEvent,
   onSelectEvent,
   showBuiltins,
+  pinActions,
 }: {
   group: CommandGroup;
   depth: number;
   selectedEvent: TimelineEntry | null;
   onSelectEvent: (e: TimelineEntry) => void;
   showBuiltins: boolean;
+  pinActions?: PinActions;
 }) {
   const [expanded, setExpanded] = useState(depth < 2);
 
@@ -109,8 +117,8 @@ function ChainNode({
 
   return (
     <div style={isRoot ? styles.chain : styles.chainNested}>
-      <div style={styles.chainHeader} onClick={() => setExpanded(!expanded)}>
-        <span style={styles.chainChevron}>{expanded ? "▼" : "▶"}</span>
+      <div className="commiq-chain-header" style={styles.chainHeader} onClick={() => setExpanded(!expanded)}>
+        <span className="commiq-expand" style={styles.chainChevron}>{expanded ? "▼" : "▶"}</span>
 
         <span style={styles.chainName}>{group.commandName}</span>
 
@@ -135,16 +143,34 @@ function ChainNode({
             const ec = getEventColor(entry.name, entry.type);
             const isSelected =
               selectedEvent?.correlationId === entry.correlationId;
+            const isPinned = pinActions?.pinnedKeys.has(entryKey(entry)) ?? false;
 
             return (
               <div
                 key={`${entry.correlationId}-${i}`}
+                className={`commiq-row${isSelected ? " selected" : ""}`}
                 style={{
                   ...styles.eventNode,
+                  ...(isPinned ? styles.eventNodePinned : {}),
                   ...(isSelected ? styles.eventNodeSelected : {}),
                 }}
                 onClick={() => onSelectEvent(entry)}
               >
+                {pinActions && (
+                  <span
+                    className="commiq-pin"
+                    style={{
+                      ...styles.pinButton,
+                      ...(isPinned ? styles.pinButtonActive : {}),
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      pinActions.onTogglePin(entryKey(entry));
+                    }}
+                  >
+                    ●
+                  </span>
+                )}
                 <span
                   style={{
                     ...styles.eventDot,
@@ -179,6 +205,7 @@ function ChainNode({
               selectedEvent={selectedEvent}
               onSelectEvent={onSelectEvent}
               showBuiltins={showBuiltins}
+              pinActions={pinActions}
             />
           ))}
         </div>
@@ -253,14 +280,16 @@ function filterChain(
   chain: CommandGroup,
   showBuiltins: boolean,
   storeFilter: string | null,
+  searchQuery: string,
 ): CommandGroup | null {
   const filteredChildren = chain.children
-    .map((c) => filterChain(c, showBuiltins, storeFilter))
+    .map((c) => filterChain(c, showBuiltins, storeFilter, searchQuery))
     .filter(Boolean) as CommandGroup[];
 
   const visibleEvents = chain.events.filter((e) => {
     if (!showBuiltins && BUILTIN_EVENTS.has(e.name)) return false;
     if (storeFilter && e.storeName !== storeFilter) return false;
+    if (!matchesSearch(e, searchQuery)) return false;
     return true;
   });
 
@@ -340,14 +369,31 @@ const styles: Record<string, CSSProperties> = {
     alignItems: "center",
     gap: 6,
     padding: "3px 10px",
+    borderLeft: "2px solid transparent",
     cursor: "pointer",
     borderRadius: 3,
     fontSize: 11,
     fontFamily: fonts.sans,
-    transition: "background-color 0.1s",
+    transition: "background-color 0.1s, border-color 0.1s",
+  },
+  eventNodePinned: {
+    borderLeftColor: colors.accent,
+    backgroundColor: "rgba(99, 102, 241, 0.05)",
   },
   eventNodeSelected: {
     backgroundColor: colors.bgSelected,
+  },
+  pinButton: {
+    fontSize: 8,
+    color: colors.textMuted,
+    cursor: "pointer",
+    flexShrink: 0,
+    width: 14,
+    textAlign: "center" as const,
+    transition: "color 0.1s",
+  },
+  pinButtonActive: {
+    color: colors.accent,
   },
   eventDot: {
     width: 6,
