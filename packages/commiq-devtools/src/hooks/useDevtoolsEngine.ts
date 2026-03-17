@@ -23,6 +23,7 @@ export type DevtoolsEngine = {
   eventCount: number;
   errorCount: number;
   errors: ErrorEntry[];
+  clearCount: number;
   clearErrors: () => void;
   clear: () => void;
 }
@@ -36,6 +37,7 @@ type Internals = {
   errorCount: number;
   errors: ErrorEntry[];
   nextErrorId: number;
+  clearCount: number;
   unsubscribe: (() => void) | null;
 }
 
@@ -57,6 +59,7 @@ export function useDevtoolsEngine(
       errorCount: 0,
       errors: [],
       nextErrorId: 0,
+      clearCount: 0,
       unsubscribe: null,
     };
   }
@@ -80,8 +83,9 @@ export function useDevtoolsEngine(
 
   useEffect(() => {
     const unsub = internals.transport.onMessage((msg) => {
+      if (msg.type !== "EVENT") return;
       internals.eventCount++;
-      if (msg.type === "EVENT" && ERROR_EVENTS.has(msg.entry.name)) {
+      if (ERROR_EVENTS.has(msg.entry.name)) {
         internals.errorCount++;
         internals.errors = [
           ...internals.errors,
@@ -122,16 +126,25 @@ export function useDevtoolsEngine(
     internals.errorCount = 0;
     internals.errors = [];
     internals.nextErrorId = 0;
+    internals.clearCount++;
+
+    const unsub = transport.onMessage((msg) => {
+      if (msg.type !== "EVENT") return;
+      internals.eventCount++;
+      if (ERROR_EVENTS.has(msg.entry.name)) {
+        internals.errorCount++;
+        internals.errors = [
+          ...internals.errors,
+          { entry: msg.entry, id: internals.nextErrorId++ },
+        ];
+      }
+      setVersion((v) => v + 1);
+    });
+    internals.unsubscribe = unsub;
 
     for (const [name, store] of Object.entries(stores)) {
       devtools.connect(store, name);
     }
-
-    const unsub = transport.onMessage(() => {
-      internals.eventCount++;
-      setVersion((v) => v + 1);
-    });
-    internals.unsubscribe = unsub;
 
     setVersion((v) => v + 1);
   }, [internals, stores, maxEvents]);
@@ -149,6 +162,7 @@ export function useDevtoolsEngine(
     eventCount: internals.eventCount,
     errorCount: internals.errorCount,
     errors: internals.errors,
+    clearCount: internals.clearCount,
     clearErrors,
     clear,
   };

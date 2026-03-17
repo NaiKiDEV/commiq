@@ -33,6 +33,12 @@ function CommiqDevtoolsInner({
   const engine = useDevtoolsEngine(stores, maxEvents);
 
   useEffect(() => {
+    lastErrorCountRef.current = 0;
+    setToasts([]);
+    setErrorFilter(false);
+  }, [engine.clearCount]);
+
+  useEffect(() => {
     const newErrors = engine.errors.filter((e) => e.id >= lastErrorCountRef.current);
     if (newErrors.length === 0) return;
     lastErrorCountRef.current = engine.errors.length > 0

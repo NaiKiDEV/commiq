@@ -1,6 +1,7 @@
 import {
   useState,
   useRef,
+  useEffect,
   useCallback,
   useMemo,
   type CSSProperties,
@@ -52,6 +53,12 @@ export function DevtoolsPanel({
     TimelineEntry[] | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setErrorFilter(false);
+    setPinnedKeys(new Set());
+    setImportedTimeline(null);
+  }, [engine.clearCount]);
 
   const { height: panelHeight, isDragging: isPanelDragging, onMouseDown } = useResizable({
     initial: initialHeight,
@@ -221,7 +228,7 @@ export function DevtoolsPanel({
         </div>
       </div>
 
-      <div style={styles.content} className="commiq-devtools-scroll">
+      <div key={engine.clearCount} style={styles.content} className="commiq-devtools-scroll">
         {activeTab === "events" && (
           <EventLog
             timeline={activeTimeline}
