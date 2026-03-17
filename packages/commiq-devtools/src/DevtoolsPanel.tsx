@@ -251,7 +251,7 @@ export function DevtoolsPanel({
           />
         )}
         {activeTab === "state" && (
-          <StoreStateView stores={stores} storeStates={engine.storeStates} />
+          <StoreStateView stores={stores} storeStates={engine.storeStates} getStateHistory={engine.getStateHistory} />
         )}
         {activeTab === "deps" && (
           <DependencyMap
