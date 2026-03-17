@@ -12,39 +12,19 @@ import {
   StreamListener,
   createEvent,
 } from "./types";
+import {
+  BuiltinEvent,
+  RESERVED_COMMAND_CONTEXT_KEYS,
+  RESERVED_EVENT_CONTEXT_KEYS,
+} from "./constants";
+import { runSafe } from "./run-safe";
 
-let _causalContext: string | null = null;
-export const BuiltinEventName = {
-  StateChanged: "stateChanged",
-  CommandHandled: "commandHandled",
-  CommandStarted: "commandStarted",
-  InvalidCommand: "invalidCommand",
-  CommandHandlingError: "commandHandlingError",
-  StateReset: "stateReset",
-  CommandInterrupted: "commandInterrupted",
-} as const;
-
-export const BuiltinEvent = {
-  StateChanged: createEvent<{ prev: unknown; next: unknown }>(BuiltinEventName.StateChanged),
-  CommandHandled: createEvent<{ command: Command }>(BuiltinEventName.CommandHandled),
-  CommandStarted: createEvent<{ command: Command }>(BuiltinEventName.CommandStarted),
-  InvalidCommand: createEvent<{ command: Command }>(BuiltinEventName.InvalidCommand),
-  CommandHandlingError: createEvent<{ command: Command; error: unknown }>(
-    BuiltinEventName.CommandHandlingError,
-  ),
-  StateReset: createEvent(BuiltinEventName.StateReset),
-  CommandInterrupted: createEvent<{ command: Command; phase: "queued" | "running" }>(
-    BuiltinEventName.CommandInterrupted,
-  ),
-} as const;
-
-const RESERVED_COMMAND_CONTEXT_KEYS = new Set(["state", "setState", "emit", "signal"]);
-const RESERVED_EVENT_CONTEXT_KEYS = new Set(["state", "queue"]);
+const _causalStack: string[] = [];
 
 type HandlerEntry<S> = {
   handler: CommandHandler<S>;
   options?: CommandHandlerOptions;
-}
+};
 
 export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _state: S;
@@ -57,6 +37,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _currentCorrelationId: string | null = null;
   private _interruptControllers = new Map<string, AbortController>();
   private _contextExtensions: ContextExtensionDef<S>[] = [];
+  private _pendingEvents: StoreEvent[] = [];
   private _active = false;
 
   constructor(initialState: S) {
@@ -81,11 +62,11 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     if (next === this._state) return;
     const prev = this._state;
     this._state = next;
-    void this._broadcast(
+    this._notifyStreamListeners(
       this._createEvent(BuiltinEvent.StateChanged, { prev, next }),
     );
-    void this._broadcast(
-      this._createEvent(BuiltinEvent.StateReset, undefined as void),
+    this._notifyStreamListeners(
+      this._createEvent<void>(BuiltinEvent.StateReset, undefined),
     );
   }
 
@@ -101,7 +82,10 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     return this;
   }
 
-  addEventHandler<D>(eventDef: EventDef<D>, handler: EventHandler<S, D, Ctx>): this {
+  addEventHandler<D>(
+    eventDef: EventDef<D>,
+    handler: EventHandler<S, D, Ctx>,
+  ): this {
     const handlers = this._eventHandlers.get(eventDef.id) ?? [];
     handlers.push(handler as EventHandler<S>);
     this._eventHandlers.set(eventDef.id, handlers);
@@ -110,9 +94,16 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
   queue(command: Command): void {
     this._active = true;
+    this._enqueue(command, _causalStack[_causalStack.length - 1] ?? null);
+    if (!this._processing) {
+      this._processQueue();
+    }
+  }
+
+  private _enqueue(command: Command, fallbackCausedBy: string | null): void {
     command.correlationId = nanoid();
     command.causedBy =
-      this._currentCorrelationId ?? command.causedBy ?? _causalContext;
+      this._currentCorrelationId ?? command.causedBy ?? fallbackCausedBy;
 
     const entry = this._commandHandlers.get(command.name);
     if (entry?.options?.interruptable) {
@@ -125,9 +116,12 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
         return true;
       });
       for (const cmd of removed) {
-        this._broadcastSync(
-          this._createEvent(BuiltinEvent.CommandInterrupted, { command: cmd, phase: "queued" as const }),
-        );
+        const event = this._createEvent(BuiltinEvent.CommandInterrupted, {
+          command: cmd,
+          phase: "queued" as const,
+        });
+        this._pendingEvents.push(event);
+        this._notifyStreamListeners(event);
       }
 
       const existing = this._interruptControllers.get(command.name);
@@ -137,9 +131,6 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     }
 
     this._queue.push(command);
-    if (!this._processing) {
-      this._processQueue();
-    }
   }
 
   flush(): Promise<void> {
@@ -170,14 +161,19 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     };
   }
 
-  private _applyCommandExtensions(ctx: CommandContext<S>, command: Command): void {
+  private _applyCommandExtensions(
+    ctx: CommandContext<S>,
+    command: Command,
+  ): void {
     const claimed = new Set<string>();
     for (const ext of this._contextExtensions) {
       if (!ext.command) continue;
       const props = ext.command(ctx, command);
       for (const key of Object.keys(props)) {
         if (RESERVED_COMMAND_CONTEXT_KEYS.has(key) || claimed.has(key)) {
-          throw new Error(`Context extension key "${key}" conflicts with existing context property`);
+          throw new Error(
+            `Context extension key "${key}" conflicts with existing context property`,
+          );
         }
         claimed.add(key);
       }
@@ -192,7 +188,9 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
       const props = ext.event(ctx, event);
       for (const key of Object.keys(props)) {
         if (RESERVED_EVENT_CONTEXT_KEYS.has(key) || claimed.has(key)) {
-          throw new Error(`Context extension key "${key}" conflicts with existing context property`);
+          throw new Error(
+            `Context extension key "${key}" conflicts with existing context property`,
+          );
         }
         claimed.add(key);
       }
@@ -203,141 +201,168 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private async _processQueue(): Promise<void> {
     this._processing = true;
 
-    while (this._queue.length > 0) {
-      const command = this._queue.shift()!;
-      this._currentCorrelationId = command.correlationId;
-      const entry = this._commandHandlers.get(command.name);
+    try {
+      while (this._queue.length > 0) {
+        await this._drainPendingEvents();
+        await this._processNextCommand();
+      }
+    } finally {
+      this._processing = false;
+      this._currentCorrelationId = null;
 
-      if (!entry) {
-        await this._broadcast(
+      const resolvers = this._flushResolvers.splice(0);
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+  }
+
+  private async _drainPendingEvents(): Promise<void> {
+    if (this._pendingEvents.length === 0) return;
+    const pending = this._pendingEvents.splice(0);
+    for (const event of pending) {
+      await runSafe(() => this._handleEvent(event));
+    }
+  }
+
+  private async _processNextCommand(): Promise<void> {
+    const command = this._queue.shift();
+    if (!command) return;
+    this._currentCorrelationId = command.correlationId;
+    const entry = this._commandHandlers.get(command.name);
+
+    if (!entry) {
+      await runSafe(() =>
+        this._broadcast(
           this._createEvent(BuiltinEvent.InvalidCommand, { command }),
+        ),
+      );
+      this._currentCorrelationId = null;
+      return;
+    }
+
+    await runSafe(() =>
+      this._broadcast(
+        this._createEvent(BuiltinEvent.CommandStarted, { command }),
+      ),
+    );
+
+    const collectedEvents: StoreEvent[] = [];
+    const prevState = this._state;
+    const isInterruptable = entry.options?.interruptable === true;
+    const shouldRollback =
+      isInterruptable && entry.options?.rollbackOnInterrupt === true;
+
+    let abortController: AbortController | undefined;
+    if (isInterruptable) {
+      const existing = this._interruptControllers.get(command.name);
+      if (existing) {
+        existing.abort();
+      }
+      abortController = new AbortController();
+      this._interruptControllers.set(command.name, abortController);
+    }
+
+    const ctx: CommandContext<S> = {
+      state: this._state,
+      setState: (next: S) => {
+        this._state = next;
+        ctx.state = next;
+      },
+      emit: <D>(eventDef: EventDef<D>, data: D) => {
+        collectedEvents.push(this._createEvent(eventDef, data));
+      },
+      signal: abortController?.signal,
+    };
+
+    try {
+      this._applyCommandExtensions(ctx, command);
+      await entry.handler(ctx, command);
+
+      if (isInterruptable && abortController?.signal.aborted) {
+        if (shouldRollback) {
+          this._state = prevState;
+        }
+        await this._broadcast(
+          this._createEvent(BuiltinEvent.CommandInterrupted, {
+            command,
+            phase: "running" as const,
+          }),
         );
-        this._currentCorrelationId = null;
-        continue;
+        return;
+      }
+
+      if (this._state !== prevState) {
+        await this._broadcast(
+          this._createEvent(BuiltinEvent.StateChanged, {
+            prev: prevState,
+            next: this._state,
+          }),
+        );
+      }
+
+      for (const event of collectedEvents) {
+        await this._broadcast(event);
       }
 
       await this._broadcast(
-        this._createEvent(BuiltinEvent.CommandStarted, { command }),
+        this._createEvent(BuiltinEvent.CommandHandled, { command }),
       );
 
-      const collectedEvents: StoreEvent[] = [];
-      const prevState = this._state;
-      const isInterruptable = entry.options?.interruptable === true;
-
-      let abortController: AbortController | undefined;
-      if (isInterruptable) {
-        const existing = this._interruptControllers.get(command.name);
-        if (existing) {
-          existing.abort();
-        }
-        abortController = new AbortController();
-        this._interruptControllers.set(command.name, abortController);
-      }
-
-      const ctx: CommandContext<S> = {
-        state: this._state,
-        setState: (next: S) => {
-          this._state = next;
-          ctx.state = next;
-        },
-        emit: <D>(eventDef: EventDef<D>, data: D) => {
-          collectedEvents.push(this._createEvent(eventDef, data));
-        },
-        signal: abortController?.signal,
-      };
-
-      try {
-        this._applyCommandExtensions(ctx, command);
-        await entry.handler(ctx, command);
-
-        if (isInterruptable && abortController!.signal.aborted) {
-          await this._broadcast(
-            this._createEvent(BuiltinEvent.CommandInterrupted, { command, phase: "running" as const }),
-          );
-          if (isInterruptable) this._interruptControllers.delete(command.name);
-          this._currentCorrelationId = null;
-          continue;
-        }
-
-        if (this._state !== prevState) {
-          await this._broadcast(
-            this._createEvent(BuiltinEvent.StateChanged, {
-              prev: prevState,
-              next: this._state,
-            }),
-          );
-        }
-
-        for (const event of collectedEvents) {
-          await this._broadcast(event);
-        }
-
-        await this._broadcast(
-          this._createEvent(BuiltinEvent.CommandHandled, { command }),
+      if (entry.options?.notify) {
+        const notifyEventDef = createEvent<{ command: Command }>(
+          `${command.name}:handled`,
         );
-
-        if (entry.options?.notify) {
-          const notifyEventDef = createEvent<{ command: Command }>(
-            `${command.name}:handled`,
-          );
-          await this._broadcast(this._createEvent(notifyEventDef, { command }));
+        await this._broadcast(this._createEvent(notifyEventDef, { command }));
+      }
+    } catch (error) {
+      if (isInterruptable && abortController?.signal.aborted) {
+        if (shouldRollback) {
+          this._state = prevState;
         }
-      } catch (error) {
-        if (isInterruptable && abortController!.signal.aborted) {
-          await this._broadcast(
-            this._createEvent(BuiltinEvent.CommandInterrupted, { command, phase: "running" as const }),
-          );
-        } else {
-          await this._broadcast(
+        await runSafe(() =>
+          this._broadcast(
+            this._createEvent(BuiltinEvent.CommandInterrupted, {
+              command,
+              phase: "running" as const,
+            }),
+          ),
+        );
+      } else {
+        await runSafe(() =>
+          this._broadcast(
             this._createEvent(BuiltinEvent.CommandHandlingError, {
               command,
               error,
             }),
-          );
-        }
-      } finally {
-        for (const ext of this._contextExtensions) {
-          if (ext.afterCommand) {
-            try {
-              await ext.afterCommand();
-            } catch {
-              // lifecycle hook errors are swallowed
-            }
-          }
-        }
-        if (isInterruptable) this._interruptControllers.delete(command.name);
+          ),
+        );
       }
-
+    } finally {
+      for (const ext of this._contextExtensions) {
+        const hook = ext.afterCommand;
+        if (hook) {
+          await runSafe(() => hook());
+        }
+      }
+      if (isInterruptable) this._interruptControllers.delete(command.name);
       this._currentCorrelationId = null;
-    }
-
-    this._processing = false;
-
-    const resolvers = this._flushResolvers.splice(0);
-    for (const resolve of resolvers) {
-      resolve();
     }
   }
 
-  private _broadcastSync(event: StoreEvent): void {
-    const prevCausalContext = _causalContext;
-    _causalContext = event.correlationId;
-    for (const listener of this._streamListeners) {
-      listener(event);
+  private _notifyStreamListeners(event: StoreEvent): void {
+    _causalStack.push(event.correlationId);
+    try {
+      for (const listener of this._streamListeners) {
+        listener(event);
+      }
+    } finally {
+      _causalStack.pop();
     }
-    _causalContext = prevCausalContext;
   }
 
   private async _broadcast(event: StoreEvent): Promise<void> {
-    const prevCausalContext = _causalContext;
-    _causalContext = event.correlationId;
-
-    for (const listener of this._streamListeners) {
-      listener(event);
-    }
-
-    _causalContext = prevCausalContext;
-
+    this._notifyStreamListeners(event);
     await this._handleEvent(event);
   }
 
@@ -351,31 +376,33 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     const eventCtx: EventContext<S> = {
       state: this._state,
       queue: (command: Command) => {
-        command.correlationId = nanoid();
-        command.causedBy = this._currentCorrelationId;
-        this._queue.push(command);
+        this._enqueue(command, null);
       },
     };
 
     this._applyEventExtensions(eventCtx, event);
 
-    try {
-      for (const handler of handlers) {
+    let firstError: unknown;
+    for (const handler of handlers) {
+      try {
         await handler(eventCtx, event);
+      } catch (error) {
+        firstError ??= error;
       }
-    } finally {
-      for (const ext of this._contextExtensions) {
-        if (ext.afterEvent) {
-          try {
-            await ext.afterEvent();
-          } catch {
-            // lifecycle hook errors are swallowed
-          }
-        }
+    }
+
+    for (const ext of this._contextExtensions) {
+      const hook = ext.afterEvent;
+      if (hook) {
+        await runSafe(() => hook());
       }
     }
 
     this._currentCorrelationId = prevCorrelationId;
+
+    if (firstError !== undefined) {
+      throw firstError;
+    }
   }
 }
 

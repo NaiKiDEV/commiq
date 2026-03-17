@@ -107,6 +107,76 @@ describe("events", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("runs all event handlers even when one throws", async () => {
+    const testEvent = createEvent("test");
+    const handlerCalls: string[] = [];
+
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("fire", (ctx) => {
+      ctx.emit(testEvent, undefined);
+    });
+    store.addEventHandler(testEvent, () => {
+      handlerCalls.push("first");
+      throw new Error("handler error");
+    });
+    store.addEventHandler(testEvent, () => {
+      handlerCalls.push("second");
+    });
+
+    const errors: unknown[] = [];
+    store.openStream((event) => {
+      if (event.id === BuiltinEvent.CommandHandlingError.id) {
+        errors.push((event.data as { error: unknown }).error);
+      }
+    });
+
+    store.queue(createCommand("fire", undefined));
+    await store.flush();
+
+    expect(handlerCalls).toEqual(["first", "second"]);
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("handler error");
+  });
+
+  it("queue continues processing after event handler error on builtin event", async () => {
+    const store = createStore({ values: [] as string[] });
+
+    store.addEventHandler(BuiltinEvent.CommandStarted, () => {
+      throw new Error("commandStarted handler blew up");
+    });
+
+    store.addCommandHandler<string>("append", (ctx, cmd) => {
+      ctx.setState({ values: [...ctx.state.values, cmd.data] });
+    });
+
+    store.queue(createCommand("append", "a"));
+    store.queue(createCommand("append", "b"));
+    await store.flush();
+
+    expect(store.state.values).toEqual(["a", "b"]);
+  });
+
+  it("flush resolves even when error event handler throws", async () => {
+    const store = createStore({ count: 0 });
+
+    store.addCommandHandler("fail", () => {
+      throw new Error("command error");
+    });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+
+    store.addEventHandler(BuiltinEvent.CommandHandlingError, () => {
+      throw new Error("error handler also blew up");
+    });
+
+    store.queue(createCommand("fail", undefined));
+    store.queue(createCommand("inc", undefined));
+    await store.flush();
+
+    expect(store.state.count).toBe(1);
+  });
+
   it("emits auto-notify event when notify option is true", async () => {
     const listener = vi.fn();
     const store = createStore({ count: 0 });

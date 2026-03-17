@@ -164,6 +164,73 @@ describe("interruptable commands", () => {
     expect(store.state.values).toEqual([1, 2, 3]);
   });
 
+  it("rollbackOnInterrupt restores previous state when aborted", async () => {
+    const store = createStore({ value: "initial" });
+
+    store.addCommandHandler("slow", async (ctx) => {
+      ctx.setState({ value: "partial" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!ctx.signal!.aborted) {
+        ctx.setState({ value: "done" });
+      }
+    }, { interruptable: true, rollbackOnInterrupt: true });
+
+    store.addCommandHandler("noop", () => {});
+
+    store.queue(createCommand("slow", undefined));
+    await new Promise((r) => setTimeout(r, 10));
+    store.queue(createCommand("slow", undefined));
+    await store.flush();
+
+    expect(store.state.value).toBe("done");
+  });
+
+  it("rollbackOnInterrupt restores state when handler throws after abort", async () => {
+    const store = createStore({ value: "initial" });
+    const states: string[] = [];
+
+    store.openStream((event: StoreEvent) => {
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        states.push(store.state.value);
+      }
+    });
+
+    store.addCommandHandler<string>("abortable", async (ctx, cmd) => {
+      ctx.setState({ value: cmd.data });
+      await new Promise((resolve, reject) => {
+        ctx.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        setTimeout(resolve, 100);
+      });
+    }, { interruptable: true, rollbackOnInterrupt: true });
+
+    store.queue(createCommand("abortable", "first"));
+    await new Promise((r) => setTimeout(r, 10));
+    store.queue(createCommand("abortable", "second"));
+    await store.flush();
+
+    expect(states[0]).toBe("initial");
+    expect(store.state.value).toBe("second");
+  });
+
+  it("without rollbackOnInterrupt, partial state persists after interrupt", async () => {
+    const store = createStore({ value: "initial" });
+
+    store.addCommandHandler("slow", async (ctx) => {
+      ctx.setState({ value: "partial" });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!ctx.signal!.aborted) {
+        ctx.setState({ value: "done" });
+      }
+    }, { interruptable: true });
+
+    store.queue(createCommand("slow", undefined));
+    await new Promise((r) => setTimeout(r, 10));
+    store.queue(createCommand("slow", undefined));
+    await store.flush();
+
+    expect(store.state.value).toBe("done");
+  });
+
   it("handler that throws AbortError when aborted emits CommandInterrupted", async () => {
     const store = createStore({ value: "" });
     const events: string[] = [];

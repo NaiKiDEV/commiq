@@ -175,6 +175,52 @@ describe("instrumentation", () => {
     expect(greetStarted.data.command.causedBy).toBe("custom-id");
   });
 
+  it("maintains correct causality with nested cross-store broadcasts", async () => {
+    const eventA = createEvent<string>("eventA");
+    const eventB = createEvent<string>("eventB");
+
+    const storeA = createStore({ a: "" });
+    const storeB = createStore({ b: "" });
+    const storeC = createStore({ c: "" });
+
+    const listenerC = vi.fn();
+
+    storeA.addCommandHandler<string>("cmdA", (ctx, cmd) => {
+      ctx.setState({ a: cmd.data });
+      ctx.emit(eventA, cmd.data);
+    });
+    storeB.addCommandHandler<string>("cmdB", (ctx, cmd) => {
+      ctx.setState({ b: cmd.data });
+      ctx.emit(eventB, cmd.data);
+    });
+    storeC.addCommandHandler<string>("cmdC", (ctx, cmd) => {
+      ctx.setState({ c: cmd.data });
+    });
+
+    storeA.openStream((event) => {
+      if (event.name === "eventA") {
+        storeB.queue(createCommand("cmdB", "fromA"));
+      }
+    });
+    storeB.openStream((event) => {
+      if (event.name === "eventB") {
+        storeC.queue(createCommand("cmdC", "fromB"));
+      }
+    });
+    storeC.openStream(listenerC);
+
+    storeA.queue(createCommand("cmdA", "start"));
+    await storeA.flush();
+    await storeB.flush();
+    await storeC.flush();
+
+    const cmdCStarted = listenerC.mock.calls
+      .map((c) => c[0])
+      .find((e) => e.name === "commandStarted");
+    expect(cmdCStarted).toBeDefined();
+    expect(cmdCStarted.data.command.causedBy).not.toBeNull();
+  });
+
   it("commands queued from outside have causedBy null", async () => {
     const listener = vi.fn();
     const store = createStore({ count: 0 });

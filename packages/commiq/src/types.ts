@@ -53,6 +53,7 @@ export type StreamListener = (event: StoreEvent) => void;
 export type CommandHandlerOptions = {
   notify?: boolean;
   interruptable?: boolean;
+  rollbackOnInterrupt?: boolean;
 }
 
 export type SealedStore<S> = {
