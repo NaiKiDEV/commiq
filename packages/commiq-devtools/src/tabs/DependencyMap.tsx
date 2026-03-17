@@ -7,7 +7,8 @@ import {
   type CSSProperties,
 } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
-import { colors, fonts } from "./theme";
+import { colors, fonts, sharedStyles } from "../theme";
+import { getCommandFromEntry } from "../types";
 
 type DependencyMapProps = {
   timeline: TimelineEntry[];
@@ -25,8 +26,6 @@ const NODE_W = 130;
 const NODE_H = 44;
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 3;
-
-/* ── Force-directed layout helpers ──────────────────────────────── */
 
 type Vec = { x: number; y: number };
 
@@ -76,7 +75,6 @@ function forceLayout(
     return pos;
   }
 
-  // seed in a circle so nothing starts overlapping
   const seedR = Math.max(100, n * 40);
   for (let i = 0; i < n; i++) {
     const angle = (2 * Math.PI * i) / n - Math.PI / 2;
@@ -98,10 +96,9 @@ function forceLayout(
   const MIN_DIST = NODE_W * 0.8;
 
   for (let iter = 0; iter < iterations; iter++) {
-    const temp = 1 - iter / iterations; // cooling
+    const temp = 1 - iter / iterations;
     const maxMove = 30 * temp + 2;
 
-    // repulsion between all pairs
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         const a = pos.get(nodes[i])!;
@@ -120,7 +117,6 @@ function forceLayout(
       }
     }
 
-    // spring attraction along edges
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         if (!isLinked(nodes[i], nodes[j])) continue;
@@ -139,7 +135,6 @@ function forceLayout(
       }
     }
 
-    // apply velocities with damping
     for (const name of nodes) {
       const v = vel.get(name)!;
       const p = pos.get(name)!;
@@ -177,15 +172,11 @@ function getBounds(positions: Map<string, Vec>): {
   return { minX, maxX, minY, maxY };
 }
 
-/* ── Component ──────────────────────────────────────────────────── */
-
 export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  const [positions, setPositions] = useState<
-    Map<string, { x: number; y: number }>
-  >(new Map());
+  const [positions, setPositions] = useState<Map<string, Vec>>(new Map());
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
@@ -198,15 +189,11 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     startPan: { x: 0, y: 0 },
   });
 
-  const timelineRef = useRef(timeline);
-  timelineRef.current = timeline;
-
   const { edges, edgeList } = useMemo(() => {
-    const tl = timelineRef.current;
     const edgeMap = new Map<string, StoreEdge>();
 
     const commandGroupMap = new Map<string, TimelineEntry[]>();
-    for (const e of tl) {
+    for (const e of timeline) {
       if (e.causedBy) {
         const group = commandGroupMap.get(e.causedBy) ?? [];
         group.push(e);
@@ -215,7 +202,7 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     }
 
     const eventStore = new Map<string, string>();
-    for (const e of tl) {
+    for (const e of timeline) {
       eventStore.set(e.correlationId, e.storeName);
     }
 
@@ -223,8 +210,8 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       const cmdStarted = group.find((e) => e.name === "commandStarted");
       if (!cmdStarted) continue;
 
-      const cmd = (cmdStarted.data as any)?.command;
-      const parentEventId: string | undefined = cmd?.causedBy;
+      const command = getCommandFromEntry(cmdStarted);
+      const parentEventId = command?.causedBy;
       if (!parentEventId) continue;
 
       const sourceStore = eventStore.get(parentEventId);
@@ -234,7 +221,7 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
 
       const key = `${sourceStore}→${targetStore}`;
       const existing = edgeMap.get(key);
-      const cmdName: string = cmd?.name ?? "unknown";
+      const cmdName = command?.name ?? "unknown";
       if (existing) {
         existing.commands.add(cmdName);
         existing.count++;
@@ -249,14 +236,12 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     }
 
     return { edges: edgeMap, edgeList: [...edgeMap.values()] };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeline.length]);
+  }, [timeline]);
 
   const initialPositions = useMemo(() => {
     const pos = new Map<string, Vec>();
     if (storeNames.length === 0) return pos;
 
-    // 1. Find connected components
     const connectedStores = new Set<string>();
     for (const edge of edgeList) {
       connectedStores.add(edge.from);
@@ -269,7 +254,6 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     const components = findComponents(connected, edgeList);
     const CLUSTER_GAP = NODE_W * 2;
 
-    // 2. Force-layout each component independently, then pack horizontally
     let cursorX = 0;
 
     for (const comp of components) {
@@ -278,7 +262,6 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       );
       const layoutPositions = forceLayout(comp, compEdges);
 
-      // Normalize: shift so component's center is at (cursorX + halfW, 0)
       const bounds = getBounds(layoutPositions);
       const compW = bounds.maxX - bounds.minX + NODE_W;
       const compCx = (bounds.minX + bounds.maxX) / 2;
@@ -293,7 +276,6 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       cursorX += compW + CLUSTER_GAP;
     }
 
-    // 3. Center all clusters around origin
     if (pos.size > 0) {
       const allBounds = getBounds(pos);
       const shiftX = -(allBounds.minX + allBounds.maxX) / 2;
@@ -303,7 +285,6 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       }
     }
 
-    // 4. Place disconnected stores in a row below everything
     if (disconnected.length > 0) {
       const allBounds =
         pos.size > 0 ? getBounds(pos) : { minX: 0, maxX: 0, minY: 0, maxY: 0 };
@@ -487,7 +468,7 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
   }, [hovered, edgeList]);
 
   return (
-    <div style={styles.container}>
+    <div style={sharedStyles.container}>
       <div style={styles.toolbar}>
         <span style={styles.toolbarLabel}>
           {storeNames.length} stores · {edgeList.length} connections
@@ -509,12 +490,12 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
         ref={containerRef}
         style={{
           ...styles.canvas,
-          cursor: isPanning ? "grabbing" : draggingNode ? "grabbing" : "grab",
+          cursor: isPanning || draggingNode ? "grabbing" : "grab",
         }}
         onMouseDown={handleBgDown}
       >
         {storeNames.length === 0 ? (
-          <div style={styles.empty}>
+          <div style={sharedStyles.empty}>
             No stores connected. Add stores to see the dependency map.
           </div>
         ) : (
@@ -702,12 +683,6 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
 }
 
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -748,17 +723,5 @@ const styles: Record<string, CSSProperties> = {
     overflow: "hidden",
     position: "relative" as const,
     userSelect: "none" as const,
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
-    position: "absolute" as const,
-    inset: 0,
   },
 };

@@ -2,28 +2,37 @@ import {
   useState,
   useRef,
   useCallback,
-  useEffect,
   type CSSProperties,
 } from "react";
 import type { SealedStore } from "@naikidev/commiq";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import { colors, fonts } from "./theme";
-import { EventLog } from "./EventLog";
-import { CausalityGraph } from "./CausalityGraph";
-import { TimelineChart } from "./TimelineChart";
-import { PerformanceTab } from "./PerformanceTab";
-import { StoreStateView } from "./StoreStateView";
-import { DependencyMap } from "./DependencyMap";
-import type { DevtoolsEngine } from "./useDevtoolsEngine";
+import { useResizable } from "./hooks/useResizable";
+import { EventLog } from "./tabs/EventLog";
+import { CausalityGraph } from "./tabs/CausalityGraph";
+import { TimelineChart } from "./tabs/TimelineChart";
+import { PerformanceTab } from "./tabs/PerformanceTab";
+import { StoreStateView } from "./tabs/StoreStateView";
+import { DependencyMap } from "./tabs/DependencyMap";
+import type { DevtoolsEngine } from "./hooks/useDevtoolsEngine";
 
 type Tab = "events" | "graph" | "timeline" | "perf" | "state" | "deps";
 
 type DevtoolsPanelProps = {
   engine: DevtoolsEngine;
-  stores: Record<string, SealedStore<any>>;
+  stores: Record<string, SealedStore<unknown>>;
   onClose: () => void;
   initialHeight: number;
 }
+
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: "events", label: "Events", icon: "≡" },
+  { id: "graph", label: "Graph", icon: "◇" },
+  { id: "timeline", label: "Timeline", icon: "◔" },
+  { id: "perf", label: "Performance", icon: "⚡" },
+  { id: "state", label: "State", icon: "◆" },
+  { id: "deps", label: "Deps", icon: "◈" },
+];
 
 export function DevtoolsPanel({
   engine,
@@ -32,15 +41,16 @@ export function DevtoolsPanel({
   initialHeight,
 }: DevtoolsPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>("events");
-  const [panelHeight, setPanelHeight] = useState(initialHeight);
-  const [isPanelDragging, setIsPanelDragging] = useState(false);
   const [importedTimeline, setImportedTimeline] = useState<
     TimelineEntry[] | null
   >(null);
-  const isDragging = useRef(false);
-  const startY = useRef(0);
-  const startHeight = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { height: panelHeight, isDragging: isPanelDragging, onMouseDown } = useResizable({
+    initial: initialHeight,
+    min: 120,
+    max: typeof window !== "undefined" ? window.innerHeight - 60 : 800,
+  });
 
   const activeTimeline = importedTimeline ?? engine.timeline;
   const activeStoreNames = importedTimeline
@@ -58,72 +68,25 @@ export function DevtoolsPanel({
     URL.revokeObjectURL(url);
   }, [engine.timeline]);
 
-  const handleImport = useCallback(() => {
+  function handleImport() {
     fileInputRef.current?.click();
-  }, []);
+  }
 
-  const handleFileChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const data = JSON.parse(reader.result as string) as TimelineEntry[];
-          if (Array.isArray(data)) {
-            setImportedTimeline(data);
-          }
-        } catch {
-          /* ignore invalid files */
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string) as TimelineEntry[];
+        if (Array.isArray(data)) {
+          setImportedTimeline(data);
         }
-      };
-      reader.readAsText(file);
-      e.target.value = "";
-    },
-    [],
-  );
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      isDragging.current = true;
-      setIsPanelDragging(true);
-      startY.current = e.clientY;
-      startHeight.current = panelHeight;
-      e.preventDefault();
-    },
-    [panelHeight],
-  );
-
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!isDragging.current) return;
-      const delta = startY.current - e.clientY;
-      const newHeight = Math.max(
-        120,
-        Math.min(window.innerHeight - 60, startHeight.current + delta),
-      );
-      setPanelHeight(newHeight);
+      } catch {}
     };
-    const onMouseUp = () => {
-      isDragging.current = false;
-      setIsPanelDragging(false);
-    };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
-    };
-  }, []);
-
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: "events", label: "Events", icon: "≡" },
-    { id: "graph", label: "Graph", icon: "◇" },
-    { id: "timeline", label: "Timeline", icon: "◔" },
-    { id: "perf", label: "Performance", icon: "⚡" },
-    { id: "state", label: "State", icon: "◆" },
-    { id: "deps", label: "Deps", icon: "◈" },
-  ];
+    reader.readAsText(file);
+    e.target.value = "";
+  }
 
   return (
     <div style={{ ...styles.panel, height: panelHeight }}>
@@ -145,7 +108,7 @@ export function DevtoolsPanel({
         </div>
 
         <div style={styles.tabs} className="commiq-devtools-tabs">
-          {tabs.map((tab) => (
+          {TABS.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
@@ -361,8 +324,8 @@ const styles: Record<string, CSSProperties> = {
     flex: "1 1 0",
     minWidth: 0,
     overflow: "auto" as const,
-    scrollbarWidth: "none" as any,
-    msOverflowStyle: "none" as any,
+    scrollbarWidth: "none" as CSSProperties["scrollbarWidth"],
+    msOverflowStyle: "none" as CSSProperties["msOverflowStyle"],
   },
   tab: {
     display: "flex",

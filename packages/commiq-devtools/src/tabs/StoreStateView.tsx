@@ -1,10 +1,10 @@
-import { type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 import type { SealedStore } from "@naikidev/commiq";
-import { colors, fonts } from "./theme";
-import { JsonTree } from "./JsonTree";
+import { colors, fonts, sharedStyles } from "../theme";
+import { JsonTree } from "../components/JsonTree";
 
 type StoreStateViewProps = {
-  stores: Record<string, SealedStore<any>>;
+  stores: Record<string, SealedStore<unknown>>;
   storeStates: Record<string, unknown>;
 }
 
@@ -12,10 +12,10 @@ export function StoreStateView({ stores, storeStates }: StoreStateViewProps) {
   const storeNames = Object.keys(stores);
 
   return (
-    <div style={styles.container}>
+    <div style={sharedStyles.container}>
       <div style={styles.scrollArea}>
         {storeNames.length === 0 && (
-          <div style={styles.empty}>No stores connected.</div>
+          <div style={sharedStyles.empty}>No stores connected.</div>
         )}
 
         {storeNames.map((name) => (
@@ -49,26 +49,10 @@ function getStateType(state: unknown): string {
 }
 
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
   scrollArea: {
     flex: 1,
     overflowY: "auto" as const,
     padding: 12,
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
   },
   storeCard: {
     marginBottom: 12,

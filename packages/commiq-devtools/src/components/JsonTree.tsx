@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from "react";
-import { colors, fonts } from "./theme";
+import { colors, fonts } from "../theme";
 
 type JsonTreeProps = {
   data: unknown;

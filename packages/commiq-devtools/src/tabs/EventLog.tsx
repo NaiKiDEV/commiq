@@ -7,9 +7,12 @@ import {
   getEventColor,
   truncId,
   formatTime,
-} from "./theme";
-import { JsonTree } from "./JsonTree";
-import { StateDiff } from "./StateDiff";
+  sharedStyles,
+} from "../theme";
+import { FilterToolbar } from "../components/FilterToolbar";
+import { DetailRow } from "../components/DetailPanel";
+import { JsonTree } from "../components/JsonTree";
+import { StateDiff } from "../components/StateDiff";
 
 type EventLogProps = {
   timeline: TimelineEntry[];
@@ -46,54 +49,37 @@ export function EventLog({
     setExpandedId(expandedId === key ? null : key);
   }
 
+  function handleAutoScrollChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setAutoScroll(e.target.checked);
+  }
+
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <div style={styles.toolbarLeft}>
-          <label style={styles.checkLabel}>
-            <input
-              type="checkbox"
-              checked={showBuiltins}
-              onChange={(e) => setShowBuiltins(e.target.checked)}
-              style={styles.checkbox}
-            />
-            Show builtins
-          </label>
-
-          <select
-            value={storeFilter ?? "__all__"}
-            onChange={(e) =>
-              setStoreFilter(
-                e.target.value === "__all__" ? null : e.target.value,
-              )
-            }
-            style={styles.select}
-          >
-            <option value="__all__">All stores</option>
-            {storeNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-
+    <div style={sharedStyles.container}>
+      <FilterToolbar
+        showBuiltins={showBuiltins}
+        onShowBuiltinsChange={setShowBuiltins}
+        storeFilter={storeFilter}
+        onStoreFilterChange={setStoreFilter}
+        storeNames={storeNames}
+        extraLeft={
           <label style={styles.checkLabel}>
             <input
               type="checkbox"
               checked={autoScroll}
-              onChange={(e) => setAutoScroll(e.target.checked)}
+              onChange={handleAutoScrollChange}
               style={styles.checkbox}
             />
             Auto-scroll
           </label>
-        </div>
-
-        <span style={styles.eventCount}>{filtered.length} events</span>
-      </div>
+        }
+        trailing={
+          <span style={styles.eventCount}>{filtered.length} events</span>
+        }
+      />
 
       <div style={styles.scrollArea} ref={scrollRef}>
         {filtered.length === 0 && (
-          <div style={styles.empty}>
+          <div style={sharedStyles.empty}>
             {timeline.length === 0
               ? "No events yet. Interact with your stores to generate events."
               : "No events match the current filter. Try enabling builtin events."}
@@ -220,52 +206,7 @@ export function EventLog({
   );
 }
 
-function DetailRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div style={styles.detailRow}>
-      <span style={styles.detailLabel}>{label}</span>
-      <span
-        style={{
-          ...styles.detailValue,
-          ...(mono ? { fontFamily: fonts.mono } : {}),
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
-  toolbar: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "8px 12px",
-    borderBottom: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgToolbar,
-    flexShrink: 0,
-    gap: 8,
-  },
-  toolbarLeft: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-  },
   checkLabel: {
     display: "flex",
     alignItems: "center",
@@ -282,17 +223,6 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     margin: 0,
   },
-  select: {
-    fontSize: 11,
-    backgroundColor: colors.bgInput,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 4,
-    padding: "3px 6px",
-    fontFamily: fonts.sans,
-    outline: "none",
-    cursor: "pointer",
-  },
   eventCount: {
     fontSize: 11,
     color: colors.textMuted,
@@ -303,16 +233,6 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
     overflowY: "auto" as const,
     overflowX: "hidden" as const,
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
   },
   row: {
     display: "flex",
@@ -386,22 +306,6 @@ const styles: Record<string, CSSProperties> = {
     gridTemplateColumns: "120px 1fr",
     gap: "4px 12px",
     marginBottom: 8,
-  },
-  detailRow: {
-    display: "contents",
-  },
-  detailLabel: {
-    fontSize: 11,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    fontWeight: 500,
-    paddingTop: 1,
-  },
-  detailValue: {
-    fontSize: 11,
-    color: colors.text,
-    fontFamily: fonts.sans,
-    wordBreak: "break-all" as const,
   },
   detailSection: {
     marginTop: 10,

@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useEffect,
-  useCallback,
   type CSSProperties,
 } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
@@ -14,9 +13,11 @@ import {
   getEventColor,
   truncId,
   formatTime,
-} from "./theme";
-import { JsonTree } from "./JsonTree";
-import { StateDiff } from "./StateDiff";
+  sharedStyles,
+} from "../theme";
+import { FilterToolbar } from "../components/FilterToolbar";
+import { DetailPanel } from "../components/DetailPanel";
+import { getCommandFromEntry } from "../types";
 
 type TimelineChartProps = {
   timeline: TimelineEntry[];
@@ -49,44 +50,8 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
     null,
   );
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  const [detailHeight, setDetailHeight] = useState(180);
-  const [isDetailDragging, setIsDetailDragging] = useState(false);
   const chartScrollRef = useRef<HTMLDivElement>(null);
   const labelRef = useRef<HTMLDivElement>(null);
-  const detailDragging = useRef(false);
-  const detailStartY = useRef(0);
-  const detailStartH = useRef(0);
-
-  const onDetailMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      detailDragging.current = true;
-      setIsDetailDragging(true);
-      detailStartY.current = e.clientY;
-      detailStartH.current = detailHeight;
-      e.preventDefault();
-    },
-    [detailHeight],
-  );
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!detailDragging.current) return;
-      const delta = detailStartY.current - e.clientY;
-      setDetailHeight(
-        Math.max(80, Math.min(500, detailStartH.current + delta)),
-      );
-    };
-    const onUp = () => {
-      detailDragging.current = false;
-      setIsDetailDragging(false);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, []);
 
   const filtered = useMemo(
     () =>
@@ -127,8 +92,9 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
     const parentOfCommand = new Map<string, string>();
     for (const [cmdCorrId, group] of commandGroupMap) {
       const cmdStarted = group.find((e) => e.name === "commandStarted");
-      const parentId = (cmdStarted?.data as any)?.command?.causedBy;
-      if (parentId && typeof parentId === "string") {
+      const command = cmdStarted ? getCommandFromEntry(cmdStarted) : undefined;
+      const parentId = command?.causedBy;
+      if (parentId) {
         parentOfCommand.set(cmdCorrId, parentId);
       }
     }
@@ -242,8 +208,8 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
     for (const group of commandGroups.values()) {
       const cmdStarted = group.find((p) => p.entry.name === "commandStarted");
       if (!cmdStarted) continue;
-      const cmd = (cmdStarted.entry.data as any)?.command;
-      const parentEventId: string | undefined = cmd?.causedBy;
+      const command = getCommandFromEntry(cmdStarted.entry);
+      const parentEventId = command?.causedBy;
       if (parentEventId && posMap.has(parentEventId)) {
         links.push({ from: posMap.get(parentEventId)!, to: group[0] });
       }
@@ -276,44 +242,36 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
     }
   }, [filtered.length]);
 
-  const handleChartScroll = () => {
+  function handleChartScroll() {
     if (chartScrollRef.current && labelRef.current) {
       labelRef.current.scrollTop = chartScrollRef.current.scrollTop;
     }
-  };
+  }
+
+  function handleMouseMove(e: React.MouseEvent) {
+    setTooltipPos({ x: e.clientX, y: e.clientY });
+  }
+
+  function handleEventClick(entry: TimelineEntry) {
+    setSelectedEvent(
+      selectedEvent?.correlationId === entry.correlationId ? null : entry,
+    );
+  }
 
   const svgHeight = layout?.chartHeight ?? 100;
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <label style={styles.checkLabel}>
-          <input
-            type="checkbox"
-            checked={showBuiltins}
-            onChange={(e) => setShowBuiltins(e.target.checked)}
-            style={styles.checkbox}
-          />
-          Show builtins
-        </label>
-
-        <select
-          value={storeFilter ?? "__all__"}
-          onChange={(e) =>
-            setStoreFilter(e.target.value === "__all__" ? null : e.target.value)
-          }
-          style={styles.select}
-        >
-          <option value="__all__">All stores</option>
-          {storeNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
-
-        <span style={styles.eventCount}>{filtered.length} events</span>
-      </div>
+    <div style={sharedStyles.container}>
+      <FilterToolbar
+        showBuiltins={showBuiltins}
+        onShowBuiltinsChange={setShowBuiltins}
+        storeFilter={storeFilter}
+        onStoreFilterChange={setStoreFilter}
+        storeNames={storeNames}
+        trailing={
+          <span style={styles.eventCount}>{filtered.length} events</span>
+        }
+      />
 
       <div style={styles.body}>
         <div ref={labelRef} style={{ ...styles.labelCol, height: svgHeight }}>
@@ -330,10 +288,10 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
           style={styles.chartScroll}
           className="commiq-devtools-scroll"
           onScroll={handleChartScroll}
-          onMouseMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
+          onMouseMove={handleMouseMove}
         >
           {!layout ? (
-            <div style={styles.empty}>
+            <div style={sharedStyles.empty}>
               No events yet. Interact with your stores to see the timeline.
             </div>
           ) : (
@@ -459,13 +417,7 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
                     style={{ cursor: "pointer" }}
                     onMouseEnter={() => setHoveredEvent(p.entry)}
                     onMouseLeave={() => setHoveredEvent(null)}
-                    onClick={() =>
-                      setSelectedEvent(
-                        selectedEvent?.correlationId === p.entry.correlationId
-                          ? null
-                          : p.entry,
-                      )
-                    }
+                    onClick={() => handleEventClick(p.entry)}
                   >
                     {(isHovered || isSelected) && (
                       <circle cx={p.x} cy={p.y} r={r + 4} fill={ec.bg} />
@@ -519,159 +471,16 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
       )}
 
       {selectedEvent && (
-        <div style={{ ...styles.detailPanel, height: detailHeight }}>
-          <div
-            style={styles.detailResize}
-            className={`commiq-resize-handle${isDetailDragging ? " dragging" : ""}`}
-            onMouseDown={onDetailMouseDown}
-          >
-            <div
-              style={styles.detailResizeGrip}
-              className="commiq-resize-grip"
-            />
-          </div>
-          <div style={styles.detailHeader}>
-            <span style={styles.detailTitle}>{selectedEvent.name}</span>
-            <button
-              onClick={() => setSelectedEvent(null)}
-              style={styles.detailClose}
-            >
-              ✕
-            </button>
-          </div>
-          <div style={styles.detailBody}>
-            <DetailRow label="Store" value={selectedEvent.storeName} />
-            <DetailRow label="Type" value={selectedEvent.type} />
-            <DetailRow
-              label="Correlation"
-              value={selectedEvent.correlationId}
-              mono
-            />
-            <DetailRow
-              label="Caused By"
-              value={selectedEvent.causedBy ?? "—"}
-              mono
-            />
-            <DetailRow
-              label="Time"
-              value={new Date(selectedEvent.timestamp).toISOString()}
-            />
-            {selectedEvent.data !== undefined && (
-              <div style={{ marginTop: 8 }}>
-                <div style={styles.sectionLabel}>Data</div>
-                <div style={styles.sectionContent}>
-                  <JsonTree data={selectedEvent.data} initialExpanded />
-                </div>
-              </div>
-            )}
-            {selectedEvent.stateBefore !== undefined &&
-              selectedEvent.stateAfter !== undefined && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={styles.sectionLabel}>State Diff</div>
-                  <div style={styles.sectionContent}>
-                    <StateDiff
-                      before={selectedEvent.stateBefore}
-                      after={selectedEvent.stateAfter}
-                    />
-                  </div>
-                </div>
-              )}
-          </div>
-        </div>
+        <DetailPanel
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+        />
       )}
     </div>
   );
 }
 
-function DetailRow({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div style={detailStyles.row}>
-      <span style={detailStyles.label}>{label}</span>
-      <span
-        style={{
-          ...detailStyles.value,
-          ...(mono ? { fontFamily: fonts.mono } : {}),
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-const detailStyles: Record<string, CSSProperties> = {
-  row: {
-    display: "flex",
-    gap: 12,
-    marginBottom: 3,
-  },
-  label: {
-    fontSize: 11,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    fontWeight: 500,
-    width: 80,
-    flexShrink: 0,
-  },
-  value: {
-    fontSize: 11,
-    color: colors.text,
-    fontFamily: fonts.sans,
-    wordBreak: "break-all" as const,
-  },
-};
-
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
-  toolbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "8px 12px",
-    borderBottom: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgToolbar,
-    flexShrink: 0,
-  },
-  checkLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    fontSize: 11,
-    color: colors.textSecondary,
-    cursor: "pointer",
-    fontFamily: fonts.sans,
-    userSelect: "none" as const,
-    whiteSpace: "nowrap" as const,
-  },
-  checkbox: {
-    accentColor: colors.accent,
-    cursor: "pointer",
-    margin: 0,
-  },
-  select: {
-    fontSize: 11,
-    backgroundColor: colors.bgInput,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 4,
-    padding: "3px 6px",
-    fontFamily: fonts.sans,
-    outline: "none",
-    cursor: "pointer",
-  },
   eventCount: {
     fontSize: 11,
     color: colors.textMuted,
@@ -711,17 +520,6 @@ const styles: Record<string, CSSProperties> = {
     overflowY: "auto" as const,
     position: "relative" as const,
   },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    height: "100%",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
-  },
   tooltip: {
     position: "fixed" as const,
     zIndex: 100001,
@@ -735,74 +533,5 @@ const styles: Record<string, CSSProperties> = {
     pointerEvents: "none" as const,
     boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
     maxWidth: 280,
-  },
-  detailPanel: {
-    flexShrink: 0,
-    borderTop: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgActive,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    position: "relative" as const,
-  },
-  detailResize: {
-    position: "absolute" as const,
-    top: -4,
-    left: 0,
-    right: 0,
-    height: 8,
-    cursor: "ns-resize",
-    zIndex: 1,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  detailResizeGrip: {
-    width: 36,
-    height: 3,
-    borderRadius: 2,
-  },
-  detailHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "6px 12px",
-    borderBottom: `1px solid ${colors.border}`,
-  },
-  detailTitle: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: colors.text,
-    fontFamily: fonts.sans,
-  },
-  detailClose: {
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    color: colors.textMuted,
-    cursor: "pointer",
-    fontSize: 12,
-    padding: "2px 6px",
-    borderRadius: 4,
-  },
-  detailBody: {
-    padding: "8px 12px",
-    overflow: "auto" as const,
-    flex: 1,
-  },
-  sectionLabel: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.6,
-    marginBottom: 4,
-  },
-  sectionContent: {
-    padding: "6px 10px",
-    backgroundColor: colors.bg,
-    borderRadius: 6,
-    border: `1px solid ${colors.border}`,
-    overflow: "auto" as const,
   },
 };

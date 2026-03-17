@@ -1,11 +1,4 @@
-import {
-  useState,
-  useMemo,
-  useRef,
-  useCallback,
-  useEffect,
-  type CSSProperties,
-} from "react";
+import { useState, useMemo, type CSSProperties } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import {
   colors,
@@ -14,16 +7,17 @@ import {
   getEventColor,
   truncId,
   formatTime,
-} from "./theme";
-import { JsonTree } from "./JsonTree";
-import { StateDiff } from "./StateDiff";
+  sharedStyles,
+} from "../theme";
+import { FilterToolbar } from "../components/FilterToolbar";
+import { DetailPanel } from "../components/DetailPanel";
+import { getCommandFromEntry } from "../types";
 
 type CausalityGraphProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
 }
 
-/** A group of events spawned by a single command dispatch */
 type CommandGroup = {
   commandId: string;
   commandName: string;
@@ -39,42 +33,6 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
   const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(
     null,
   );
-  const [detailHeight, setDetailHeight] = useState(180);
-  const [isDetailDragging, setIsDetailDragging] = useState(false);
-  const detailDragging = useRef(false);
-  const detailStartY = useRef(0);
-  const detailStartH = useRef(0);
-
-  const onDetailMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      detailDragging.current = true;
-      setIsDetailDragging(true);
-      detailStartY.current = e.clientY;
-      detailStartH.current = detailHeight;
-      e.preventDefault();
-    },
-    [detailHeight],
-  );
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      if (!detailDragging.current) return;
-      const delta = detailStartY.current - e.clientY;
-      setDetailHeight(
-        Math.max(80, Math.min(500, detailStartH.current + delta)),
-      );
-    };
-    const onUp = () => {
-      detailDragging.current = false;
-      setIsDetailDragging(false);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-  }, []);
 
   const chains = useMemo(() => buildChains(timeline), [timeline]);
 
@@ -85,39 +43,21 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
   }, [chains, showBuiltins, storeFilter]);
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <label style={styles.checkLabel}>
-          <input
-            type="checkbox"
-            checked={showBuiltins}
-            onChange={(e) => setShowBuiltins(e.target.checked)}
-            style={styles.checkbox}
-          />
-          Show builtins
-        </label>
-
-        <select
-          value={storeFilter ?? "__all__"}
-          onChange={(e) =>
-            setStoreFilter(e.target.value === "__all__" ? null : e.target.value)
-          }
-          style={styles.select}
-        >
-          <option value="__all__">All stores</option>
-          {storeNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-
-        <span style={styles.chainCount}>{filteredChains.length} chains</span>
-      </div>
+    <div style={sharedStyles.container}>
+      <FilterToolbar
+        showBuiltins={showBuiltins}
+        onShowBuiltinsChange={setShowBuiltins}
+        storeFilter={storeFilter}
+        onStoreFilterChange={setStoreFilter}
+        storeNames={storeNames}
+        trailing={
+          <span style={styles.chainCount}>{filteredChains.length} chains</span>
+        }
+      />
 
       <div style={styles.scrollArea}>
         {filteredChains.length === 0 && (
-          <div style={styles.empty}>
+          <div style={sharedStyles.empty}>
             {timeline.length === 0
               ? "No events yet. Interact with your stores to see causality chains."
               : "No chains match the current filter."}
@@ -137,71 +77,10 @@ export function CausalityGraph({ timeline, storeNames }: CausalityGraphProps) {
       </div>
 
       {selectedEvent && (
-        <div style={{ ...styles.detailPanel, height: detailHeight }}>
-          <div
-            style={styles.detailResize}
-            className={`commiq-resize-handle${isDetailDragging ? " dragging" : ""}`}
-            onMouseDown={onDetailMouseDown}
-          >
-            <div
-              style={styles.detailResizeGrip}
-              className="commiq-resize-grip"
-            />
-          </div>
-          <div style={styles.detailHeader}>
-            <span style={styles.detailTitle}>{selectedEvent.name}</span>
-            <button
-              onClick={() => setSelectedEvent(null)}
-              style={styles.detailClose}
-            >
-              ✕
-            </button>
-          </div>
-          <div style={styles.detailBody}>
-            <div style={styles.detailRow}>
-              <span style={styles.detailLabel}>Store</span>
-              <span style={styles.detailValue}>{selectedEvent.storeName}</span>
-            </div>
-            <div style={styles.detailRow}>
-              <span style={styles.detailLabel}>Correlation</span>
-              <span style={{ ...styles.detailValue, fontFamily: fonts.mono }}>
-                {selectedEvent.correlationId}
-              </span>
-            </div>
-            <div style={styles.detailRow}>
-              <span style={styles.detailLabel}>Caused By</span>
-              <span style={{ ...styles.detailValue, fontFamily: fonts.mono }}>
-                {selectedEvent.causedBy ?? "—"}
-              </span>
-            </div>
-            <div style={styles.detailRow}>
-              <span style={styles.detailLabel}>Time</span>
-              <span style={styles.detailValue}>
-                {new Date(selectedEvent.timestamp).toISOString()}
-              </span>
-            </div>
-            {selectedEvent.data !== undefined && (
-              <div style={{ marginTop: 8 }}>
-                <div style={styles.detailSectionLabel}>Data</div>
-                <div style={styles.detailContent}>
-                  <JsonTree data={selectedEvent.data} initialExpanded />
-                </div>
-              </div>
-            )}
-            {selectedEvent.stateBefore !== undefined &&
-              selectedEvent.stateAfter !== undefined && (
-                <div style={{ marginTop: 8 }}>
-                  <div style={styles.detailSectionLabel}>State Diff</div>
-                  <div style={styles.detailContent}>
-                    <StateDiff
-                      before={selectedEvent.stateBefore}
-                      after={selectedEvent.stateAfter}
-                    />
-                  </div>
-                </div>
-              )}
-          </div>
-        </div>
+        <DetailPanel
+          event={selectedEvent}
+          onClose={() => setSelectedEvent(null)}
+        />
       )}
     </div>
   );
@@ -229,11 +108,7 @@ function ChainNode({
   const isRoot = depth === 0;
 
   return (
-    <div
-      style={{
-        ...(isRoot ? styles.chain : styles.chainNested),
-      }}
-    >
+    <div style={isRoot ? styles.chain : styles.chainNested}>
       <div style={styles.chainHeader} onClick={() => setExpanded(!expanded)}>
         <span style={styles.chainChevron}>{expanded ? "▼" : "▶"}</span>
 
@@ -332,11 +207,9 @@ function buildChains(timeline: TimelineEntry[]): CommandGroup[] {
   for (const [commandId, events] of groups) {
     const sorted = events.sort((a, b) => a.timestamp - b.timestamp);
     const commandStarted = sorted.find((e) => e.name === "commandStarted");
+    const command = commandStarted ? getCommandFromEntry(commandStarted) : undefined;
 
-    const commandName = commandStarted
-      ? ((commandStarted.data as any)?.command?.name ?? "unknown")
-      : (sorted[0]?.name ?? "unknown");
-
+    const commandName = command?.name ?? sorted[0]?.name ?? "unknown";
     const storeName = sorted[0]?.storeName ?? "unknown";
 
     commandGroups.set(commandId, {
@@ -355,8 +228,8 @@ function buildChains(timeline: TimelineEntry[]): CommandGroup[] {
     const commandStarted = group.events.find(
       (e) => e.name === "commandStarted",
     );
-    const cmd = commandStarted ? (commandStarted.data as any)?.command : null;
-    const parentEventId = cmd?.causedBy;
+    const command = commandStarted ? getCommandFromEntry(commandStarted) : undefined;
+    const parentEventId = command?.causedBy;
 
     if (parentEventId && entryMap.has(parentEventId)) {
       const parentEntry = entryMap.get(parentEventId)!;
@@ -401,48 +274,6 @@ function filterChain(
 }
 
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
-  toolbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "8px 12px",
-    borderBottom: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgToolbar,
-    flexShrink: 0,
-  },
-  checkLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    fontSize: 11,
-    color: colors.textSecondary,
-    cursor: "pointer",
-    fontFamily: fonts.sans,
-    userSelect: "none" as const,
-    whiteSpace: "nowrap" as const,
-  },
-  checkbox: {
-    accentColor: colors.accent,
-    cursor: "pointer",
-    margin: 0,
-  },
-  select: {
-    fontSize: 11,
-    backgroundColor: colors.bgInput,
-    color: colors.text,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 4,
-    padding: "3px 6px",
-    fontFamily: fonts.sans,
-    outline: "none",
-    cursor: "pointer",
-  },
   chainCount: {
     fontSize: 11,
     color: colors.textMuted,
@@ -454,16 +285,6 @@ const styles: Record<string, CSSProperties> = {
     overflowY: "auto" as const,
     overflowX: "hidden" as const,
     padding: "8px 10px",
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
   },
   chain: {
     marginBottom: 6,
@@ -558,93 +379,5 @@ const styles: Record<string, CSSProperties> = {
     color: colors.textMuted,
     fontFamily: fonts.mono,
     flexShrink: 0,
-  },
-  detailPanel: {
-    flexShrink: 0,
-    borderTop: `1px solid ${colors.border}`,
-    backgroundColor: colors.bgActive,
-    overflow: "hidden",
-    display: "flex",
-    flexDirection: "column",
-    position: "relative" as const,
-  },
-  detailResize: {
-    position: "absolute" as const,
-    top: -4,
-    left: 0,
-    right: 0,
-    height: 8,
-    cursor: "ns-resize",
-    zIndex: 1,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  detailResizeGrip: {
-    width: 36,
-    height: 3,
-    borderRadius: 2,
-  },
-  detailHeader: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "6px 12px",
-    borderBottom: `1px solid ${colors.border}`,
-  },
-  detailTitle: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: colors.text,
-    fontFamily: fonts.sans,
-  },
-  detailClose: {
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    color: colors.textMuted,
-    cursor: "pointer",
-    fontSize: 12,
-    padding: "2px 6px",
-    borderRadius: 4,
-  },
-  detailBody: {
-    padding: "8px 12px",
-    overflow: "auto" as const,
-    flex: 1,
-  },
-  detailRow: {
-    display: "flex",
-    gap: 12,
-    marginBottom: 4,
-  },
-  detailLabel: {
-    fontSize: 11,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    fontWeight: 500,
-    width: 90,
-    flexShrink: 0,
-  },
-  detailValue: {
-    fontSize: 11,
-    color: colors.text,
-    fontFamily: fonts.sans,
-    wordBreak: "break-all" as const,
-  },
-  detailSectionLabel: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    fontWeight: 600,
-    textTransform: "uppercase" as const,
-    letterSpacing: 0.6,
-    marginBottom: 4,
-  },
-  detailContent: {
-    padding: "6px 10px",
-    backgroundColor: colors.bg,
-    borderRadius: 6,
-    border: `1px solid ${colors.border}`,
-    overflow: "auto",
   },
 };

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { colors, fonts } from "./theme";
-import { useDevtoolsEngine } from "./useDevtoolsEngine";
+import { useDevtoolsEngine } from "./hooks/useDevtoolsEngine";
 import { DevtoolsPanel } from "./DevtoolsPanel";
 import type { CommiqDevtoolsProps } from "./CommiqDevtools";
 

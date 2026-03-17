@@ -1,6 +1,7 @@
 import { useState, useMemo, type CSSProperties } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
-import { colors, fonts } from "./theme";
+import { colors, fonts, sharedStyles } from "../theme";
+import { getCommandFromEntry } from "../types";
 
 type PerformanceTabProps = {
   timeline: TimelineEntry[];
@@ -47,7 +48,8 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
         const cb = e.causedBy;
         const s = cb ? started.get(cb) : undefined;
         if (s && cb) {
-          const cmdName = (s.data as any)?.command?.name ?? "unknown";
+          const command = getCommandFromEntry(s);
+          const cmdName = command?.name ?? "unknown";
           const key = `${e.storeName}::${cmdName}`;
           const pairs = commandPairs.get(key) ?? [];
           pairs.push({
@@ -138,14 +140,20 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
     return max || 1;
   }, [storeStats]);
 
+  function handleStoreChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    setStoreFilter(e.target.value === "__all__" ? null : e.target.value);
+  }
+
+  function handleSortChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    setSortBy(e.target.value as typeof sortBy);
+  }
+
   return (
-    <div style={styles.container}>
+    <div style={sharedStyles.container}>
       <div style={styles.toolbar}>
         <select
           value={storeFilter ?? "__all__"}
-          onChange={(e) =>
-            setStoreFilter(e.target.value === "__all__" ? null : e.target.value)
-          }
+          onChange={handleStoreChange}
           style={styles.select}
         >
           <option value="__all__">All stores</option>
@@ -159,7 +167,7 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
         <span style={styles.sortLabel}>Sort by</span>
         <select
           value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+          onChange={handleSortChange}
           style={styles.select}
         >
           <option value="total">Total time</option>
@@ -171,7 +179,7 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
 
       <div style={styles.scrollArea} className="commiq-devtools-scroll">
         {storeStats.every((s) => s.totalCommands === 0) && (
-          <div style={styles.empty}>
+          <div style={sharedStyles.empty}>
             No commands recorded yet. Dispatch commands to see performance
             metrics.
           </div>
@@ -299,12 +307,6 @@ function fmtMs(ms: number): string {
 }
 
 const styles: Record<string, CSSProperties> = {
-  container: {
-    display: "flex",
-    flexDirection: "column",
-    height: "100%",
-    overflow: "hidden",
-  },
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -335,16 +337,6 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
     overflowY: "auto" as const,
     padding: 12,
-  },
-  empty: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "40px 20px",
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.sans,
-    textAlign: "center" as const,
   },
   storeCard: {
     marginBottom: 12,

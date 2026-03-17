@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { BuiltinEventName } from "@naikidev/commiq";
 
 export const colors = {
@@ -83,3 +84,27 @@ export function truncId(id: string | null | undefined): string {
 export function formatTime(ts: number): string {
   return new Date(ts).toISOString().slice(11, 23);
 }
+
+export const sharedStyles = {
+  container: {
+    display: "flex",
+    flexDirection: "column",
+    height: "100%",
+    overflow: "hidden",
+  },
+  scrollArea: {
+    flex: 1,
+    overflowY: "auto" as const,
+    overflowX: "hidden" as const,
+  },
+  empty: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "40px 20px",
+    fontSize: 12,
+    color: colors.textMuted,
+    fontFamily: fonts.sans,
+    textAlign: "center" as const,
+  },
+} satisfies Record<string, CSSProperties>;

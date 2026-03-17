@@ -19,22 +19,30 @@ export type DevtoolsEngine = {
   clear: () => void;
 }
 
+type Internals = {
+  devtools: ReturnType<typeof createDevtools>;
+  transport: Transport & { messages: DevtoolsMessage[] };
+  eventCount: number;
+  unsubscribe: (() => void) | null;
+}
+
 export function useDevtoolsEngine(
-  stores: Record<string, SealedStore<any>>,
+  stores: Record<string, SealedStore<unknown>>,
   maxEvents: number = 500,
 ): DevtoolsEngine {
   const [version, setVersion] = useState(0);
 
-  const internalsRef = useRef<{
-    devtools: ReturnType<typeof createDevtools>;
-    transport: Transport & { messages: DevtoolsMessage[] };
-    eventCount: number;
-  } | null>(null);
+  const internalsRef = useRef<Internals | null>(null);
 
   if (!internalsRef.current) {
     const transport = memoryTransport();
     const devtools = createDevtools({ transport, maxEvents });
-    internalsRef.current = { devtools, transport, eventCount: 0 };
+    internalsRef.current = {
+      devtools,
+      transport,
+      eventCount: 0,
+      unsubscribe: null,
+    };
   }
 
   const internals = internalsRef.current;
@@ -59,6 +67,7 @@ export function useDevtoolsEngine(
       internals.eventCount++;
       setVersion((v) => v + 1);
     });
+    internals.unsubscribe = unsub;
     return unsub;
   }, [internals]);
 
@@ -73,7 +82,9 @@ export function useDevtoolsEngine(
   );
 
   const clear = useCallback(() => {
+    internals.unsubscribe?.();
     internals.devtools.destroy();
+
     const transport = memoryTransport();
     const devtools = createDevtools({ transport, maxEvents });
     internals.devtools = devtools;
@@ -84,10 +95,11 @@ export function useDevtoolsEngine(
       devtools.connect(store, name);
     }
 
-    transport.onMessage(() => {
+    const unsub = transport.onMessage(() => {
       internals.eventCount++;
       setVersion((v) => v + 1);
     });
+    internals.unsubscribe = unsub;
 
     setVersion((v) => v + 1);
   }, [internals, stores, maxEvents]);
