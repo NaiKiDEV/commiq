@@ -399,7 +399,7 @@ const styles: Record<string, CSSProperties> = {
   },
   details: {
     padding: "10px 16px 14px",
-    backgroundColor: colors.bgActive,
+    backgroundColor: colors.bgPanel,
     borderBottom: `1px solid ${colors.border}`,
   },
   detailGrid: {

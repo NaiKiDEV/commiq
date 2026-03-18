@@ -16,8 +16,8 @@ export const colors = {
   borderSelected: "#4f56b0",
 
   text: "#d4d8e8",
-  textSecondary: "#8b93a8",
-  textMuted: "#4d5568",
+  textSecondary: "#9ba3b8",
+  textMuted: "#636d83",
   textInverse: "#ffffff",
 
   accent: "#6366f1",
@@ -39,23 +39,23 @@ export const colors = {
   string: "#a5d6ff",
   number: "#79c0ff",
   boolean: "#d2a8ff",
-  null: "#6b7385",
+  null: "#7d879b",
   key: "#c8cede",
 
-  scrollThumb: "#2a3040",
-  scrollThumbHover: "#3a4560",
+  scrollThumb: "#3a4560",
+  scrollThumbHover: "#4d5a78",
   resizeHandle: "#6366f1",
 
-  badge: "#232940",
-  badgeText: "#8b93a8",
+  badge: "#282f45",
+  badgeText: "#9ba3b8",
 
   triggerBg: "#6366f1",
   triggerHover: "#4f46e5",
   triggerShadow: "0 4px 20px rgba(99, 102, 241, 0.45)",
 
   tabActive: "#6366f1",
-  tabInactive: "#6b7385",
-  tabHover: "#8b93a8",
+  tabInactive: "#7d879b",
+  tabHover: "#9ba3b8",
 } as const;
 
 export const fonts = {

@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
-import { colors, fonts, formatTime } from "../theme";
+import { colors, fonts, formatTime, getEventColor } from "../theme";
 import { JsonTree } from "./JsonTree";
 import { StateDiff } from "./StateDiff";
 import { useResizable } from "../hooks/useResizable";
@@ -32,7 +32,17 @@ export function DetailPanel({
         <div style={styles.resizeGrip} className="commiq-resize-grip" />
       </div>
       <div style={styles.header}>
-        <span style={styles.title}>{event.name}</span>
+        <span style={styles.headerLabel}>Viewing</span>
+        <span style={{
+          ...styles.headerType,
+          color: getEventColor(event.name, event.type).fg,
+          backgroundColor: getEventColor(event.name, event.type).bg,
+        }}>{event.type}</span>
+        <span style={{
+          ...styles.title,
+          color: getEventColor(event.name, event.type).fg,
+        }}>{event.name}</span>
+        <span style={styles.headerStore}>{event.storeName}</span>
         <button className="commiq-close-btn" onClick={onClose} style={styles.close}>
           ✕
         </button>
@@ -131,15 +141,41 @@ const styles: Record<string, CSSProperties> = {
   header: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 8,
     padding: "6px 12px",
     borderBottom: `1px solid ${colors.border}`,
   },
-  title: {
-    fontSize: 12,
-    fontWeight: 600,
-    color: colors.text,
+  headerLabel: {
+    fontSize: 10,
+    color: colors.textSecondary,
     fontFamily: fonts.sans,
+    fontWeight: 500,
+    flexShrink: 0,
+  },
+  headerType: {
+    fontSize: 10,
+    fontWeight: 600,
+    fontFamily: fonts.sans,
+    padding: "1px 7px",
+    borderRadius: 4,
+    flexShrink: 0,
+  },
+  title: {
+    fontSize: 11,
+    fontWeight: 600,
+    fontFamily: fonts.mono,
+    lineHeight: 1,
+  },
+  headerStore: {
+    fontSize: 10,
+    fontWeight: 500,
+    fontFamily: fonts.sans,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    padding: "1px 7px",
+    borderRadius: 9999,
+    flexShrink: 0,
+    marginLeft: "auto",
   },
   close: {
     backgroundColor: "transparent",
@@ -154,6 +190,7 @@ const styles: Record<string, CSSProperties> = {
     padding: "8px 12px",
     overflow: "auto" as const,
     flex: 1,
+    backgroundColor: colors.bgPanel,
   },
   row: {
     display: "flex",
