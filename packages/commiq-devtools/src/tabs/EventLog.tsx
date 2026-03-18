@@ -401,13 +401,16 @@ const styles: Record<string, CSSProperties> = {
     padding: "10px 16px 14px",
     backgroundColor: colors.bgPanel,
     borderBottom: `1px solid ${colors.border}`,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
   },
   detailGrid: {
-    marginBottom: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
   },
-  detailSection: {
-    marginTop: 10,
-  },
+  detailSection: {},
   detailSectionLabel: {
     fontSize: 10,
     color: colors.textMuted,
@@ -415,7 +418,6 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     textTransform: "uppercase" as const,
     letterSpacing: 0.6,
-    marginBottom: 4,
   },
   detailContent: {
     padding: "6px 10px",

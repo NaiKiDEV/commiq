@@ -164,7 +164,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
     fontWeight: 600,
     fontFamily: fonts.mono,
-    lineHeight: 1,
   },
   headerStore: {
     fontSize: 10,
@@ -191,11 +190,13 @@ const styles: Record<string, CSSProperties> = {
     overflow: "auto" as const,
     flex: 1,
     backgroundColor: colors.bgPanel,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
   },
   row: {
     display: "flex",
     gap: 12,
-    marginBottom: 3,
   },
   label: {
     fontSize: 11,

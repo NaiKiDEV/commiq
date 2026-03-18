@@ -462,6 +462,7 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
               color: colors.textMuted,
               fontSize: 10,
               fontFamily: fonts.mono,
+              lineHeight: 1,
             }}
           >
             {truncId(hoveredEvent.correlationId)}

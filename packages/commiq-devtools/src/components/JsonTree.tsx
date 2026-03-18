@@ -121,49 +121,58 @@ const styles: Record<string, CSSProperties> = {
     fontStyle: "italic",
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   string: {
     color: colors.string,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   number: {
     color: colors.number,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   boolean: {
     color: colors.boolean,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   bracket: {
     color: colors.textMuted,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   key: {
     color: colors.key,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   index: {
     color: colors.textMuted,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   text: {
     color: colors.text,
     fontFamily: fonts.mono,
     fontSize: 12,
+    lineHeight: 1,
   },
   row: {
-    lineHeight: "20px",
+    lineHeight: 1,
   },
   toggle: {
     cursor: "pointer",
     userSelect: "none" as const,
     display: "inline",
+    lineHeight: 1,
   },
   chevron: {
     fontSize: 8,
@@ -172,6 +181,7 @@ const styles: Record<string, CSSProperties> = {
     display: "inline-block",
     width: 10,
     fontFamily: fonts.mono,
+    verticalAlign: "middle",
   },
   collapsed: {
     color: colors.textMuted,

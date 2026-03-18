@@ -13,14 +13,14 @@ import { getCommandFromEntry } from "../types";
 type DependencyMapProps = {
   timeline: TimelineEntry[];
   storeNames: string[];
-}
+};
 
 type StoreEdge = {
   from: string;
   to: string;
   commands: Set<string>;
   count: number;
-}
+};
 
 const NODE_W = 130;
 const NODE_H = 44;
@@ -702,7 +702,7 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     color: colors.textMuted,
     fontFamily: fonts.sans,
-    opacity: 0.5,
+    opacity: 0.7,
   },
   fitButton: {
     display: "flex",

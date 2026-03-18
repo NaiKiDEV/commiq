@@ -9,7 +9,7 @@ type StoreStateViewProps = {
   stores: Record<string, SealedStore<unknown>>;
   storeStates: Record<string, unknown>;
   getStateHistory: (storeName: string) => StateSnapshot[];
-}
+};
 
 type Mode = "live" | "history";
 
@@ -30,9 +30,11 @@ export function StoreStateView({
     return getStateHistory(selectedStore);
   }, [selectedStore, getStateHistory]);
 
-  const currentIndex = snapshotIndex ?? (history.length > 0 ? history.length - 1 : 0);
+  const currentIndex =
+    snapshotIndex ?? (history.length > 0 ? history.length - 1 : 0);
   const currentSnapshot = history[currentIndex];
-  const previousSnapshot = currentIndex > 0 ? history[currentIndex - 1] : undefined;
+  const previousSnapshot =
+    currentIndex > 0 ? history[currentIndex - 1] : undefined;
   const isLatest = currentIndex === history.length - 1;
 
   function handleModeChange(newMode: Mode) {
@@ -67,7 +69,7 @@ export function StoreStateView({
       <div style={styles.toolbar}>
         <div style={styles.modeToggle}>
           <button
-            className={`commiq-label-btn${mode === "live" ? "" : ""}`}
+            className="commiq-label-btn"
             style={{
               ...styles.modeButton,
               ...(mode === "live" ? styles.modeButtonActive : {}),
@@ -77,7 +79,7 @@ export function StoreStateView({
             Live
           </button>
           <button
-            className={`commiq-label-btn${mode === "history" ? "" : ""}`}
+            className="commiq-label-btn"
             style={{
               ...styles.modeButton,
               ...(mode === "history" ? styles.modeButtonActive : {}),
@@ -97,7 +99,9 @@ export function StoreStateView({
           >
             <option value="__all__">Select store</option>
             {storeNames.map((n) => (
-              <option key={n} value={n}>{n}</option>
+              <option key={n} value={n}>
+                {n}
+              </option>
             ))}
           </select>
         )}
@@ -127,7 +131,9 @@ export function StoreStateView({
       )}
 
       {mode === "history" && !selectedStore && (
-        <div style={sharedStyles.empty}>Select a store to browse its state history.</div>
+        <div style={sharedStyles.empty}>
+          Select a store to browse its state history.
+        </div>
       )}
 
       {mode === "history" && selectedStore && history.length === 0 && (
@@ -191,7 +197,8 @@ export function StoreStateView({
 
           {!isLatest && (
             <div style={styles.historyBanner}>
-              Viewing historical state — {history.length - 1 - currentIndex} snapshot(s) behind live
+              Viewing historical state — {history.length - 1 - currentIndex}{" "}
+              snapshot(s) behind live
             </div>
           )}
 
@@ -206,7 +213,10 @@ export function StoreStateView({
               </div>
               <div style={styles.storeBody}>
                 {currentSnapshot && (
-                  <JsonTree data={currentSnapshot.state} initialExpanded={true} />
+                  <JsonTree
+                    data={currentSnapshot.state}
+                    initialExpanded={true}
+                  />
                 )}
               </div>
             </div>
@@ -215,9 +225,12 @@ export function StoreStateView({
               <div style={styles.storeCard}>
                 <div style={styles.storeHeader}>
                   <span style={styles.storeIcon}>△</span>
-                  <span style={styles.storeName}>Changes from snapshot {currentIndex}</span>
+                  <span style={styles.storeName}>
+                    Changes from snapshot {currentIndex}
+                  </span>
                   <span style={styles.storeType}>
-                    {formatTime(previousSnapshot.timestamp)} → {formatTime(currentSnapshot.timestamp)}
+                    {formatTime(previousSnapshot.timestamp)} →{" "}
+                    {formatTime(currentSnapshot.timestamp)}
                   </span>
                 </div>
                 <div style={styles.storeBody}>
@@ -396,6 +409,5 @@ const styles: Record<string, CSSProperties> = {
   storeBody: {
     padding: "10px 14px",
     overflow: "auto",
-    lineHeight: "20px",
   },
 };
