@@ -40,6 +40,6 @@ for (const dir of dirs) {
 
 execSync(`git add -A`, { stdio: 'inherit' })
 execSync(`git commit -m "release: v${nextVersion}"`, { stdio: 'inherit' })
-execSync(`git tag v${nextVersion}`, { stdio: 'inherit' })
+execSync(`git tag -a v${nextVersion} -m "v${nextVersion}"`, { stdio: 'inherit' })
 
 console.log(`\nTagged v${nextVersion}. Push with: git push --follow-tags`)
