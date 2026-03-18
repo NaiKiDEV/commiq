@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-devtools",
-  "version": "2.0.0",
+  "version": "1.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/NaiKiDEV/commiq"
@@ -27,15 +27,15 @@
     "dev": "vite build --watch"
   },
   "dependencies": {
-    "@naikidev/commiq-devtools-core": "workspace:*"
+    "@naikidev/commiq-devtools-core": "workspace:^"
   },
   "peerDependencies": {
-    "@naikidev/commiq": "workspace:*",
+    "@naikidev/commiq": "workspace:^",
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
-    "@naikidev/commiq": "workspace:*",
+    "@naikidev/commiq": "workspace:^",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "react": "^19.0.0",

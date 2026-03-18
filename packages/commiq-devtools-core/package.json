@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-devtools-core",
-  "version": "0.1.1",
+  "version": "1.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/NaiKiDEV/commiq"
@@ -29,7 +29,7 @@
     "dev": "vite build --watch"
   },
   "dependencies": {
-    "@naikidev/commiq": "workspace:*"
+    "@naikidev/commiq": "workspace:^"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
