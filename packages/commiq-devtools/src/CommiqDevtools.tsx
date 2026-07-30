@@ -1,10 +1,14 @@
 import { Suspense, lazy, type CSSProperties } from "react";
-import type { SealedStore } from "@naikidev/commiq";
 
-const LazyDevtoolsInner = lazy(() => import("./CommiqDevtoolsInner"));
+import type { DevtoolsStoreRegistry } from "./types";
+
+const LazyDevtoolsInner = lazy(async () => {
+  const mod = await import("./CommiqDevtoolsInner");
+  return { default: mod.CommiqDevtoolsInner };
+});
 
 export type CommiqDevtoolsProps = {
-  stores: Record<string, SealedStore<unknown>>;
+  stores: DevtoolsStoreRegistry;
   enabled?: boolean;
   position?: "bottom-left" | "bottom-right" | "top-left" | "top-right";
   initialOpen?: boolean;

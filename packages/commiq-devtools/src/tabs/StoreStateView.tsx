@@ -1,12 +1,12 @@
-import { useState, useMemo, type CSSProperties } from "react";
-import type { SealedStore } from "@naikidev/commiq";
+import { useCallback, useState, useMemo, type CSSProperties } from "react";
 import type { StateSnapshot } from "@naikidev/commiq-devtools-core";
 import { colors, fonts, formatTime, sharedStyles } from "../theme";
 import { JsonTree } from "../components/JsonTree";
 import { StateDiff } from "../components/StateDiff";
+import type { DevtoolsStoreRegistry } from "../types";
 
 type StoreStateViewProps = {
-  stores: Record<string, SealedStore<unknown>>;
+  stores: DevtoolsStoreRegistry;
   storeStates: Record<string, unknown>;
   getStateHistory: (storeName: string) => readonly StateSnapshot[];
 };
@@ -37,10 +37,15 @@ export function StoreStateView({
     currentIndex > 0 ? history[currentIndex - 1] : undefined;
   const isLatest = currentIndex === history.length - 1;
 
-  function handleModeChange(newMode: Mode) {
-    setMode(newMode);
+  const handleLiveMode = useCallback(() => {
+    setMode("live");
     setSnapshotIndex(null);
-  }
+  }, []);
+
+  const handleHistoryMode = useCallback(() => {
+    setMode("history");
+    setSnapshotIndex(null);
+  }, []);
 
   function handleStoreChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const value = e.target.value === "__all__" ? null : e.target.value;
@@ -74,7 +79,7 @@ export function StoreStateView({
               ...styles.modeButton,
               ...(mode === "live" ? styles.modeButtonActive : {}),
             }}
-            onClick={() => handleModeChange("live")}
+            onClick={handleLiveMode}
           >
             Live
           </button>
@@ -84,7 +89,7 @@ export function StoreStateView({
               ...styles.modeButton,
               ...(mode === "history" ? styles.modeButtonActive : {}),
             }}
-            onClick={() => handleModeChange("history")}
+            onClick={handleHistoryMode}
           >
             History
           </button>
@@ -259,7 +264,7 @@ function getStateType(state: unknown): string {
   return typeof state;
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -410,4 +415,4 @@ const styles: Record<string, CSSProperties> = {
     padding: "10px 14px",
     overflow: "auto",
   },
-};
+} satisfies Record<string, CSSProperties>;

@@ -1,15 +1,17 @@
-import { useState, useMemo, type CSSProperties } from "react";
-import type { SealedStore } from "@naikidev/commiq";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createCommand } from "@naikidev/commiq";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import { colors, fonts, formatTime, sharedStyles } from "../theme";
-import { getCommandFromEntry } from "../types";
+import { safeStringify, safeStringifyPretty } from "../safe-stringify";
+import { getCommandFromEntry, type DevtoolsStoreRegistry } from "../types";
 
 type DispatchTabProps = {
   timeline: readonly TimelineEntry[];
-  stores: Record<string, SealedStore<unknown>>;
+  stores: DevtoolsStoreRegistry;
   storeNames: string[];
 }
+
+const DISPATCH_FLASH_MS = 1500;
 
 type KnownCommand = {
   name: string;
@@ -28,6 +30,13 @@ export function DispatchTab({ timeline, stores, storeNames }: DispatchTabProps) 
   const [dataText, setDataText] = useState("");
   const [dataError, setDataError] = useState<string | null>(null);
   const [dispatched, setDispatched] = useState<string | null>(null);
+  const dispatchedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (dispatchedTimerRef.current !== null) clearTimeout(dispatchedTimerRef.current);
+    };
+  }, []);
 
   const knownCommands = useMemo(() => {
     const map = new Map<string, KnownCommand>();
@@ -64,13 +73,13 @@ export function DispatchTab({ timeline, stores, storeNames }: DispatchTabProps) 
     ? knownCommands.filter((c) => c.storeName === storeFilter)
     : knownCommands;
 
-  function handleSelectCommand(cmd: KnownCommand) {
+  const handleSelectCommand = useCallback((cmd: KnownCommand) => {
     setSelectedCommand(cmd);
     setCustomName(cmd.name);
     setDataText(formatData(cmd.lastData));
     setDataError(null);
     setStoreFilter(cmd.storeName);
-  }
+  }, []);
 
   function handleDispatch() {
     const targetStore = storeFilter;
@@ -92,7 +101,11 @@ export function DispatchTab({ timeline, stores, storeNames }: DispatchTabProps) 
     stores[targetStore].queue(command);
 
     setDispatched(name);
-    setTimeout(() => setDispatched(null), 1500);
+    if (dispatchedTimerRef.current !== null) clearTimeout(dispatchedTimerRef.current);
+    dispatchedTimerRef.current = setTimeout(() => {
+      dispatchedTimerRef.current = null;
+      setDispatched(null);
+    }, DISPATCH_FLASH_MS);
   }
 
   function handleStoreChange(e: React.ChangeEvent<HTMLSelectElement>) {
@@ -144,32 +157,17 @@ export function DispatchTab({ timeline, stores, storeNames }: DispatchTabProps) 
           )}
 
           <div style={styles.scrollArea}>
-            {filteredCommands.map((cmd) => {
-              const isSelected = selectedCommand?.name === cmd.name
-                && selectedCommand?.storeName === cmd.storeName;
-
-              return (
-                <div
-                  key={`${cmd.storeName}::${cmd.name}`}
-                  className="commiq-cmd-card"
-                  style={{
-                    ...styles.commandCard,
-                    ...(isSelected ? styles.commandCardSelected : {}),
-                  }}
-                  onClick={() => handleSelectCommand(cmd)}
-                >
-                  <div style={styles.commandHeader}>
-                    <span style={styles.commandName}>{cmd.name}</span>
-                    <span style={styles.commandMeta}>
-                      ×{cmd.count} · {formatTime(cmd.lastTimestamp)}
-                    </span>
-                  </div>
-                  <div style={styles.commandPreview}>
-                    {formatPreview(cmd.lastData)}
-                  </div>
-                </div>
-              );
-            })}
+            {filteredCommands.map((cmd) => (
+              <CommandCard
+                key={`${cmd.storeName}::${cmd.name}`}
+                command={cmd}
+                selected={
+                  selectedCommand?.name === cmd.name &&
+                  selectedCommand?.storeName === cmd.storeName
+                }
+                onSelect={handleSelectCommand}
+              />
+            ))}
           </div>
         </div>
 
@@ -232,19 +230,47 @@ export function DispatchTab({ timeline, stores, storeNames }: DispatchTabProps) 
   );
 }
 
+type CommandCardProps = {
+  command: KnownCommand;
+  selected: boolean;
+  onSelect: (command: KnownCommand) => void;
+}
+
+function CommandCard({ command, selected, onSelect }: CommandCardProps) {
+  const handleClick = useCallback(() => onSelect(command), [onSelect, command]);
+
+  return (
+    <div
+      className="commiq-cmd-card"
+      style={selected ? { ...styles.commandCard, ...styles.commandCardSelected } : styles.commandCard}
+      onClick={handleClick}
+    >
+      <div style={styles.commandHeader}>
+        <span style={styles.commandName}>{command.name}</span>
+        <span style={styles.commandMeta}>
+          ×{command.count} · {formatTime(command.lastTimestamp)}
+        </span>
+      </div>
+      <div style={styles.commandPreview}>{formatPreview(command.lastData)}</div>
+    </div>
+  );
+}
+
 function formatData(data: unknown): string {
   if (data === undefined || data === null) return "";
-  return JSON.stringify(data, null, 2);
+  return safeStringifyPretty(data);
 }
 
 function formatPreview(data: unknown): string {
   if (data === undefined || data === null) return "no data";
-  const str = JSON.stringify(data);
-  if (str.length > 80) return str.slice(0, 77) + "…";
+  const str = safeStringify(data);
+  if (str.length > PREVIEW_LIMIT) return str.slice(0, PREVIEW_LIMIT - 3) + "…";
   return str;
 }
 
-const styles: Record<string, CSSProperties> = {
+const PREVIEW_LIMIT = 80;
+
+const styles = {
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -403,6 +429,6 @@ const styles: Record<string, CSSProperties> = {
     cursor: "default",
   },
   dispatchButtonSuccess: {
-    backgroundColor: "#22c55e",
+    backgroundColor: "#15803d",
   },
-};
+} satisfies Record<string, CSSProperties>;

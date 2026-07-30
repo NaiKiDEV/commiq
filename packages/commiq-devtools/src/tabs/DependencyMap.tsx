@@ -1,183 +1,35 @@
 import {
-  useMemo,
-  useState,
-  useRef,
   useCallback,
   useEffect,
+  useMemo,
+  useRef,
+  useState,
   type CSSProperties,
 } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import { colors, fonts, sharedStyles } from "../theme";
-import { getCommandFromEntry } from "../types";
+import { buildCausalityIndex, buildStoreEdges, edgeSignature, type StoreEdge } from "../causality";
+import {
+  clampZoom,
+  computeFit,
+  computeLayout,
+  mergePositions,
+  type Vec,
+} from "./dependency-layout";
+import { DependencyEdge, DependencyNode } from "./DependencyGraphParts";
+
+const WHEEL_FACTOR = 1.12;
 
 type DependencyMapProps = {
   timeline: readonly TimelineEntry[];
   storeNames: string[];
-};
-
-type StoreEdge = {
-  from: string;
-  to: string;
-  commands: Set<string>;
-  count: number;
-};
-
-const NODE_W = 130;
-const NODE_H = 44;
-const MIN_ZOOM = 0.2;
-const MAX_ZOOM = 3;
-
-type Vec = { x: number; y: number };
-
-function findComponents(
-  nodes: string[],
-  edgeList: { from: string; to: string }[],
-): string[][] {
-  const adj = new Map<string, Set<string>>();
-  for (const n of nodes) adj.set(n, new Set());
-  for (const e of edgeList) {
-    adj.get(e.from)?.add(e.to);
-    adj.get(e.to)?.add(e.from);
-  }
-
-  const visited = new Set<string>();
-  const components: string[][] = [];
-
-  for (const n of nodes) {
-    if (visited.has(n)) continue;
-    const comp: string[] = [];
-    const stack = [n];
-    while (stack.length) {
-      const cur = stack.pop()!;
-      if (visited.has(cur)) continue;
-      visited.add(cur);
-      comp.push(cur);
-      for (const nb of adj.get(cur) ?? []) {
-        if (!visited.has(nb)) stack.push(nb);
-      }
-    }
-    components.push(comp);
-  }
-  return components;
-}
-
-function forceLayout(
-  nodes: string[],
-  edgeList: { from: string; to: string }[],
-  iterations = 120,
-): Map<string, Vec> {
-  const pos = new Map<string, Vec>();
-  const vel = new Map<string, Vec>();
-  const n = nodes.length;
-
-  if (n === 1) {
-    pos.set(nodes[0], { x: 0, y: 0 });
-    return pos;
-  }
-
-  const seedR = Math.max(100, n * 40);
-  for (let i = 0; i < n; i++) {
-    const angle = (2 * Math.PI * i) / n - Math.PI / 2;
-    pos.set(nodes[i], {
-      x: seedR * Math.cos(angle),
-      y: seedR * Math.sin(angle),
-    });
-    vel.set(nodes[i], { x: 0, y: 0 });
-  }
-
-  const edgeSet = new Set(edgeList.map((e) => `${e.from}→${e.to}`));
-  const isLinked = (a: string, b: string) =>
-    edgeSet.has(`${a}→${b}`) || edgeSet.has(`${b}→${a}`);
-
-  const REPULSION = 60_000;
-  const SPRING_K = 0.006;
-  const IDEAL_LEN = NODE_W * 2.2;
-  const DAMPING = 0.85;
-  const MIN_DIST = NODE_W * 0.8;
-
-  for (let iter = 0; iter < iterations; iter++) {
-    const temp = 1 - iter / iterations;
-    const maxMove = 30 * temp + 2;
-
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = pos.get(nodes[i])!;
-        const b = pos.get(nodes[j])!;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < MIN_DIST) dist = MIN_DIST;
-        const force = REPULSION / (dist * dist);
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        vel.get(nodes[i])!.x -= fx;
-        vel.get(nodes[i])!.y -= fy;
-        vel.get(nodes[j])!.x += fx;
-        vel.get(nodes[j])!.y += fy;
-      }
-    }
-
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        if (!isLinked(nodes[i], nodes[j])) continue;
-        const a = pos.get(nodes[i])!;
-        const b = pos.get(nodes[j])!;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const displacement = dist - IDEAL_LEN;
-        const fx = (dx / dist) * displacement * SPRING_K;
-        const fy = (dy / dist) * displacement * SPRING_K;
-        vel.get(nodes[i])!.x += fx;
-        vel.get(nodes[i])!.y += fy;
-        vel.get(nodes[j])!.x -= fx;
-        vel.get(nodes[j])!.y -= fy;
-      }
-    }
-
-    for (const name of nodes) {
-      const v = vel.get(name)!;
-      const p = pos.get(name)!;
-      v.x *= DAMPING;
-      v.y *= DAMPING;
-      const mag = Math.sqrt(v.x * v.x + v.y * v.y);
-      if (mag > maxMove) {
-        v.x = (v.x / mag) * maxMove;
-        v.y = (v.y / mag) * maxMove;
-      }
-      p.x += v.x;
-      p.y += v.y;
-    }
-  }
-
-  return pos;
-}
-
-function getBounds(positions: Map<string, Vec>): {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-} {
-  let minX = Infinity,
-    maxX = -Infinity,
-    minY = Infinity,
-    maxY = -Infinity;
-  for (const p of positions.values()) {
-    minX = Math.min(minX, p.x);
-    maxX = Math.max(maxX, p.x);
-    minY = Math.min(minY, p.y);
-    maxY = Math.max(maxY, p.y);
-  }
-  return { minX, maxX, minY, maxY };
 }
 
 export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
 
   const [positions, setPositions] = useState<Map<string, Vec>>(new Map());
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [draggingNode, setDraggingNode] = useState<string | null>(null);
   const [isPanning, setIsPanning] = useState(false);
@@ -189,178 +41,61 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     startPan: { x: 0, y: 0 },
   });
 
-  const { edges, edgeList } = useMemo(() => {
-    const edgeMap = new Map<string, StoreEdge>();
+  const edgeList = useMemo(
+    () => buildStoreEdges(buildCausalityIndex(timeline), timeline),
+    [timeline],
+  );
 
-    const commandGroupMap = new Map<string, TimelineEntry[]>();
-    for (const e of timeline) {
-      if (e.causedBy) {
-        const group = commandGroupMap.get(e.causedBy) ?? [];
-        group.push(e);
-        commandGroupMap.set(e.causedBy, group);
-      }
-    }
+  const edgeKeys = useMemo(
+    () => new Set(edgeList.map((e) => `${e.from}→${e.to}`)),
+    [edgeList],
+  );
 
-    const eventStore = new Map<string, string>();
-    for (const e of timeline) {
-      eventStore.set(e.correlationId, e.storeName);
-    }
+  const layoutKey = useMemo(
+    () => `${[...storeNames].sort().join(",")};${edgeSignature(edgeList)}`,
+    [storeNames, edgeList],
+  );
 
-    for (const group of commandGroupMap.values()) {
-      const cmdStarted = group.find((e) => e.name === "commandStarted");
-      if (!cmdStarted) continue;
+  const layoutInputsRef = useRef({ storeNames, edgeList });
+  layoutInputsRef.current = { storeNames, edgeList };
 
-      const command = getCommandFromEntry(cmdStarted);
-      const parentEventId = command?.causedBy;
-      if (!parentEventId) continue;
+  const layout = useMemo(() => {
+    const { storeNames: names, edgeList: edges } = layoutInputsRef.current;
+    return computeLayout(names, edges);
+  }, [layoutKey]);
 
-      const sourceStore = eventStore.get(parentEventId);
-      const targetStore = cmdStarted.storeName;
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
 
-      if (!sourceStore || sourceStore === targetStore) continue;
-
-      const key = `${sourceStore}→${targetStore}`;
-      const existing = edgeMap.get(key);
-      const cmdName = command?.name ?? "unknown";
-      if (existing) {
-        existing.commands.add(cmdName);
-        existing.count++;
-      } else {
-        edgeMap.set(key, {
-          from: sourceStore,
-          to: targetStore,
-          commands: new Set([cmdName]),
-          count: 1,
-        });
-      }
-    }
-
-    return { edges: edgeMap, edgeList: [...edgeMap.values()] };
-  }, [timeline]);
-
-  const initialPositions = useMemo(() => {
-    const pos = new Map<string, Vec>();
-    if (storeNames.length === 0) return pos;
-
-    const connectedStores = new Set<string>();
-    for (const edge of edgeList) {
-      connectedStores.add(edge.from);
-      connectedStores.add(edge.to);
-    }
-
-    const connected = storeNames.filter((s) => connectedStores.has(s));
-    const disconnected = storeNames.filter((s) => !connectedStores.has(s));
-
-    const components = findComponents(connected, edgeList);
-    const CLUSTER_GAP = NODE_W * 2;
-
-    let cursorX = 0;
-
-    for (const comp of components) {
-      const compEdges = edgeList.filter(
-        (e) => comp.includes(e.from) && comp.includes(e.to),
-      );
-      const layoutPositions = forceLayout(comp, compEdges);
-
-      const bounds = getBounds(layoutPositions);
-      const compW = bounds.maxX - bounds.minX + NODE_W;
-      const compCx = (bounds.minX + bounds.maxX) / 2;
-      const compCy = (bounds.minY + bounds.maxY) / 2;
-      const offsetX = cursorX + compW / 2 - compCx;
-      const offsetY = -compCy;
-
-      for (const [name, p] of layoutPositions) {
-        pos.set(name, { x: p.x + offsetX, y: p.y + offsetY });
-      }
-
-      cursorX += compW + CLUSTER_GAP;
-    }
-
-    if (pos.size > 0) {
-      const allBounds = getBounds(pos);
-      const shiftX = -(allBounds.minX + allBounds.maxX) / 2;
-      const shiftY = -(allBounds.minY + allBounds.maxY) / 2;
-      for (const [name, p] of pos) {
-        pos.set(name, { x: p.x + shiftX, y: p.y + shiftY });
-      }
-    }
-
-    if (disconnected.length > 0) {
-      const allBounds =
-        pos.size > 0 ? getBounds(pos) : { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-      const bottomY = allBounds.maxY + NODE_H * 2.5;
-      const totalW = disconnected.length * (NODE_W + 24) - 24;
-      const startX = -totalW / 2 + NODE_W / 2;
-      for (let i = 0; i < disconnected.length; i++) {
-        pos.set(disconnected[i], {
-          x: startX + i * (NODE_W + 24),
-          y: bottomY,
-        });
-      }
-    }
-
-    return pos;
-  }, [storeNames, edgeList]);
-
-  const fitToView = useCallback(() => {
-    setPositions(new Map(initialPositions));
+  const applyFit = useCallback(() => {
     const container = containerRef.current;
-    if (!container || initialPositions.size === 0) {
+    const current = layoutRef.current;
+    if (!container || current.size === 0) {
       setPan({ x: 0, y: 0 });
       setZoom(1);
       return;
     }
+    const fit = computeFit(current, container.clientWidth, container.clientHeight);
+    setPan(fit.pan);
+    setZoom(fit.zoom);
+  }, []);
 
-    let minX = Infinity,
-      maxX = -Infinity,
-      minY = Infinity,
-      maxY = -Infinity;
-    for (const p of initialPositions.values()) {
-      minX = Math.min(minX, p.x - NODE_W / 2);
-      maxX = Math.max(maxX, p.x + NODE_W / 2);
-      minY = Math.min(minY, p.y - NODE_H / 2);
-      maxY = Math.max(maxY, p.y + NODE_H / 2);
-    }
-
-    const graphW = maxX - minX + 80;
-    const graphH = maxY - minY + 80;
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
-
-    const scale = Math.min(1.2, Math.min(cw / graphW, ch / graphH));
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-
-    setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale)));
-    setPan({ x: cw / 2 - cx * scale, y: ch / 2 - cy * scale });
-  }, [initialPositions]);
-
-  const layoutKey = useMemo(() => {
-    const edgeKey = edgeList
-      .map(
-        (e) =>
-          `${e.from}→${e.to}:${e.count}:[${[...e.commands].sort().join(",")}]`,
-      )
-      .sort()
-      .join("|");
-    return storeNames.slice().sort().join(",") + ";" + edgeKey;
-  }, [storeNames, edgeList]);
+  const handleFitClick = useCallback(() => {
+    setPositions(new Map(layoutRef.current));
+    applyFit();
+  }, [applyFit]);
 
   useEffect(() => {
-    setPositions(new Map(initialPositions));
-  }, [initialPositions]);
+    setPositions((prev) => mergePositions(prev, layoutRef.current));
+  }, [layoutKey]);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => {
-      fitToView();
-    });
+    const frame = requestAnimationFrame(applyFit);
     return () => cancelAnimationFrame(frame);
-  }, [layoutKey, fitToView]);
+  }, [layoutKey, applyFit]);
 
   const screenToGraph = useCallback(
-    (sx: number, sy: number) => {
-      return { x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom };
-    },
+    (sx: number, sy: number) => ({ x: (sx - pan.x) / zoom, y: (sy - pan.y) / zoom }),
     [pan, zoom],
   );
 
@@ -378,24 +113,23 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       const rect = el.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-
-      const z = zoomRef.current;
-      const p = panRef.current;
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z * factor));
+      const currentZoom = zoomRef.current;
+      const currentPan = panRef.current;
+      const factor = e.deltaY < 0 ? WHEEL_FACTOR : 1 / WHEEL_FACTOR;
+      const nextZoom = clampZoom(currentZoom * factor);
 
       setPan({
-        x: mx - (mx - p.x) * (newZoom / z),
-        y: my - (my - p.y) * (newZoom / z),
+        x: mx - (mx - currentPan.x) * (nextZoom / currentZoom),
+        y: my - (my - currentPan.y) * (nextZoom / currentZoom),
       });
-      setZoom(newZoom);
+      setZoom(nextZoom);
     };
 
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  const handleBgDown = useCallback(
+  const handleBackgroundDown = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
       setIsPanning(true);
@@ -409,13 +143,12 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     (e: React.MouseEvent, name: string) => {
       e.stopPropagation();
       if (e.button !== 0) return;
-      setDraggingNode(name);
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const gp = screenToGraph(e.clientX - rect.left, e.clientY - rect.top);
-      dragRef.current.startMouse = { x: gp.x, y: gp.y };
-      const pos = positions.get(name) ?? { x: 0, y: 0 };
-      dragRef.current.startPos = { ...pos };
+      setDraggingNode(name);
+      const graphPoint = screenToGraph(e.clientX - rect.left, e.clientY - rect.top);
+      dragRef.current.startMouse = graphPoint;
+      dragRef.current.startPos = { ...(positions.get(name) ?? { x: 0, y: 0 }) };
     },
     [positions, screenToGraph],
   );
@@ -425,9 +158,9 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
       if (draggingNode) {
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
-        const gp = screenToGraph(e.clientX - rect.left, e.clientY - rect.top);
-        const dx = gp.x - dragRef.current.startMouse.x;
-        const dy = gp.y - dragRef.current.startMouse.y;
+        const graphPoint = screenToGraph(e.clientX - rect.left, e.clientY - rect.top);
+        const dx = graphPoint.x - dragRef.current.startMouse.x;
+        const dy = graphPoint.y - dragRef.current.startMouse.y;
         setPositions((prev) => {
           const next = new Map(prev);
           next.set(draggingNode, {
@@ -436,14 +169,13 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
           });
           return next;
         });
-      } else if (isPanning) {
-        const dx = e.clientX - dragRef.current.startMouse.x;
-        const dy = e.clientY - dragRef.current.startMouse.y;
-        setPan({
-          x: dragRef.current.startPan.x + dx,
-          y: dragRef.current.startPan.y + dy,
-        });
+        return;
       }
+      if (!isPanning) return;
+      setPan({
+        x: dragRef.current.startPan.x + (e.clientX - dragRef.current.startMouse.x),
+        y: dragRef.current.startPan.y + (e.clientY - dragRef.current.startMouse.y),
+      });
     };
     const onUp = () => {
       setDraggingNode(null);
@@ -457,15 +189,19 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
     };
   }, [draggingNode, isPanning, screenToGraph]);
 
-  const highlightedStores = useMemo(() => {
-    if (!hovered) return new Set<string>();
-    const set = new Set<string>([hovered]);
+  const highlighted = useMemo(
+    () => highlightSet(hovered, edgeList),
+    [hovered, edgeList],
+  );
+
+  const connectedStores = useMemo(() => {
+    const set = new Set<string>();
     for (const edge of edgeList) {
-      if (edge.from === hovered) set.add(edge.to);
-      if (edge.to === hovered) set.add(edge.from);
+      set.add(edge.from);
+      set.add(edge.to);
     }
     return set;
-  }, [hovered, edgeList]);
+  }, [edgeList]);
 
   return (
     <div style={sharedStyles.container}>
@@ -473,15 +209,16 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
         <span style={styles.toolbarLabel}>
           {storeNames.length} stores · {edgeList.length} connections
         </span>
-        <div style={{ flex: 1 }} />
+        <div style={styles.spacer} />
         <span style={styles.toolbarHint}>
           scroll to zoom · drag to pan · drag nodes to move
         </span>
         <button
+          type="button"
           className="commiq-label-btn"
-          onClick={fitToView}
+          onClick={handleFitClick}
           style={styles.fitButton}
-          title="Fit to view"
+          title="Reset layout and fit to view"
         >
           ⊞ Fit
         </button>
@@ -493,19 +230,14 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
           ...styles.canvas,
           cursor: isPanning || draggingNode ? "grabbing" : "grab",
         }}
-        onMouseDown={handleBgDown}
+        onMouseDown={handleBackgroundDown}
       >
         {storeNames.length === 0 ? (
           <div style={sharedStyles.empty}>
             No stores connected. Add stores to see the dependency map.
           </div>
         ) : (
-          <svg
-            ref={svgRef}
-            width="100%"
-            height="100%"
-            style={{ display: "block", overflow: "visible" }}
-          >
+          <svg width="100%" height="100%" style={styles.svg}>
             <defs>
               <marker
                 id="dep-arrow"
@@ -527,154 +259,35 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
                 markerHeight={7}
                 orient="auto"
               >
-                <path
-                  d="M0,1.5 L10,5 L0,8.5"
-                  fill={colors.accent}
-                  opacity={0.25}
-                />
+                <path d="M0,1.5 L10,5 L0,8.5" fill={colors.accent} opacity={0.25} />
               </marker>
             </defs>
 
             <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-              {edgeList.map((edge, i) => {
-                const fromPos = positions.get(edge.from);
-                const toPos = positions.get(edge.to);
-                if (!fromPos || !toPos) return null;
+              {edgeList.map((edge) => (
+                <DependencyEdge
+                  key={`edge-${edge.from}→${edge.to}`}
+                  edge={edge}
+                  from={positions.get(edge.from)}
+                  to={positions.get(edge.to)}
+                  bidirectional={edgeKeys.has(`${edge.to}→${edge.from}`)}
+                  hovering={hovered !== null}
+                  highlighted={highlighted.has(edge.from) && highlighted.has(edge.to)}
+                />
+              ))}
 
-                const dx = toPos.x - fromPos.x;
-                const dy = toPos.y - fromPos.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist === 0) return null;
-
-                const nx = dx / dist;
-                const ny = dy / dist;
-
-                const x1 = fromPos.x + nx * (NODE_W / 2 + 6);
-                const y1 = fromPos.y + ny * (NODE_H / 2 + 6);
-                const x2 = toPos.x - nx * (NODE_W / 2 + 12);
-                const y2 = toPos.y - ny * (NODE_H / 2 + 12);
-
-                const reverseKey = `${edge.to}→${edge.from}`;
-                const hasReverse = edges.has(reverseKey);
-
-                const midX = (x1 + x2) / 2;
-                const midY = (y1 + y2) / 2;
-                const curveStrength = hasReverse ? 24 : 0;
-                const offsetX = -ny * curveStrength;
-                const offsetY = nx * curveStrength;
-                const ctrlX = midX + offsetX;
-                const ctrlY = midY + offsetY;
-
-                const labelX = midX + offsetX * 0.6;
-                const labelY = midY + offsetY * 0.6;
-
-                const isHighlighted =
-                  !hovered ||
-                  (highlightedStores.has(edge.from) &&
-                    highlightedStores.has(edge.to));
-                const edgeOpacity = hovered
-                  ? isHighlighted
-                    ? 0.8
-                    : 0.1
-                  : 0.55;
-
-                return (
-                  <g key={`edge-${i}`} opacity={edgeOpacity}>
-                    <path
-                      d={`M${x1},${y1} Q${ctrlX},${ctrlY} ${x2},${y2}`}
-                      fill="none"
-                      stroke={colors.accent}
-                      strokeWidth={Math.min(3, 1.2 + edge.count * 0.3)}
-                      markerEnd={
-                        isHighlighted
-                          ? "url(#dep-arrow)"
-                          : "url(#dep-arrow-dim)"
-                      }
-                    />
-                    <text
-                      x={labelX}
-                      y={labelY - 5}
-                      textAnchor="middle"
-                      fill={colors.textSecondary}
-                      fontSize={9}
-                      fontFamily={fonts.mono}
-                    >
-                      {[...edge.commands].join(", ")}
-                    </text>
-                    <text
-                      x={labelX}
-                      y={labelY + 7}
-                      textAnchor="middle"
-                      fill={colors.textSecondary}
-                      fontSize={8}
-                      fontFamily={fonts.sans}
-                      opacity={0.7}
-                    >
-                      ×{edge.count}
-                    </text>
-                  </g>
-                );
-              })}
-
-              {storeNames.map((name) => {
-                const pos = positions.get(name);
-                if (!pos) return null;
-
-                const hasEdge = edgeList.some(
-                  (e) => e.from === name || e.to === name,
-                );
-                const isHovered = hovered === name;
-                const isRelated = highlightedStores.has(name);
-                const dimmed = hovered && !isRelated;
-
-                return (
-                  <g
-                    key={`node-${name}`}
-                    onMouseDown={(e) => handleNodeDown(e, name)}
-                    onMouseEnter={() => setHovered(name)}
-                    onMouseLeave={() => setHovered(null)}
-                    style={{ cursor: "grab" }}
-                    opacity={dimmed ? 0.25 : 1}
-                  >
-                    <rect
-                      x={pos.x - NODE_W / 2}
-                      y={pos.y - NODE_H / 2}
-                      width={NODE_W}
-                      height={NODE_H}
-                      rx={10}
-                      ry={10}
-                      fill={isHovered ? colors.bgHeader : colors.bgPanel}
-                      stroke={
-                        isHovered
-                          ? colors.accentLight
-                          : hasEdge
-                            ? colors.accent
-                            : colors.border
-                      }
-                      strokeWidth={isHovered ? 2 : hasEdge ? 1.5 : 1}
-                    />
-                    <text
-                      x={pos.x}
-                      y={pos.y + 1}
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fill={
-                        dimmed
-                          ? colors.textMuted
-                          : hasEdge
-                            ? "#ffffff"
-                            : colors.text
-                      }
-                      fontSize={12}
-                      fontWeight={600}
-                      fontFamily={fonts.sans}
-                      pointerEvents="none"
-                    >
-                      {name}
-                    </text>
-                  </g>
-                );
-              })}
+              {storeNames.map((name) => (
+                <DependencyNode
+                  key={`node-${name}`}
+                  name={name}
+                  position={positions.get(name)}
+                  connected={connectedStores.has(name)}
+                  hovered={hovered === name}
+                  dimmed={hovered !== null && !highlighted.has(name)}
+                  onPointerDown={handleNodeDown}
+                  onHover={setHovered}
+                />
+              ))}
             </g>
           </svg>
         )}
@@ -683,7 +296,17 @@ export function DependencyMap({ timeline, storeNames }: DependencyMapProps) {
   );
 }
 
-const styles: Record<string, CSSProperties> = {
+function highlightSet(hovered: string | null, edges: readonly StoreEdge[]): Set<string> {
+  if (hovered === null) return new Set<string>();
+  const set = new Set<string>([hovered]);
+  for (const edge of edges) {
+    if (edge.from === hovered) set.add(edge.to);
+    if (edge.to === hovered) set.add(edge.from);
+  }
+  return set;
+}
+
+const styles = {
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -702,7 +325,9 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 10,
     color: colors.textMuted,
     fontFamily: fonts.sans,
-    opacity: 0.7,
+  },
+  spacer: {
+    flex: 1,
   },
   fitButton: {
     display: "flex",
@@ -722,7 +347,12 @@ const styles: Record<string, CSSProperties> = {
   canvas: {
     flex: 1,
     overflow: "hidden",
-    position: "relative" as const,
-    userSelect: "none" as const,
+    position: "relative",
+    userSelect: "none",
+    touchAction: "none",
   },
-};
+  svg: {
+    display: "block",
+    overflow: "visible",
+  },
+} satisfies Record<string, CSSProperties>;

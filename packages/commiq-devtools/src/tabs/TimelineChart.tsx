@@ -1,62 +1,48 @@
-import {
-  useState,
-  useMemo,
-  useRef,
-  useEffect,
-  type CSSProperties,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import {
   colors,
   fonts,
-  BUILTIN_EVENTS,
   getEventColor,
   truncId,
   formatTime,
   sharedStyles,
 } from "../theme";
+import { BUILTIN_EVENT_NAMES } from "../event-names";
+import { buildCausalityIndex, collectChainIds } from "../causality";
 import { FilterToolbar } from "../components/FilterToolbar";
 import { DetailPanel } from "../components/DetailPanel";
-import { getCommandFromEntry } from "../types";
+import {
+  buildChartLayout,
+  CHART_PADDING,
+  DOT_RADIUS,
+  LABEL_WIDTH,
+  LANE_HEIGHT,
+  TIME_AXIS_HEIGHT,
+  type CausalLink,
+  type PositionedEvent,
+} from "./timeline-layout";
 
 type TimelineChartProps = {
   timeline: readonly TimelineEntry[];
   storeNames: string[];
 }
 
-const LANE_HEIGHT = 38;
-const DOT_RADIUS = 5;
-const LABEL_WIDTH = 100;
-const TIME_AXIS_HEIGHT = 24;
-const MIN_SPACING = 18;
-const CHART_PADDING = 24;
-
-type PositionedEvent = {
-  entry: TimelineEntry;
-  x: number;
-  y: number;
-}
-
-type CausalLink = {
-  from: PositionedEvent;
-  to: PositionedEvent;
-}
+type TooltipPos = { x: number; y: number };
 
 export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
   const [showBuiltins, setShowBuiltins] = useState(true);
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
   const [hoveredEvent, setHoveredEvent] = useState<TimelineEntry | null>(null);
-  const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(
-    null,
-  );
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<TooltipPos>({ x: 0, y: 0 });
   const chartScrollRef = useRef<HTMLDivElement>(null);
   const labelRef = useRef<HTMLDivElement>(null);
 
   const filtered = useMemo(
     () =>
       timeline.filter((e) => {
-        if (!showBuiltins && BUILTIN_EVENTS.has(e.name)) return false;
+        if (!showBuiltins && BUILTIN_EVENT_NAMES.has(e.name)) return false;
         if (storeFilter && e.storeName !== storeFilter) return false;
         return true;
       }),
@@ -70,193 +56,45 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
     return storeNames.filter((n) => seen.has(n));
   }, [filtered, storeNames, storeFilter]);
 
-  const entryMap = useMemo(() => {
-    const m = new Map<string, TimelineEntry>();
-    for (const e of timeline) m.set(e.correlationId, e);
-    return m;
-  }, [timeline]);
+  const causality = useMemo(() => buildCausalityIndex(timeline), [timeline]);
 
   const selectedChain = useMemo(() => {
     if (!selectedEvent) return null;
-    const ids = new Set<string>();
+    return collectChainIds(causality, selectedEvent.correlationId);
+  }, [selectedEvent, causality]);
 
-    const commandGroupMap = new Map<string, TimelineEntry[]>();
-    for (const e of timeline) {
-      if (e.causedBy) {
-        const group = commandGroupMap.get(e.causedBy) ?? [];
-        group.push(e);
-        commandGroupMap.set(e.causedBy, group);
-      }
-    }
-
-    const parentOfCommand = new Map<string, string>();
-    for (const [cmdCorrId, group] of commandGroupMap) {
-      const cmdStarted = group.find((e) => e.name === "commandStarted");
-      const command = cmdStarted ? getCommandFromEntry(cmdStarted) : undefined;
-      const parentId = command?.causedBy;
-      if (parentId) {
-        parentOfCommand.set(cmdCorrId, parentId);
-      }
-    }
-
-    const selectedCmdId = selectedEvent.causedBy;
-    const addGroup = (cmdId: string) => {
-      const group = commandGroupMap.get(cmdId);
-      if (group) {
-        for (const e of group) ids.add(e.correlationId);
-      }
-    };
-
-    if (selectedCmdId) addGroup(selectedCmdId);
-    ids.add(selectedEvent.correlationId);
-
-    let walkCmdId = selectedCmdId;
-    while (walkCmdId) {
-      const parentEventId = parentOfCommand.get(walkCmdId);
-      if (!parentEventId || ids.has(parentEventId)) break;
-      const parentEvent = entryMap.get(parentEventId);
-      if (!parentEvent) break;
-      ids.add(parentEventId);
-      if (parentEvent.causedBy) {
-        addGroup(parentEvent.causedBy);
-        walkCmdId = parentEvent.causedBy;
-      } else {
-        break;
-      }
-    }
-
-    const queue = [...ids];
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      for (const [cmdId, parentId] of parentOfCommand) {
-        if (parentId === id) {
-          const group = commandGroupMap.get(cmdId);
-          if (group) {
-            for (const e of group) {
-              if (!ids.has(e.correlationId)) {
-                ids.add(e.correlationId);
-                queue.push(e.correlationId);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return ids;
-  }, [selectedEvent, timeline, entryMap]);
-
-  const layout = useMemo(() => {
-    if (filtered.length === 0) return null;
-
-    const sorted = [...filtered].sort((a, b) => a.timestamp - b.timestamp);
-    const minTs = sorted[0].timestamp;
-    const maxTs = sorted[sorted.length - 1].timestamp;
-    const timeSpan = maxTs - minTs;
-
-    const storeY = new Map<string, number>();
-    visibleStores.forEach((name, i) => {
-      storeY.set(name, TIME_AXIS_HEIGHT + i * LANE_HEIGHT + LANE_HEIGHT / 2);
-    });
-
-    const baseWidth = Math.max(400, sorted.length * MIN_SPACING);
-    const positioned: PositionedEvent[] = [];
-    let lastX = -Infinity;
-
-    for (let i = 0; i < sorted.length; i++) {
-      const entry = sorted[i];
-      let x =
-        timeSpan === 0
-          ? (i / Math.max(1, sorted.length - 1)) * baseWidth
-          : ((entry.timestamp - minTs) / timeSpan) * baseWidth;
-
-      if (x - lastX < MIN_SPACING) x = lastX + MIN_SPACING;
-
-      positioned.push({
-        entry,
-        x: x + CHART_PADDING,
-        y: storeY.get(entry.storeName) ?? TIME_AXIS_HEIGHT + LANE_HEIGHT / 2,
-      });
-      lastX = x;
-    }
-
-    const chartWidth =
-      (positioned[positioned.length - 1]?.x ?? 0) + CHART_PADDING * 2;
-    const chartHeight = TIME_AXIS_HEIGHT + visibleStores.length * LANE_HEIGHT;
-
-    const posMap = new Map<string, PositionedEvent>();
-    for (const p of positioned) posMap.set(p.entry.correlationId, p);
-
-    const links: CausalLink[] = [];
-
-    const commandGroups = new Map<string, PositionedEvent[]>();
-    for (const p of positioned) {
-      if (p.entry.causedBy) {
-        const group = commandGroups.get(p.entry.causedBy) ?? [];
-        group.push(p);
-        commandGroups.set(p.entry.causedBy, group);
-      }
-    }
-
-    for (const group of commandGroups.values()) {
-      group.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
-      for (let i = 1; i < group.length; i++) {
-        links.push({ from: group[i - 1], to: group[i] });
-      }
-    }
-
-    for (const group of commandGroups.values()) {
-      const cmdStarted = group.find((p) => p.entry.name === "commandStarted");
-      if (!cmdStarted) continue;
-      const command = getCommandFromEntry(cmdStarted.entry);
-      const parentEventId = command?.causedBy;
-      if (parentEventId && posMap.has(parentEventId)) {
-        links.push({ from: posMap.get(parentEventId)!, to: group[0] });
-      }
-    }
-
-    const firstX = positioned[0].x;
-    const lastEvtX = positioned[positioned.length - 1].x;
-    const xRange = lastEvtX - firstX || 1;
-    const ticks: { x: number; label: string }[] = [];
-
-    if (timeSpan === 0) {
-      ticks.push({ x: firstX + xRange / 2, label: formatTime(minTs) });
-    } else {
-      const tickCount = Math.max(2, Math.min(8, Math.floor(xRange / 100)));
-      for (let i = 0; i <= tickCount; i++) {
-        const frac = i / tickCount;
-        ticks.push({
-          x: firstX + frac * xRange,
-          label: formatTime(minTs + frac * timeSpan),
-        });
-      }
-    }
-
-    return { positioned, links, ticks, chartWidth, chartHeight };
-  }, [filtered, visibleStores]);
+  const layout = useMemo(
+    () => buildChartLayout(filtered, visibleStores, causality),
+    [filtered, visibleStores, causality],
+  );
 
   useEffect(() => {
-    if (chartScrollRef.current) {
-      chartScrollRef.current.scrollLeft = chartScrollRef.current.scrollWidth;
-    }
+    const el = chartScrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
   }, [filtered.length]);
 
-  function handleChartScroll() {
-    if (chartScrollRef.current && labelRef.current) {
-      labelRef.current.scrollTop = chartScrollRef.current.scrollTop;
-    }
-  }
+  const handleChartScroll = useCallback(() => {
+    const chart = chartScrollRef.current;
+    const labels = labelRef.current;
+    if (chart && labels) labels.scrollTop = chart.scrollTop;
+  }, []);
 
-  function handleMouseMove(e: React.MouseEvent) {
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
     setTooltipPos({ x: e.clientX, y: e.clientY });
-  }
+  }, []);
 
-  function handleEventClick(entry: TimelineEntry) {
-    setSelectedEvent(
-      selectedEvent?.correlationId === entry.correlationId ? null : entry,
-    );
-  }
+  const handleHover = useCallback((entry: TimelineEntry, position: TooltipPos) => {
+    setHoveredEvent(entry);
+    setTooltipPos(position);
+  }, []);
+
+  const handleHoverEnd = useCallback(() => setHoveredEvent(null), []);
+
+  const handleSelect = useCallback((entry: TimelineEntry) => {
+    setSelectedEvent((prev) => (prev?.correlationId === entry.correlationId ? null : entry));
+  }, []);
+
+  const handleCloseDetail = useCallback(() => setSelectedEvent(null), []);
 
   const svgHeight = layout?.chartHeight ?? 100;
 
@@ -268,14 +106,12 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
         storeFilter={storeFilter}
         onStoreFilterChange={setStoreFilter}
         storeNames={storeNames}
-        trailing={
-          <span style={styles.eventCount}>{filtered.length} events</span>
-        }
+        trailing={<span style={styles.eventCount}>{filtered.length} events</span>}
       />
 
       <div style={styles.body}>
         <div ref={labelRef} style={{ ...styles.labelCol, height: svgHeight }}>
-          <div style={{ height: TIME_AXIS_HEIGHT, flexShrink: 0 }} />
+          <div style={styles.axisSpacer} />
           {visibleStores.map((name) => (
             <div key={name} style={styles.storeLabel}>
               {name}
@@ -288,7 +124,7 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
           style={styles.chartScroll}
           className="commiq-devtools-scroll"
           onScroll={handleChartScroll}
-          onMouseMove={handleMouseMove}
+          onMouseMove={hoveredEvent ? handleMouseMove : undefined}
         >
           {!layout ? (
             <div style={sharedStyles.empty}>
@@ -298,11 +134,11 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
             <svg
               width={layout.chartWidth}
               height={layout.chartHeight}
-              style={{ display: "block", minWidth: "100%" }}
+              style={styles.svg}
             >
-              {visibleStores.map((_, i) => (
+              {visibleStores.map((name, i) => (
                 <rect
-                  key={`bg-${i}`}
+                  key={`bg-${name}`}
                   x={0}
                   y={TIME_AXIS_HEIGHT + i * LANE_HEIGHT}
                   width={layout.chartWidth}
@@ -312,9 +148,9 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
                 />
               ))}
 
-              {visibleStores.map((_, i) => (
+              {visibleStores.map((name, i) => (
                 <line
-                  key={`ln-${i}`}
+                  key={`ln-${name}`}
                   x1={0}
                   y1={TIME_AXIS_HEIGHT + (i + 1) * LANE_HEIGHT}
                   x2={layout.chartWidth}
@@ -324,128 +160,57 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
                 />
               ))}
 
-              {layout.ticks.map((t, i) => (
-                <g key={`t-${i}`}>
+              {layout.ticks.map((tick) => (
+                <g key={`t-${tick.x}`}>
                   <line
-                    x1={t.x}
+                    x1={tick.x}
                     y1={TIME_AXIS_HEIGHT}
-                    x2={t.x}
+                    x2={tick.x}
                     y2={layout.chartHeight}
                     stroke={colors.borderLight}
                     strokeWidth={0.5}
                     strokeDasharray="4 4"
                   />
                   <text
-                    x={t.x}
+                    x={tick.x}
                     y={TIME_AXIS_HEIGHT - 7}
                     textAnchor="middle"
                     fill={colors.textMuted}
                     fontSize={9}
                     fontFamily={fonts.mono}
                   >
-                    {t.label}
+                    {tick.label}
                   </text>
                 </g>
               ))}
 
-              {layout.links.map((lk, i) => {
-                const inChain =
-                  selectedChain?.has(lk.from.entry.correlationId) &&
-                  selectedChain?.has(lk.to.entry.correlationId);
-                const opacity = selectedChain ? (inChain ? 0.85 : 0.06) : 0.45;
-                const stroke = inChain ? colors.accentLight : colors.accent;
-                const sw = inChain ? 2 : 1.3;
-                const crossLane = Math.abs(lk.to.y - lk.from.y) > 2;
+              {layout.links.map((link) => (
+                <ChainEdge
+                  key={`lk-${link.from.entry.seq}-${link.to.entry.seq}`}
+                  link={link}
+                  chain={selectedChain}
+                />
+              ))}
 
-                const gap = DOT_RADIUS + 2;
-                const dx = lk.to.x - lk.from.x;
-                const dy = lk.to.y - lk.from.y;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                if (dist < gap * 2) return null;
-
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const x1 = lk.from.x + nx * gap;
-                const y1 = lk.from.y + ny * gap;
-                const x2 = lk.to.x - nx * gap;
-                const y2 = lk.to.y - ny * gap;
-
-                if (crossLane) {
-                  const cdx = x2 - x1;
-                  const cdy = y2 - y1;
-                  return (
-                    <path
-                      key={`lk-${i}`}
-                      d={`M${x1},${y1} C${x1 + cdx * 0.4},${y1} ${x2 - cdx * 0.15},${y2 - cdy * 0.15} ${x2},${y2}`}
-                      fill="none"
-                      stroke={stroke}
-                      strokeWidth={sw}
-                      opacity={opacity}
-                    />
-                  );
-                }
-
-                return (
-                  <line
-                    key={`lk-${i}`}
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
-                    stroke={stroke}
-                    strokeWidth={sw}
-                    opacity={opacity}
-                  />
-                );
-              })}
-
-              {layout.positioned.map((p, i) => {
-                const ec = getEventColor(p.entry.name, p.entry.type);
-                const isHovered =
-                  hoveredEvent?.correlationId === p.entry.correlationId;
-                const isSelected =
-                  selectedEvent?.correlationId === p.entry.correlationId;
-                const inChain = selectedChain?.has(p.entry.correlationId);
-                const dimmed = selectedChain != null && !inChain;
-                const r = isHovered || isSelected ? DOT_RADIUS + 2 : DOT_RADIUS;
-
-                return (
-                  <g
-                    key={`ev-${i}`}
-                    opacity={dimmed ? 0.15 : 1}
-                    style={{ cursor: "pointer" }}
-                    onMouseEnter={() => setHoveredEvent(p.entry)}
-                    onMouseLeave={() => setHoveredEvent(null)}
-                    onClick={() => handleEventClick(p.entry)}
-                  >
-                    {(isHovered || isSelected) && (
-                      <circle cx={p.x} cy={p.y} r={r + 4} fill={ec.bg} />
-                    )}
-                    <circle
-                      cx={p.x}
-                      cy={p.y}
-                      r={r}
-                      fill={ec.fg}
-                      stroke={isSelected ? colors.textInverse : "none"}
-                      strokeWidth={isSelected ? 1.5 : 0}
-                    />
-                  </g>
-                );
-              })}
+              {layout.positioned.map((p) => (
+                <TimelineDot
+                  key={`ev-${p.entry.seq}`}
+                  positioned={p}
+                  hovered={hoveredEvent?.correlationId === p.entry.correlationId}
+                  selected={selectedEvent?.correlationId === p.entry.correlationId}
+                  dimmed={selectedChain != null && !selectedChain.has(p.entry.correlationId)}
+                  onHover={handleHover}
+                  onHoverEnd={handleHoverEnd}
+                  onSelect={handleSelect}
+                />
+              ))}
             </svg>
           )}
         </div>
       </div>
 
       {hoveredEvent && !selectedEvent && (
-        <div
-          style={{
-            ...styles.tooltip,
-            left: tooltipPos.x + 14,
-            top: tooltipPos.y - 8,
-          }}
-        >
+        <div style={{ ...styles.tooltip, left: tooltipPos.x + 14, top: tooltipPos.y - 8 }}>
           <div
             style={{
               fontWeight: 600,
@@ -454,34 +219,127 @@ export function TimelineChart({ timeline, storeNames }: TimelineChartProps) {
           >
             {hoveredEvent.name}
           </div>
-          <div style={{ color: colors.textMuted, fontSize: 10 }}>
+          <div style={styles.tooltipMeta}>
             {hoveredEvent.storeName} · {formatTime(hoveredEvent.timestamp)}
           </div>
-          <div
-            style={{
-              color: colors.textMuted,
-              fontSize: 10,
-              fontFamily: fonts.mono,
-              lineHeight: 1,
-            }}
-          >
+          <div style={styles.tooltipIds}>
             {truncId(hoveredEvent.correlationId)}
             {hoveredEvent.causedBy && ` ← ${truncId(hoveredEvent.causedBy)}`}
           </div>
         </div>
       )}
 
-      {selectedEvent && (
-        <DetailPanel
-          event={selectedEvent}
-          onClose={() => setSelectedEvent(null)}
-        />
-      )}
+      {selectedEvent && <DetailPanel event={selectedEvent} onClose={handleCloseDetail} />}
     </div>
   );
 }
 
-const styles: Record<string, CSSProperties> = {
+type ChainEdgeProps = {
+  link: CausalLink;
+  chain: Set<string> | null;
+}
+
+function ChainEdge({ link, chain }: ChainEdgeProps) {
+  const inChain =
+    chain !== null &&
+    chain.has(link.from.entry.correlationId) &&
+    chain.has(link.to.entry.correlationId);
+  const opacity = chain ? (inChain ? 0.85 : 0.06) : 0.45;
+  const stroke = inChain ? colors.accentLight : colors.accent;
+  const strokeWidth = inChain ? 2 : 1.3;
+
+  const gap = DOT_RADIUS + 2;
+  const dx = link.to.x - link.from.x;
+  const dy = link.to.y - link.from.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist < gap * 2) return null;
+
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const x1 = link.from.x + nx * gap;
+  const y1 = link.from.y + ny * gap;
+  const x2 = link.to.x - nx * gap;
+  const y2 = link.to.y - ny * gap;
+
+  if (Math.abs(link.to.y - link.from.y) > 2) {
+    const cdx = x2 - x1;
+    const cdy = y2 - y1;
+    return (
+      <path
+        d={`M${x1},${y1} C${x1 + cdx * 0.4},${y1} ${x2 - cdx * 0.15},${y2 - cdy * 0.15} ${x2},${y2}`}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        opacity={opacity}
+      />
+    );
+  }
+
+  return (
+    <line
+      x1={x1}
+      y1={y1}
+      x2={x2}
+      y2={y2}
+      stroke={stroke}
+      strokeWidth={strokeWidth}
+      opacity={opacity}
+    />
+  );
+}
+
+type TimelineDotProps = {
+  positioned: PositionedEvent;
+  hovered: boolean;
+  selected: boolean;
+  dimmed: boolean;
+  onHover: (entry: TimelineEntry, position: TooltipPos) => void;
+  onHoverEnd: () => void;
+  onSelect: (entry: TimelineEntry) => void;
+}
+
+function TimelineDot({
+  positioned,
+  hovered,
+  selected,
+  dimmed,
+  onHover,
+  onHoverEnd,
+  onSelect,
+}: TimelineDotProps) {
+  const { entry, x, y } = positioned;
+  const color = getEventColor(entry.name, entry.type);
+  const radius = hovered || selected ? DOT_RADIUS + 2 : DOT_RADIUS;
+
+  const handleEnter = useCallback(
+    (e: React.MouseEvent) => onHover(entry, { x: e.clientX, y: e.clientY }),
+    [onHover, entry],
+  );
+
+  const handleClick = useCallback(() => onSelect(entry), [onSelect, entry]);
+
+  return (
+    <g
+      opacity={dimmed ? 0.15 : 1}
+      style={styles.dot}
+      onMouseEnter={handleEnter}
+      onMouseLeave={onHoverEnd}
+      onClick={handleClick}
+    >
+      {(hovered || selected) && <circle cx={x} cy={y} r={radius + 4} fill={color.bg} />}
+      <circle
+        cx={x}
+        cy={y}
+        r={radius}
+        fill={color.fg}
+        stroke={selected ? colors.textInverse : "none"}
+        strokeWidth={selected ? 1.5 : 0}
+      />
+    </g>
+  );
+}
+
+const styles = {
   eventCount: {
     fontSize: 11,
     color: colors.textMuted,
@@ -498,8 +356,12 @@ const styles: Record<string, CSSProperties> = {
     flexShrink: 0,
     borderRight: `1px solid ${colors.borderLight}`,
     backgroundColor: colors.bg,
-    overflowY: "hidden" as const,
-    overflowX: "hidden" as const,
+    overflowY: "hidden",
+    overflowX: "hidden",
+  },
+  axisSpacer: {
+    height: TIME_AXIS_HEIGHT,
+    flexShrink: 0,
   },
   storeLabel: {
     height: LANE_HEIGHT,
@@ -511,18 +373,26 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     color: colors.textSecondary,
     fontFamily: fonts.sans,
-    whiteSpace: "nowrap" as const,
-    overflow: "hidden" as const,
-    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
   chartScroll: {
     flex: 1,
-    overflowX: "auto" as const,
-    overflowY: "auto" as const,
-    position: "relative" as const,
+    overflowX: "auto",
+    overflowY: "auto",
+    position: "relative",
+    paddingRight: CHART_PADDING,
+  },
+  svg: {
+    display: "block",
+    minWidth: "100%",
+  },
+  dot: {
+    cursor: "pointer",
   },
   tooltip: {
-    position: "fixed" as const,
+    position: "fixed",
     zIndex: 100001,
     padding: "6px 10px",
     backgroundColor: colors.bgHeader,
@@ -531,8 +401,18 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
     fontFamily: fonts.sans,
     lineHeight: 1.5,
-    pointerEvents: "none" as const,
+    pointerEvents: "none",
     boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
     maxWidth: 280,
   },
-};
+  tooltipMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+  },
+  tooltipIds: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: fonts.mono,
+    lineHeight: 1,
+  },
+} satisfies Record<string, CSSProperties>;

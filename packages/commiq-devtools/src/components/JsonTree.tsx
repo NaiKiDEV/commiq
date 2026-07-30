@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { colors, fonts } from "../theme";
 
 type JsonTreeProps = {
@@ -86,14 +86,25 @@ function CollapsibleNode({
 }) {
   const [expanded, setExpanded] = useState(initialExpanded);
 
+  const handleToggle = useCallback(() => setExpanded((prev) => !prev), []);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    setExpanded((prev) => !prev);
+  }, []);
+
   return (
     <span>
       <span
         className="commiq-json-toggle"
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleToggle}
+        onKeyDown={handleKeyDown}
         style={styles.toggle}
         role="button"
         tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={label}
       >
         <span className="commiq-expand" style={styles.chevron}>{expanded ? "▼" : "▶"}</span>
         {!expanded && (
@@ -115,7 +126,7 @@ function CollapsibleNode({
   );
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   null: {
     color: colors.null,
     fontStyle: "italic",
@@ -189,4 +200,4 @@ const styles: Record<string, CSSProperties> = {
     marginLeft: 2,
     marginRight: 2,
   },
-};
+} satisfies Record<string, CSSProperties>;

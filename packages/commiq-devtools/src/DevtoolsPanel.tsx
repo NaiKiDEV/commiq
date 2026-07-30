@@ -1,79 +1,93 @@
 import {
-  useState,
-  useRef,
-  useEffect,
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
+  useState,
   type CSSProperties,
 } from "react";
-import type { SealedStore } from "@naikidev/commiq";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
-import { colors, fonts } from "./theme";
+import { colors, fonts, truncId } from "./theme";
+import { PANEL_CSS } from "./panel-css";
+import { safeStringifyPretty } from "./safe-stringify";
+import { buildCausalityIndex, collectChainIds } from "./causality";
 import { useResizable } from "./hooks/useResizable";
-import { EventLog } from "./tabs/EventLog";
-import { CausalityGraph } from "./tabs/CausalityGraph";
-import { TimelineChart } from "./tabs/TimelineChart";
-import { PerformanceTab } from "./tabs/PerformanceTab";
-import { StoreStateView } from "./tabs/StoreStateView";
-import { DependencyMap } from "./tabs/DependencyMap";
-import { DispatchTab } from "./tabs/DispatchTab";
+import { TabBar, tabPanelId, type TabId } from "./components/TabBar";
+import { TabContent } from "./TabContent";
 import type { DevtoolsEngine } from "./hooks/useDevtoolsEngine";
+import type { DevtoolsStoreRegistry } from "./types";
 
-type Tab = "events" | "graph" | "timeline" | "perf" | "state" | "deps" | "dispatch";
+const MIN_PANEL_HEIGHT = 120;
+const VIEWPORT_RESERVE = 60;
+const FALLBACK_MAX_HEIGHT = 800;
+
+type ChainFocus = {
+  correlationId: string;
+  entries: readonly TimelineEntry[];
+}
 
 type DevtoolsPanelProps = {
   engine: DevtoolsEngine;
-  stores: Record<string, SealedStore<unknown>>;
+  stores: DevtoolsStoreRegistry;
   onClose: () => void;
   initialHeight: number;
-  initialErrorFilter?: boolean;
+  onHeightChange?: (height: number) => void;
+  activeTab: TabId;
+  onActiveTabChange: (tab: TabId) => void;
+  errorFilter: boolean;
+  onErrorFilterChange: (value: boolean) => void;
 }
 
-const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: "events", label: "Events", icon: "≡" },
-  { id: "graph", label: "Graph", icon: "◇" },
-  { id: "timeline", label: "Timeline", icon: "◔" },
-  { id: "perf", label: "Performance", icon: "⚡" },
-  { id: "state", label: "State", icon: "◆" },
-  { id: "deps", label: "Deps", icon: "◈" },
-  { id: "dispatch", label: "Dispatch", icon: "▷" },
-];
+function maxPanelHeight(): number {
+  if (typeof window === "undefined") return FALLBACK_MAX_HEIGHT;
+  return Math.max(MIN_PANEL_HEIGHT, window.innerHeight - VIEWPORT_RESERVE);
+}
 
 export function DevtoolsPanel({
   engine,
   stores,
   onClose,
   initialHeight,
-  initialErrorFilter = false,
+  onHeightChange,
+  activeTab,
+  onActiveTabChange,
+  errorFilter,
+  onErrorFilterChange,
 }: DevtoolsPanelProps) {
-  const [activeTab, setActiveTab] = useState<Tab>("events");
-  const [errorFilter, setErrorFilter] = useState(initialErrorFilter);
   const [pinnedKeys, setPinnedKeys] = useState<Set<string>>(new Set());
-  const [importedTimeline, setImportedTimeline] = useState<
-    TimelineEntry[] | null
-  >(null);
+  const [importedTimeline, setImportedTimeline] = useState<TimelineEntry[] | null>(null);
+  const [chainFocus, setChainFocus] = useState<ChainFocus | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lastClearCountRef = useRef(engine.clearCount);
 
   useEffect(() => {
-    setErrorFilter(false);
+    if (lastClearCountRef.current === engine.clearCount) return;
+    lastClearCountRef.current = engine.clearCount;
+    onErrorFilterChange(false);
     setPinnedKeys(new Set());
     setImportedTimeline(null);
-  }, [engine.clearCount]);
+    setChainFocus(null);
+  }, [engine.clearCount, onErrorFilterChange]);
 
-  const { height: panelHeight, isDragging: isPanelDragging, onMouseDown } = useResizable({
+  const { height: panelHeight, isDragging, separatorProps } = useResizable({
     initial: initialHeight,
-    min: 120,
-    max: typeof window !== "undefined" ? window.innerHeight - 60 : 800,
+    min: MIN_PANEL_HEIGHT,
+    max: maxPanelHeight,
+    label: "Resize devtools panel",
   });
 
-  function handleErrorBadgeClick() {
-    setActiveTab("events");
-    setErrorFilter(true);
-  }
+  useEffect(() => {
+    onHeightChange?.(panelHeight);
+  }, [panelHeight, onHeightChange]);
 
-  function handleClearErrorFilter() {
-    setErrorFilter(false);
-  }
+  const handleErrorBadgeClick = useCallback(() => {
+    onActiveTabChange("events");
+    onErrorFilterChange(true);
+  }, [onActiveTabChange, onErrorFilterChange]);
+
+  const handleClearErrorFilter = useCallback(() => {
+    onErrorFilterChange(false);
+  }, [onErrorFilterChange]);
 
   const handleTogglePin = useCallback((key: string) => {
     setPinnedKeys((prev) => {
@@ -87,88 +101,106 @@ export function DevtoolsPanel({
     });
   }, []);
 
-  const pinActions = useMemo(() => ({
-    pinnedKeys,
-    onTogglePin: handleTogglePin,
-  }), [pinnedKeys, handleTogglePin]);
+  const pinActions = useMemo(
+    () => ({ pinnedKeys, onTogglePin: handleTogglePin }),
+    [pinnedKeys, handleTogglePin],
+  );
 
-  const activeTimeline = importedTimeline ?? engine.timeline;
-  const activeStoreNames = importedTimeline
-    ? [...new Set(importedTimeline.map((e) => e.storeName))]
-    : engine.storeNames;
+  const liveTimeline = importedTimeline ?? engine.timeline;
+
+  const handleSelectCorrelation = useCallback(
+    (correlationId: string) => {
+      const entries = importedTimeline
+        ? chainFromTimeline(importedTimeline, correlationId)
+        : engine.getChain(correlationId);
+      if (entries.length === 0) return;
+      setChainFocus({ correlationId, entries });
+      onActiveTabChange("graph");
+    },
+    [importedTimeline, engine, onActiveTabChange],
+  );
+
+  const handleClearChainFocus = useCallback(() => setChainFocus(null), []);
+
+  const activeTimeline = chainFocus ? chainFocus.entries : liveTimeline;
+
+  const activeStoreNames = useMemo(() => {
+    if (!importedTimeline && !chainFocus) return engine.storeNames;
+    return [...new Set(activeTimeline.map((e) => e.storeName))];
+  }, [importedTimeline, chainFocus, engine.storeNames, activeTimeline]);
 
   const handleExport = useCallback(() => {
-    const data = JSON.stringify(engine.timeline, null, 2);
-    const blob = new Blob([data], { type: "application/json" });
+    const blob = new Blob([safeStringifyPretty(engine.timeline)], {
+      type: "application/json",
+    });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `commiq-timeline-${Date.now()}.json`;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `commiq-timeline-${Date.now()}.json`;
+    anchor.click();
     URL.revokeObjectURL(url);
   }, [engine.timeline]);
 
-  function handleImport() {
-    fileInputRef.current?.click();
-  }
+  const handleImport = useCallback(() => fileInputRef.current?.click(), []);
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  const handleClearImported = useCallback(() => {
+    setImportedTimeline(null);
+    setChainFocus(null);
+  }, []);
+
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result as string) as TimelineEntry[];
-        if (Array.isArray(data)) {
-          setImportedTimeline(data);
-        }
-      } catch {}
+      const parsed = parseTimeline(reader.result);
+      if (parsed) {
+        setChainFocus(null);
+        setImportedTimeline(parsed);
+      }
     };
     reader.readAsText(file);
-    e.target.value = "";
-  }
+  }, []);
 
   return (
     <div style={{ ...styles.panel, height: panelHeight }}>
-      <style>{scrollbarCSS}</style>
+      <style>{PANEL_CSS}</style>
 
       <div
         style={styles.resizeHandle}
-        className={`commiq-resize-handle${isPanelDragging ? " dragging" : ""}`}
-        onMouseDown={onMouseDown}
+        className={`commiq-resize-handle${isDragging ? " dragging" : ""}`}
+        {...separatorProps}
       >
         <div style={styles.resizeGrip} className="commiq-resize-grip" />
       </div>
 
       <div style={styles.header}>
         <div style={styles.headerLeft}>
-          <span style={styles.logo}>⬡</span>
+          <span style={styles.logo} aria-hidden="true">⬡</span>
           <span style={styles.title}>Commiq</span>
           <span style={styles.titleSuffix}>devtools</span>
         </div>
 
-        <div style={styles.tabs} className="commiq-devtools-tabs">
-          {TABS.map((tab) => (
-            <button
-              key={tab.id}
-              className={`commiq-tab${activeTab === tab.id ? " active" : ""}`}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                ...styles.tab,
-                ...(activeTab === tab.id ? styles.tabActive : {}),
-              }}
-            >
-              <span style={styles.tabIcon}>{tab.icon}</span>
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <TabBar activeTab={activeTab} onSelect={onActiveTabChange} />
 
         <div style={styles.headerRight}>
+          {chainFocus && (
+            <button
+              type="button"
+              className="commiq-imported"
+              onClick={handleClearChainFocus}
+              style={styles.chainBadge}
+              title="Viewing a single causality chain — click to show everything"
+            >
+              ⬤ chain {truncId(chainFocus.correlationId)}
+            </button>
+          )}
           {importedTimeline && (
             <button
+              type="button"
               className="commiq-imported"
-              onClick={() => setImportedTimeline(null)}
+              onClick={handleClearImported}
               style={styles.importedBadge}
               title="Viewing imported data — click to return to live"
             >
@@ -176,6 +208,7 @@ export function DevtoolsPanel({
             </button>
           )}
           <button
+            type="button"
             className="commiq-label-btn"
             onClick={handleExport}
             style={styles.labelButton}
@@ -184,6 +217,7 @@ export function DevtoolsPanel({
             ↓ Export
           </button>
           <button
+            type="button"
             className="commiq-label-btn"
             onClick={handleImport}
             style={styles.labelButton}
@@ -197,17 +231,21 @@ export function DevtoolsPanel({
             accept=".json"
             onChange={handleFileChange}
             style={{ display: "none" }}
+            aria-label="Import timeline from JSON"
           />
           <button
+            type="button"
             className="commiq-icon-btn"
             onClick={engine.clear}
             style={styles.headerButton}
             title="Clear events"
+            aria-label="Clear events"
           >
             ⟳
           </button>
           {engine.errorCount > 0 && (
             <button
+              type="button"
               className="commiq-error-badge"
               onClick={handleErrorBadgeClick}
               style={styles.errorBadge}
@@ -218,194 +256,62 @@ export function DevtoolsPanel({
           )}
           <span style={styles.eventBadge}>{engine.eventCount}</span>
           <button
+            type="button"
             className="commiq-icon-btn"
             onClick={onClose}
             style={styles.headerButton}
             title="Close devtools"
+            aria-label="Close devtools"
           >
             ✕
           </button>
         </div>
       </div>
 
-      <div key={engine.clearCount} style={styles.content} className="commiq-devtools-scroll">
-        {activeTab === "events" && (
-          <EventLog
-            timeline={activeTimeline}
-            storeNames={activeStoreNames}
-            errorFilter={errorFilter}
-            onClearErrorFilter={handleClearErrorFilter}
-            pinActions={pinActions}
-          />
-        )}
-        {activeTab === "graph" && (
-          <CausalityGraph
-            timeline={activeTimeline}
-            storeNames={activeStoreNames}
-            pinActions={pinActions}
-          />
-        )}
-        {activeTab === "timeline" && (
-          <TimelineChart
-            timeline={activeTimeline}
-            storeNames={activeStoreNames}
-          />
-        )}
-        {activeTab === "perf" && (
-          <PerformanceTab
-            timeline={activeTimeline}
-            storeNames={activeStoreNames}
-          />
-        )}
-        {activeTab === "state" && (
-          <StoreStateView stores={stores} storeStates={engine.storeStates} getStateHistory={engine.getStateHistory} />
-        )}
-        {activeTab === "deps" && (
-          <DependencyMap
-            timeline={activeTimeline}
-            storeNames={activeStoreNames}
-          />
-        )}
-        {activeTab === "dispatch" && (
-          <DispatchTab
-            timeline={activeTimeline}
-            stores={stores}
-            storeNames={activeStoreNames}
-          />
-        )}
+      <div
+        key={engine.clearCount}
+        id={tabPanelId(activeTab)}
+        role="tabpanel"
+        aria-labelledby={`commiq-tab-${activeTab}`}
+        style={styles.content}
+        className="commiq-devtools-scroll"
+      >
+        <TabContent
+          activeTab={activeTab}
+          timeline={activeTimeline}
+          storeNames={activeStoreNames}
+          stores={stores}
+          storeStates={engine.storeStates}
+          getStateHistory={engine.getStateHistory}
+          errorFilter={errorFilter}
+          onClearErrorFilter={handleClearErrorFilter}
+          onSelectCorrelation={handleSelectCorrelation}
+          pinActions={pinActions}
+        />
       </div>
     </div>
   );
 }
 
-const scrollbarCSS = `
-.commiq-devtools-scroll::-webkit-scrollbar,
-.commiq-devtools-scroll *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-.commiq-devtools-scroll::-webkit-scrollbar-track,
-.commiq-devtools-scroll *::-webkit-scrollbar-track {
-  background: transparent;
-}
-.commiq-devtools-scroll::-webkit-scrollbar-thumb,
-.commiq-devtools-scroll *::-webkit-scrollbar-thumb {
-  background: ${colors.scrollThumb};
-  border-radius: 3px;
-}
-.commiq-devtools-scroll::-webkit-scrollbar-thumb:hover,
-.commiq-devtools-scroll *::-webkit-scrollbar-thumb:hover {
-  background: ${colors.scrollThumbHover};
-}
-.commiq-resize-grip {
-  background-color: ${colors.textMuted};
-  opacity: 0.5;
-  transition: opacity 0.15s, background-color 0.15s;
-}
-.commiq-resize-handle {
-  border-top: 1px solid transparent;
-  transition: border-color 0.15s;
-}
-.commiq-resize-handle:hover .commiq-resize-grip,
-.commiq-resize-handle.dragging .commiq-resize-grip {
-  opacity: 1;
-  background-color: ${colors.accent};
-}
-.commiq-resize-handle:hover,
-.commiq-resize-handle.dragging {
-  border-color: ${colors.accent};
-}
-.commiq-devtools-tabs::-webkit-scrollbar {
-  display: none;
+function chainFromTimeline(
+  timeline: readonly TimelineEntry[],
+  correlationId: string,
+): readonly TimelineEntry[] {
+  const ids = collectChainIds(buildCausalityIndex(timeline), correlationId);
+  return timeline.filter((entry) => ids.has(entry.correlationId));
 }
 
-/* Base transitions for all interactive elements */
-.commiq-row,
-.commiq-pin,
-.commiq-link,
-.commiq-icon-btn,
-.commiq-label-btn,
-.commiq-tab,
-.commiq-error-badge,
-.commiq-error-pill,
-.commiq-select,
-.commiq-input,
-.commiq-cmd-card,
-.commiq-dispatch-btn,
-.commiq-close-btn,
-.commiq-toast,
-.commiq-toast-close,
-.commiq-imported,
-.commiq-chain-header,
-.commiq-check,
-.commiq-expand,
-.commiq-badge,
-.commiq-json-toggle {
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s, opacity 0.15s !important;
+function parseTimeline(raw: string | ArrayBuffer | null): TimelineEntry[] | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const data: unknown = JSON.parse(raw);
+    return Array.isArray(data) ? (data as TimelineEntry[]) : null;
+  } catch {
+    return null;
+  }
 }
 
-/* Row hovers */
-.commiq-row:hover { background-color: ${colors.bgHover} !important; }
-.commiq-row.selected:hover { background-color: ${colors.bgSelected} !important; }
-
-/* Pin button hover */
-.commiq-pin:hover { color: ${colors.accentLight} !important; }
-
-/* Inline link hovers */
-.commiq-link:hover { text-decoration: underline !important; }
-
-/* Header icon buttons */
-.commiq-icon-btn:hover { background-color: ${colors.bgHover} !important; color: ${colors.text} !important; }
-
-/* Label buttons (export/import) */
-.commiq-label-btn:hover { background-color: ${colors.bgActive} !important; color: ${colors.text} !important; }
-
-/* Tab buttons */
-.commiq-tab:hover:not(.active) { color: ${colors.tabHover} !important; background-color: ${colors.bgHover} !important; }
-
-/* Error badge */
-.commiq-error-badge:hover { background-color: rgba(248, 113, 113, 0.2) !important; }
-
-/* Error filter pill */
-.commiq-error-pill:hover { background-color: rgba(248, 113, 113, 0.2) !important; }
-
-/* Selects & inputs */
-.commiq-select:hover, .commiq-input:hover { border-color: ${colors.textMuted} !important; }
-.commiq-input:focus, .commiq-select:focus { border-color: ${colors.accent} !important; }
-
-/* Dispatch command cards */
-.commiq-cmd-card:hover { background-color: ${colors.bgHover} !important; }
-
-/* Dispatch button */
-.commiq-dispatch-btn:hover:not(:disabled) { background-color: ${colors.accentHover} !important; }
-
-/* Close / dismiss buttons */
-.commiq-close-btn:hover { background-color: ${colors.bgHover} !important; color: ${colors.text} !important; }
-
-/* Toast hover */
-.commiq-toast:hover { border-color: ${colors.error} !important; background-color: ${colors.bgHover} !important; }
-.commiq-toast-close:hover { color: ${colors.text} !important; }
-
-/* Imported badge */
-.commiq-imported:hover { background-color: rgba(251, 191, 36, 0.2) !important; }
-
-/* Chain header in causality graph */
-.commiq-chain-header:hover { background-color: ${colors.bgHover} !important; }
-
-/* Checkboxes */
-.commiq-check:hover { color: ${colors.text} !important; }
-
-/* Expand icon */
-.commiq-expand:hover { color: ${colors.text} !important; }
-
-/* Event badge pills */
-.commiq-badge:hover { filter: brightness(1.2); }
-
-/* JsonTree toggle */
-.commiq-json-toggle:hover { color: ${colors.text} !important; }
-`;
-
-const styles: Record<string, CSSProperties> = {
+const styles = {
   panel: {
     position: "fixed",
     bottom: 0,
@@ -419,10 +325,10 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.sans,
     color: colors.text,
     boxShadow: "0 -4px 30px rgba(0, 0, 0, 0.4)",
-    pointerEvents: "auto" as const,
+    pointerEvents: "auto",
   },
   resizeHandle: {
-    position: "absolute" as const,
+    position: "absolute",
     top: -4,
     left: 0,
     right: 0,
@@ -432,6 +338,7 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    touchAction: "none",
   },
   resizeGrip: {
     width: 36,
@@ -458,7 +365,7 @@ const styles: Record<string, CSSProperties> = {
   },
   logo: {
     fontSize: 16,
-    color: colors.accent,
+    color: colors.accentLight,
     lineHeight: 1,
   },
   title: {
@@ -472,39 +379,6 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 400,
     color: colors.textSecondary,
     letterSpacing: -0.2,
-  },
-  tabs: {
-    display: "flex",
-    gap: 2,
-    flex: "1 1 0",
-    minWidth: 0,
-    overflow: "auto" as const,
-    scrollbarWidth: "none" as CSSProperties["scrollbarWidth"],
-    msOverflowStyle: "none" as CSSProperties["msOverflowStyle"],
-  },
-  tab: {
-    display: "flex",
-    alignItems: "center",
-    gap: 3,
-    padding: "5px 8px",
-    fontSize: 11,
-    fontWeight: 500,
-    color: colors.tabInactive,
-    backgroundColor: "transparent",
-    borderWidth: 0,
-    borderRadius: 5,
-    cursor: "pointer",
-    fontFamily: fonts.sans,
-    transition: "all 0.15s",
-    whiteSpace: "nowrap" as const,
-    flexShrink: 0,
-  },
-  tabActive: {
-    color: colors.textInverse,
-    backgroundColor: colors.accent,
-  },
-  tabIcon: {
-    fontSize: 10,
   },
   headerRight: {
     display: "flex",
@@ -542,7 +416,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     fontFamily: fonts.sans,
     transition: "all 0.15s",
-    whiteSpace: "nowrap" as const,
+    whiteSpace: "nowrap",
     flexShrink: 0,
   },
   errorBadge: {
@@ -572,14 +446,31 @@ const styles: Record<string, CSSProperties> = {
     gap: 4,
     fontSize: 9,
     fontFamily: fonts.mono,
-    color: "#fbbf24",
-    backgroundColor: "rgba(251, 191, 36, 0.1)",
+    color: colors.stateChange,
+    backgroundColor: colors.stateChangeBg,
     padding: "2px 8px",
     borderRadius: 9999,
     fontWeight: 500,
     borderWidth: 0,
     cursor: "pointer",
     transition: "all 0.15s",
+    whiteSpace: "nowrap",
+  },
+  chainBadge: {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: 9,
+    fontFamily: fonts.mono,
+    color: colors.accentLight,
+    backgroundColor: colors.accentBg,
+    padding: "2px 8px",
+    borderRadius: 9999,
+    fontWeight: 500,
+    borderWidth: 0,
+    cursor: "pointer",
+    transition: "all 0.15s",
+    whiteSpace: "nowrap",
   },
   content: {
     flex: 1,
@@ -587,4 +478,4 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     flexDirection: "column",
   },
-};
+} satisfies Record<string, CSSProperties>;

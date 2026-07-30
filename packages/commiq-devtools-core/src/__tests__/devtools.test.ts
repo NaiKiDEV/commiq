@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { BuiltinEventName, createStore, createCommand } from "@naikidev/commiq";
 import { createDevtools } from "../devtools";
 import { memoryTransport } from "../transport";
-import type { DevtoolsMessage, Transport } from "../types";
+import type { DevtoolsMessage, DevtoolsStore, Transport } from "../types";
 
 function counterStore() {
   const store = createStore({ count: 0 });
@@ -48,10 +48,17 @@ describe("createDevtools", () => {
   it("snapshots initial state so later mutation cannot rewrite it", () => {
     const transport = memoryTransport();
     const devtools = createDevtools({ transport });
-    const store = createStore({ items: [] as number[] });
+    const live = { items: [] as number[] };
+    const store: DevtoolsStore = {
+      get state(): unknown {
+        return live;
+      },
+      openStream(): void {},
+      closeStream(): void {},
+    };
 
     devtools.connect(store, "list");
-    store.state.items.push(1);
+    live.items.push(1);
 
     expect(transport.messages[0]).toEqual({
       type: "STORE_CONNECTED",

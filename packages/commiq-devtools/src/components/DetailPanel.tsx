@@ -16,10 +16,11 @@ export function DetailPanel({
   onClose,
   initialHeight = 180,
 }: DetailPanelProps) {
-  const { height, isDragging, onMouseDown } = useResizable({
+  const { height, isDragging, separatorProps } = useResizable({
     initial: initialHeight,
     min: 80,
     max: 500,
+    label: "Resize detail panel",
   });
 
   return (
@@ -27,7 +28,7 @@ export function DetailPanel({
       <div
         style={styles.resize}
         className={`commiq-resize-handle${isDragging ? " dragging" : ""}`}
-        onMouseDown={onMouseDown}
+        {...separatorProps}
       >
         <div style={styles.resizeGrip} className="commiq-resize-grip" />
       </div>
@@ -111,7 +112,7 @@ function DetailSection({
   );
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   panel: {
     flexShrink: 0,
     borderTop: `1px solid ${colors.border}`,
@@ -228,4 +229,4 @@ const styles: Record<string, CSSProperties> = {
     border: `1px solid ${colors.border}`,
     overflow: "auto",
   },
-};
+} satisfies Record<string, CSSProperties>;

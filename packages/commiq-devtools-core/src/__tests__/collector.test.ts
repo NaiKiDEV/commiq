@@ -1,12 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  BuiltinEvent,
   BuiltinEventName,
   createStore,
   createCommand,
   createEvent,
+  type StoreEvent,
+  type StreamListener,
 } from "@naikidev/commiq";
 import { EventCollector } from "../collector";
-import type { TimelineEntry } from "../types";
+import type { DevtoolsStore, TimelineEntry } from "../types";
 
 function counterStore() {
   const store = createStore({ count: 0 });
@@ -14,6 +17,43 @@ function counterStore() {
     ctx.setState({ count: ctx.state.count + 1 });
   });
   return store;
+}
+
+type StreamStub = DevtoolsStore & {
+  emitStateChanged: (prev: unknown, next: unknown) => void;
+};
+
+function streamStub(): StreamStub {
+  const listeners = new Set<StreamListener>();
+  let current: unknown = undefined;
+  let seq = 0;
+
+  return {
+    get state(): unknown {
+      return current;
+    },
+    openStream(listener: StreamListener): void {
+      listeners.add(listener);
+    },
+    closeStream(listener: StreamListener): void {
+      listeners.delete(listener);
+    },
+    emitStateChanged(prev: unknown, next: unknown): void {
+      current = next;
+      seq += 1;
+      const event: StoreEvent = {
+        id: BuiltinEvent.StateChanged.id,
+        name: BuiltinEventName.StateChanged,
+        data: { prev, next },
+        timestamp: seq,
+        correlationId: `corr-${seq}`,
+        causedBy: null,
+      };
+      for (const listener of [...listeners]) {
+        listener(event);
+      }
+    },
+  };
 }
 
 describe("EventCollector", () => {
@@ -223,44 +263,55 @@ describe("EventCollector", () => {
     expect(negative.getStateHistory("counter").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("snapshots defensively so later mutation cannot rewrite history", async () => {
-    const store = createStore({ items: [] as number[] });
-    store.addCommandHandler<number>("add", (ctx, cmd) => {
-      ctx.state.items.push(cmd.data);
-      ctx.setState({ items: ctx.state.items });
-    });
-
+  it("snapshots defensively so later mutation cannot rewrite history", () => {
+    const stub = streamStub();
     const collector = new EventCollector();
-    collector.connect(store, "list");
+    collector.connect(stub, "list");
 
-    store.queue(createCommand("add", 1));
-    await store.flush();
-    store.queue(createCommand("add", 2));
-    await store.flush();
+    const live = { items: [1] };
+    stub.emitStateChanged({ items: [] }, live);
+    live.items.push(2);
+    stub.emitStateChanged({ items: [1] }, { items: [1, 2] });
 
     const history = collector.getStateHistory("list");
     expect(history).toHaveLength(2);
     expect(history[0].state).toEqual({ items: [1] });
     expect(history[1].state).toEqual({ items: [1, 2] });
+
+    const timeline = collector.getTimeline();
+    expect(timeline[0].stateAfter).toEqual({ items: [1] });
+    expect(timeline[0].stateAfter).not.toBe(live);
   });
 
-  it("aliases live state when snapshotMode is none", async () => {
-    const store = createStore({ items: [] as number[] });
-    store.addCommandHandler<number>("add", (ctx, cmd) => {
-      ctx.state.items.push(cmd.data);
-      ctx.setState({ items: ctx.state.items });
-    });
-
+  it("aliases live state when snapshotMode is none", () => {
+    const stub = streamStub();
     const collector = new EventCollector({ snapshotMode: "none" });
-    collector.connect(store, "list");
+    collector.connect(stub, "list");
 
-    store.queue(createCommand("add", 1));
-    await store.flush();
-    store.queue(createCommand("add", 2));
-    await store.flush();
+    const live = { items: [1] };
+    stub.emitStateChanged({ items: [] }, live);
+    live.items.push(2);
 
     const history = collector.getStateHistory("list");
+    expect(history[0].state).toBe(live);
     expect(history[0].state).toEqual({ items: [1, 2] });
+  });
+
+  it("passes class instances by reference even in safe snapshot mode", () => {
+    class Cursor {
+      position = 0;
+    }
+    const stub = streamStub();
+    const collector = new EventCollector();
+    collector.connect(stub, "aliased");
+
+    const cursor = new Cursor();
+    stub.emitStateChanged({ cursor: new Cursor() }, { cursor });
+    cursor.position = 42;
+
+    const recorded = collector.getStateHistory("aliased")[0].state as { cursor: Cursor };
+    expect(recorded.cursor).toBe(cursor);
+    expect(recorded.cursor.position).toBe(42);
   });
 
   it("does not throw on non-cloneable state in structured mode", async () => {

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { BuiltinEventName } from "@naikidev/commiq";
+import { safeStringify } from "./safe-stringify";
 
 export const colors = {
   bg: "#0d1117",
@@ -17,7 +18,7 @@ export const colors = {
 
   text: "#d4d8e8",
   textSecondary: "#9ba3b8",
-  textMuted: "#636d83",
+  textMuted: "#8b94a8",
   textInverse: "#ffffff",
 
   accent: "#6366f1",
@@ -53,9 +54,9 @@ export const colors = {
   triggerHover: "#4f46e5",
   triggerShadow: "0 4px 20px rgba(99, 102, 241, 0.45)",
 
-  tabActive: "#6366f1",
-  tabInactive: "#7d879b",
-  tabHover: "#9ba3b8",
+  tabActive: "#4f46e5",
+  tabInactive: "#8b94a8",
+  tabHover: "#c8cede",
 } as const;
 
 export const fonts = {
@@ -63,17 +64,32 @@ export const fonts = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
 } as const;
 
-export const BUILTIN_EVENTS: Set<string> = new Set(Object.values(BuiltinEventName));
+export type EventColor = { fg: string; bg: string }
 
-export function getEventColor(name: string, type: "command" | "event") {
-  if (name === BuiltinEventName.CommandHandlingError || name === BuiltinEventName.InvalidCommand)
-    return { fg: colors.error, bg: colors.errorBg };
-  if (name === BuiltinEventName.CommandInterrupted)
-    return { fg: colors.interrupted, bg: colors.interruptedBg };
-  if (name === BuiltinEventName.StateChanged)
-    return { fg: colors.stateChange, bg: colors.stateChangeBg };
-  if (type === "command") return { fg: colors.command, bg: colors.commandBg };
-  return { fg: colors.event, bg: colors.eventBg };
+const ERROR_COLOR: EventColor = { fg: colors.error, bg: colors.errorBg };
+
+const EVENT_COLORS: Readonly<Record<string, EventColor>> = {
+  [BuiltinEventName.CommandHandlingError]: ERROR_COLOR,
+  [BuiltinEventName.InvalidCommand]: ERROR_COLOR,
+  [BuiltinEventName.EventHandlingError]: ERROR_COLOR,
+  [BuiltinEventName.UnhandledError]: ERROR_COLOR,
+  [BuiltinEventName.CommandInterrupted]: {
+    fg: colors.interrupted,
+    bg: colors.interruptedBg,
+  },
+  [BuiltinEventName.StateChanged]: {
+    fg: colors.stateChange,
+    bg: colors.stateChangeBg,
+  },
+};
+
+const COMMAND_COLOR: EventColor = { fg: colors.command, bg: colors.commandBg };
+const DEFAULT_EVENT_COLOR: EventColor = { fg: colors.event, bg: colors.eventBg };
+
+export function getEventColor(name: string, type: "command" | "event"): EventColor {
+  const known = EVENT_COLORS[name];
+  if (known) return known;
+  return type === "command" ? COMMAND_COLOR : DEFAULT_EVENT_COLOR;
 }
 
 export function truncId(id: string | null | undefined): string {
@@ -95,7 +111,7 @@ export function matchesSearch(
   if (entry.storeName.toLowerCase().includes(lower)) return true;
   if (entry.correlationId.toLowerCase().includes(lower)) return true;
   if (entry.causedBy?.toLowerCase().includes(lower)) return true;
-  if (entry.data !== undefined && JSON.stringify(entry.data).toLowerCase().includes(lower)) return true;
+  if (entry.data !== undefined && safeStringify(entry.data).toLowerCase().includes(lower)) return true;
   return false;
 }
 

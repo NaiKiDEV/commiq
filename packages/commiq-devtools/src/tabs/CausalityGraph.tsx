@@ -1,18 +1,21 @@
-import { useState, useMemo, type CSSProperties } from "react";
+import { useCallback, useMemo, useState, type CSSProperties } from "react";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import {
   colors,
   fonts,
-  BUILTIN_EVENTS,
   getEventColor,
   truncId,
   formatTime,
   matchesSearch,
   sharedStyles,
 } from "../theme";
+import { BUILTIN_EVENT_NAMES } from "../event-names";
+import { buildCausalityIndex, buildCommandGroups, type CommandGroup } from "../causality";
 import { FilterToolbar } from "../components/FilterToolbar";
 import { DetailPanel } from "../components/DetailPanel";
-import { getCommandFromEntry, entryKey, type PinActions } from "../types";
+import { entryKey, type PinActions } from "../types";
+
+const MAX_RENDER_DEPTH = 32;
 
 type CausalityGraphProps = {
   timeline: readonly TimelineEntry[];
@@ -20,30 +23,26 @@ type CausalityGraphProps = {
   pinActions?: PinActions;
 }
 
-type CommandGroup = {
-  commandId: string;
-  commandName: string;
-  storeName: string;
-  events: TimelineEntry[];
-  children: CommandGroup[];
-  timestamp: number;
-}
-
 export function CausalityGraph({ timeline, storeNames, pinActions }: CausalityGraphProps) {
   const [showBuiltins, setShowBuiltins] = useState(true);
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(
-    null,
+  const [selectedEvent, setSelectedEvent] = useState<TimelineEntry | null>(null);
+
+  const chains = useMemo(
+    () => buildCommandGroups(buildCausalityIndex(timeline), timeline),
+    [timeline],
   );
 
-  const chains = useMemo(() => buildChains(timeline), [timeline]);
+  const filteredChains = useMemo(
+    () =>
+      chains
+        .map((chain) => filterChain(chain, showBuiltins, storeFilter, searchQuery))
+        .filter((chain): chain is CommandGroup => chain !== null),
+    [chains, showBuiltins, storeFilter, searchQuery],
+  );
 
-  const filteredChains = useMemo(() => {
-    return chains
-      .map((chain) => filterChain(chain, showBuiltins, storeFilter, searchQuery))
-      .filter(Boolean) as CommandGroup[];
-  }, [chains, showBuiltins, storeFilter, searchQuery]);
+  const handleCloseDetail = useCallback(() => setSelectedEvent(null), []);
 
   return (
     <div style={sharedStyles.container}>
@@ -55,9 +54,7 @@ export function CausalityGraph({ timeline, storeNames, pinActions }: CausalityGr
         storeNames={storeNames}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        trailing={
-          <span style={styles.chainCount}>{filteredChains.length} chains</span>
-        }
+        trailing={<span style={styles.chainCount}>{filteredChains.length} chains</span>}
       />
 
       <div style={styles.scrollArea}>
@@ -82,14 +79,18 @@ export function CausalityGraph({ timeline, storeNames, pinActions }: CausalityGr
         ))}
       </div>
 
-      {selectedEvent && (
-        <DetailPanel
-          event={selectedEvent}
-          onClose={() => setSelectedEvent(null)}
-        />
-      )}
+      {selectedEvent && <DetailPanel event={selectedEvent} onClose={handleCloseDetail} />}
     </div>
   );
+}
+
+type ChainNodeProps = {
+  group: CommandGroup;
+  depth: number;
+  selectedEvent: TimelineEntry | null;
+  onSelectEvent: (entry: TimelineEntry) => void;
+  showBuiltins: boolean;
+  pinActions?: PinActions;
 }
 
 function ChainNode({
@@ -99,29 +100,24 @@ function ChainNode({
   onSelectEvent,
   showBuiltins,
   pinActions,
-}: {
-  group: CommandGroup;
-  depth: number;
-  selectedEvent: TimelineEntry | null;
-  onSelectEvent: (e: TimelineEntry) => void;
-  showBuiltins: boolean;
-  pinActions?: PinActions;
-}) {
+}: ChainNodeProps) {
   const [expanded, setExpanded] = useState(depth < 2);
+
+  const handleToggle = useCallback(() => setExpanded((prev) => !prev), []);
 
   const visibleEvents = showBuiltins
     ? group.events
-    : group.events.filter((e) => !BUILTIN_EVENTS.has(e.name));
+    : group.events.filter((e) => !BUILTIN_EVENT_NAMES.has(e.name));
 
-  const isRoot = depth === 0;
+  if (depth > MAX_RENDER_DEPTH) return null;
 
   return (
-    <div style={isRoot ? styles.chain : styles.chainNested}>
-      <div className="commiq-chain-header" style={styles.chainHeader} onClick={() => setExpanded(!expanded)}>
-        <span className="commiq-expand" style={styles.chainChevron}>{expanded ? "▼" : "▶"}</span>
-
+    <div style={depth === 0 ? styles.chain : styles.chainNested}>
+      <div className="commiq-chain-header" style={styles.chainHeader} onClick={handleToggle}>
+        <span className="commiq-expand" style={styles.chainChevron}>
+          {expanded ? "▼" : "▶"}
+        </span>
         <span style={styles.chainName}>{group.commandName}</span>
-
         <span
           style={{
             ...styles.chainBadge,
@@ -131,7 +127,6 @@ function ChainNode({
         >
           {group.storeName}
         </span>
-
         <span style={styles.chainMeta}>
           {group.events.length} events · {formatTime(group.timestamp)}
         </span>
@@ -139,63 +134,15 @@ function ChainNode({
 
       {expanded && (
         <div style={styles.chainBody}>
-          {visibleEvents.map((entry, i) => {
-            const ec = getEventColor(entry.name, entry.type);
-            const isSelected =
-              selectedEvent?.correlationId === entry.correlationId;
-            const isPinned = pinActions?.pinnedKeys.has(entryKey(entry)) ?? false;
-
-            return (
-              <div
-                key={`${entry.correlationId}-${i}`}
-                className={`commiq-row${isSelected ? " selected" : ""}`}
-                style={{
-                  ...styles.eventNode,
-                  ...(isPinned ? styles.eventNodePinned : {}),
-                  ...(isSelected ? styles.eventNodeSelected : {}),
-                }}
-                onClick={() => onSelectEvent(entry)}
-              >
-                {pinActions && (
-                  <span
-                    className="commiq-pin"
-                    style={{
-                      ...styles.pinButton,
-                      ...(isPinned ? styles.pinButtonActive : {}),
-                    }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      pinActions.onTogglePin(entryKey(entry));
-                    }}
-                  >
-                    ●
-                  </span>
-                )}
-                <span
-                  style={{
-                    ...styles.eventDot,
-                    backgroundColor: ec.fg,
-                  }}
-                />
-                <span
-                  style={{
-                    ...styles.eventBadge,
-                    backgroundColor: ec.bg,
-                    color: ec.fg,
-                  }}
-                >
-                  {entry.name}
-                </span>
-                <span style={styles.eventStore}>{entry.storeName}</span>
-                <span style={styles.eventCorr}>
-                  {truncId(entry.correlationId)}
-                </span>
-                <span style={styles.eventTime}>
-                  {formatTime(entry.timestamp)}
-                </span>
-              </div>
-            );
-          })}
+          {visibleEvents.map((entry) => (
+            <ChainEvent
+              key={entryKey(entry)}
+              entry={entry}
+              selected={selectedEvent?.correlationId === entry.correlationId}
+              pinActions={pinActions}
+              onSelectEvent={onSelectEvent}
+            />
+          ))}
 
           {group.children.map((child) => (
             <ChainNode
@@ -214,66 +161,56 @@ function ChainNode({
   );
 }
 
-function buildChains(timeline: readonly TimelineEntry[]): CommandGroup[] {
-  if (timeline.length === 0) return [];
+type ChainEventProps = {
+  entry: TimelineEntry;
+  selected: boolean;
+  pinActions?: PinActions;
+  onSelectEvent: (entry: TimelineEntry) => void;
+}
 
-  const entryMap = new Map<string, TimelineEntry>();
-  for (const e of timeline) {
-    entryMap.set(e.correlationId, e);
-  }
+function ChainEvent({ entry, selected, pinActions, onSelectEvent }: ChainEventProps) {
+  const color = getEventColor(entry.name, entry.type);
+  const key = entryKey(entry);
+  const pinned = pinActions?.pinnedKeys.has(key) ?? false;
 
-  const groups = new Map<string, TimelineEntry[]>();
-  for (const entry of timeline) {
-    const key = entry.causedBy ?? "__root_" + entry.correlationId;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(entry);
-  }
+  const handleSelect = useCallback(() => onSelectEvent(entry), [onSelectEvent, entry]);
 
-  const commandGroups = new Map<string, CommandGroup>();
+  const handleTogglePin = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      pinActions?.onTogglePin(key);
+    },
+    [pinActions, key],
+  );
 
-  for (const [commandId, events] of groups) {
-    const sorted = events.sort((a, b) => a.timestamp - b.timestamp);
-    const commandStarted = sorted.find((e) => e.name === "commandStarted");
-    const command = commandStarted ? getCommandFromEntry(commandStarted) : undefined;
-
-    const commandName = command?.name ?? sorted[0]?.name ?? "unknown";
-    const storeName = sorted[0]?.storeName ?? "unknown";
-
-    commandGroups.set(commandId, {
-      commandId,
-      commandName,
-      storeName,
-      events: sorted,
-      children: [],
-      timestamp: sorted[0]?.timestamp ?? 0,
-    });
-  }
-
-  const roots: CommandGroup[] = [];
-
-  for (const [, group] of commandGroups) {
-    const commandStarted = group.events.find(
-      (e) => e.name === "commandStarted",
-    );
-    const command = commandStarted ? getCommandFromEntry(commandStarted) : undefined;
-    const parentEventId = command?.causedBy;
-
-    if (parentEventId && entryMap.has(parentEventId)) {
-      const parentEntry = entryMap.get(parentEventId)!;
-      const parentGroup = Array.from(commandGroups.values()).find((g) =>
-        g.events.some((e) => e.correlationId === parentEntry.correlationId),
-      );
-      if (parentGroup && parentGroup !== group) {
-        parentGroup.children.push(group);
-        continue;
-      }
-    }
-    roots.push(group);
-  }
-
-  roots.sort((a, b) => b.timestamp - a.timestamp);
-
-  return roots;
+  return (
+    <div
+      className={`commiq-row${selected ? " selected" : ""}`}
+      style={{
+        ...styles.eventNode,
+        ...(pinned ? styles.eventNodePinned : {}),
+        ...(selected ? styles.eventNodeSelected : {}),
+      }}
+      onClick={handleSelect}
+    >
+      {pinActions && (
+        <span
+          className="commiq-pin"
+          style={pinned ? { ...styles.pinButton, ...styles.pinButtonActive } : styles.pinButton}
+          onClick={handleTogglePin}
+        >
+          ●
+        </span>
+      )}
+      <span style={{ ...styles.eventDot, backgroundColor: color.fg }} />
+      <span style={{ ...styles.eventBadge, backgroundColor: color.bg, color: color.fg }}>
+        {entry.name}
+      </span>
+      <span style={styles.eventStore}>{entry.storeName}</span>
+      <span style={styles.eventCorr}>{truncId(entry.correlationId)}</span>
+      <span style={styles.eventTime}>{formatTime(entry.timestamp)}</span>
+    </div>
+  );
 }
 
 function filterChain(
@@ -283,26 +220,21 @@ function filterChain(
   searchQuery: string,
 ): CommandGroup | null {
   const filteredChildren = chain.children
-    .map((c) => filterChain(c, showBuiltins, storeFilter, searchQuery))
-    .filter(Boolean) as CommandGroup[];
+    .map((child) => filterChain(child, showBuiltins, storeFilter, searchQuery))
+    .filter((child): child is CommandGroup => child !== null);
 
   const visibleEvents = chain.events.filter((e) => {
-    if (!showBuiltins && BUILTIN_EVENTS.has(e.name)) return false;
+    if (!showBuiltins && BUILTIN_EVENT_NAMES.has(e.name)) return false;
     if (storeFilter && e.storeName !== storeFilter) return false;
-    if (!matchesSearch(e, searchQuery)) return false;
-    return true;
+    return matchesSearch(e, searchQuery);
   });
 
   if (visibleEvents.length === 0 && filteredChildren.length === 0) return null;
 
-  return {
-    ...chain,
-    events: visibleEvents,
-    children: filteredChildren,
-  };
+  return { ...chain, events: visibleEvents, children: filteredChildren };
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   chainCount: {
     fontSize: 11,
     color: colors.textMuted,
@@ -311,8 +243,8 @@ const styles: Record<string, CSSProperties> = {
   },
   scrollArea: {
     flex: 1,
-    overflowY: "auto" as const,
-    overflowX: "hidden" as const,
+    overflowY: "auto",
+    overflowX: "hidden",
     padding: "8px 10px",
   },
   chain: {
@@ -389,7 +321,7 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     flexShrink: 0,
     width: 14,
-    textAlign: "center" as const,
+    textAlign: "center",
     transition: "color 0.1s",
   },
   pinButtonActive: {
@@ -406,7 +338,7 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 500,
     padding: "1px 6px",
     borderRadius: 9999,
-    whiteSpace: "nowrap" as const,
+    whiteSpace: "nowrap",
     fontFamily: fonts.sans,
   },
   eventStore: {
@@ -426,4 +358,4 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.mono,
     flexShrink: 0,
   },
-};
+} satisfies Record<string, CSSProperties>;

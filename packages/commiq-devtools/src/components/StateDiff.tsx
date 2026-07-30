@@ -1,5 +1,8 @@
 import { useMemo, type CSSProperties } from "react";
 import { colors, fonts } from "../theme";
+import { safeStringify } from "../safe-stringify";
+
+const VALUE_PREVIEW_DEPTH = 4;
 
 type StateDiffProps = {
   before: unknown;
@@ -69,22 +72,81 @@ function DiffRow({ entry }: { entry: DiffEntry }) {
   return null;
 }
 
+const MAX_DIFF_DEPTH = 12;
+const MAX_DIFF_ENTRIES = 2000;
+
+type DiffScope = {
+  out: DiffEntry[];
+  visitedA: WeakSet<object>;
+  visitedB: WeakSet<object>;
+  depth: number;
+}
+
 function computeDiff(before: unknown, after: unknown): DiffEntry[] {
-  const entries: DiffEntry[] = [];
-  diffRecursive(before, after, "", entries);
-  return entries;
+  const scope: DiffScope = {
+    out: [],
+    visitedA: new WeakSet<object>(),
+    visitedB: new WeakSet<object>(),
+    depth: 0,
+  };
+  diffRecursive(before, after, "", scope);
+  return scope.out;
+}
+
+function enterCycleGuard(a: unknown, b: unknown, scope: DiffScope): boolean {
+  const objA = typeof a === "object" && a !== null ? a : null;
+  const objB = typeof b === "object" && b !== null ? b : null;
+  if (objA !== null && scope.visitedA.has(objA)) return false;
+  if (objB !== null && scope.visitedB.has(objB)) return false;
+  if (objA !== null) scope.visitedA.add(objA);
+  if (objB !== null) scope.visitedB.add(objB);
+  return true;
+}
+
+function leaveCycleGuard(a: unknown, b: unknown, scope: DiffScope): void {
+  if (typeof a === "object" && a !== null) scope.visitedA.delete(a);
+  if (typeof b === "object" && b !== null) scope.visitedB.delete(b);
 }
 
 function diffRecursive(
   a: unknown,
   b: unknown,
   path: string,
-  out: DiffEntry[],
+  scope: DiffScope,
 ): void {
+  const out = scope.out;
+
   if (a === b) {
     out.push({ type: "unchanged", path: path || "(root)", value: a });
     return;
   }
+
+  if (out.length >= MAX_DIFF_ENTRIES || scope.depth >= MAX_DIFF_DEPTH) {
+    out.push({ type: "changed", path: path || "(root)", oldValue: a, newValue: b });
+    return;
+  }
+
+  if (!enterCycleGuard(a, b, scope)) {
+    out.push({ type: "changed", path: path || "(root)", oldValue: a, newValue: b });
+    return;
+  }
+
+  scope.depth += 1;
+  try {
+    diffChildren(a, b, path, scope);
+  } finally {
+    scope.depth -= 1;
+    leaveCycleGuard(a, b, scope);
+  }
+}
+
+function diffChildren(
+  a: unknown,
+  b: unknown,
+  path: string,
+  scope: DiffScope,
+): void {
+  const out = scope.out;
 
   if (
     a !== null &&
@@ -105,7 +167,7 @@ function diffRecursive(
       } else if (!(key in bObj)) {
         out.push({ type: "removed", path: childPath, value: aObj[key] });
       } else {
-        diffRecursive(aObj[key], bObj[key], childPath, out);
+        diffRecursive(aObj[key], bObj[key], childPath, scope);
       }
     }
     return;
@@ -120,7 +182,7 @@ function diffRecursive(
       } else if (i >= b.length) {
         out.push({ type: "removed", path: childPath, value: a[i] });
       } else {
-        diffRecursive(a[i], b[i], childPath, out);
+        diffRecursive(a[i], b[i], childPath, scope);
       }
     }
     return;
@@ -138,13 +200,7 @@ function formatValue(value: unknown): string {
   if (value === null) return "null";
   if (value === undefined) return "undefined";
   if (typeof value === "string") return `"${value}"`;
-  if (typeof value === "object") {
-    try {
-      return JSON.stringify(value);
-    } catch {
-      return String(value);
-    }
-  }
+  if (typeof value === "object") return safeStringify(value, VALUE_PREVIEW_DEPTH);
   return String(value);
 }
 
@@ -173,7 +229,7 @@ const diffColors = {
   changedFg: "#fbbf24",
 } as const;
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   container: {
     display: "flex",
     flexDirection: "column",
@@ -250,4 +306,4 @@ const styles: Record<string, CSSProperties> = {
     color: diffColors.changedFg,
     wordBreak: "break-all" as const,
   },
-};
+} satisfies Record<string, CSSProperties>;

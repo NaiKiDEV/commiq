@@ -1,4 +1,5 @@
 import { useState, useMemo, type CSSProperties } from "react";
+import { BuiltinEventName } from "@naikidev/commiq";
 import type { TimelineEntry } from "@naikidev/commiq-devtools-core";
 import { colors, fonts, sharedStyles } from "../theme";
 import { getCommandFromEntry } from "../types";
@@ -27,12 +28,19 @@ type StoreStats = {
   commands: CommandStats[];
 }
 
+type SortKey = "total" | "avg" | "max" | "count";
+
+const SORT_FNS: Readonly<Record<SortKey, (a: CommandStats, b: CommandStats) => number>> = {
+  total: (a, b) => b.totalMs - a.totalMs,
+  avg: (a, b) => b.avgMs - a.avgMs,
+  max: (a, b) => b.maxMs - a.maxMs,
+  count: (a, b) => b.count - a.count,
+};
+
 export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
   const [storeFilter, setStoreFilter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"total" | "avg" | "max" | "count">(
-    "total",
-  );
+  const [sortBy, setSortBy] = useState<SortKey>("total");
 
   const storeStats = useMemo(() => {
     const commandPairs = new Map<
@@ -42,10 +50,13 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
 
     const started = new Map<string, TimelineEntry>();
     for (const e of timeline) {
-      if (e.name === "commandStarted" && e.causedBy) {
+      if (e.name === BuiltinEventName.CommandStarted && e.causedBy) {
         started.set(e.causedBy, e);
       }
-      if (e.name === "commandHandled" || e.name === "commandHandlingError") {
+      if (
+        e.name === BuiltinEventName.CommandHandled ||
+        e.name === BuiltinEventName.CommandHandlingError
+      ) {
         const cb = e.causedBy;
         const s = cb ? started.get(cb) : undefined;
         if (s && cb) {
@@ -114,16 +125,7 @@ export function PerformanceTab({ timeline, storeNames }: PerformanceTabProps) {
       store.avgMs =
         store.totalCommands > 0 ? store.totalMs / store.totalCommands : 0;
 
-      const sortFns: Record<
-        string,
-        (a: CommandStats, b: CommandStats) => number
-      > = {
-        total: (a, b) => b.totalMs - a.totalMs,
-        avg: (a, b) => b.avgMs - a.avgMs,
-        max: (a, b) => b.maxMs - a.maxMs,
-        count: (a, b) => b.count - a.count,
-      };
-      store.commands.sort(sortFns[sortBy]);
+      store.commands.sort(SORT_FNS[sortBy]);
     }
 
     const result = [...statsMap.values()];
@@ -329,7 +331,7 @@ function fmtMs(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -497,4 +499,4 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: fonts.mono,
     fontWeight: 500,
   },
-};
+} satisfies Record<string, CSSProperties>;

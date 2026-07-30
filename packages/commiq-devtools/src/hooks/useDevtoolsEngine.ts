@@ -1,20 +1,26 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import type { SealedStore } from "@naikidev/commiq";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createDevtools,
-  memoryTransport,
-  type TimelineEntry,
-  type StateSnapshot,
-  type Transport,
+  type Devtools,
   type DevtoolsMessage,
+  type StateSnapshot,
+  type TimelineEntry,
+  type Transport,
 } from "@naikidev/commiq-devtools-core";
+import { isErrorEventName } from "../event-names";
+import type { DevtoolsStoreRegistry } from "../types";
+
+export const MAX_TRACKED_ERRORS = 50;
 
 export type ErrorEntry = {
-  entry: TimelineEntry;
   id: number;
+  name: string;
+  storeName: string;
+  correlationId: string;
 }
 
 export type DevtoolsEngine = {
+  version: number;
   timeline: readonly TimelineEntry[];
   getChain: (correlationId: string) => readonly TimelineEntry[];
   getStateHistory: (storeName: string) => readonly StateSnapshot[];
@@ -22,148 +28,201 @@ export type DevtoolsEngine = {
   storeNames: string[];
   eventCount: number;
   errorCount: number;
-  errors: ErrorEntry[];
+  errors: readonly ErrorEntry[];
   clearCount: number;
   clearErrors: () => void;
   clear: () => void;
 }
 
-const ERROR_EVENTS = new Set(["commandHandlingError", "invalidCommand"]);
+function createPanelTransport(): Transport {
+  const handlers = new Set<(message: DevtoolsMessage) => void>();
+  return {
+    send(message: DevtoolsMessage): void {
+      for (const handler of [...handlers]) {
+        handler(message);
+      }
+    },
+    onMessage(handler: (message: DevtoolsMessage) => void): () => void {
+      handlers.add(handler);
+      return () => {
+        handlers.delete(handler);
+      };
+    },
+    destroy(): void {
+      handlers.clear();
+    },
+  };
+}
 
 type Internals = {
-  devtools: ReturnType<typeof createDevtools>;
-  transport: Transport & { messages: DevtoolsMessage[] };
+  devtools: Devtools;
+  transport: Transport;
   eventCount: number;
   errorCount: number;
   errors: ErrorEntry[];
   nextErrorId: number;
   clearCount: number;
-  unsubscribe: (() => void) | null;
+}
+
+function createInternals(maxEvents: number): Internals {
+  const transport = createPanelTransport();
+  return {
+    devtools: createDevtools({ transport, maxEvents }),
+    transport,
+    eventCount: 0,
+    errorCount: 0,
+    errors: [],
+    nextErrorId: 0,
+    clearCount: 0,
+  };
+}
+
+function resetErrors(internals: Internals): void {
+  internals.errorCount = 0;
+  internals.errors = [];
+}
+
+function recordError(internals: Internals, entry: TimelineEntry): void {
+  internals.errorCount += 1;
+  const next: ErrorEntry = {
+    id: internals.nextErrorId,
+    name: entry.name,
+    storeName: entry.storeName,
+    correlationId: entry.correlationId,
+  };
+  internals.nextErrorId += 1;
+  internals.errors =
+    internals.errors.length < MAX_TRACKED_ERRORS
+      ? [...internals.errors, next]
+      : [...internals.errors.slice(internals.errors.length - MAX_TRACKED_ERRORS + 1), next];
 }
 
 export function useDevtoolsEngine(
-  stores: Record<string, SealedStore<unknown>>,
+  stores: DevtoolsStoreRegistry,
   maxEvents: number = 500,
 ): DevtoolsEngine {
   const [version, setVersion] = useState(0);
-
   const internalsRef = useRef<Internals | null>(null);
+  const frameRef = useRef<number | null>(null);
 
   if (!internalsRef.current) {
-    const transport = memoryTransport();
-    const devtools = createDevtools({ transport, maxEvents });
-    internalsRef.current = {
-      devtools,
-      transport,
-      eventCount: 0,
-      errorCount: 0,
-      errors: [],
-      nextErrorId: 0,
-      clearCount: 0,
-      unsubscribe: null,
-    };
+    internalsRef.current = createInternals(maxEvents);
   }
-
   const internals = internalsRef.current;
 
-  useEffect(() => {
-    const dt = internals.devtools;
-    const names = Object.keys(stores);
-
-    for (const name of names) {
-      dt.connect(stores[name], name);
+  const scheduleRender = useCallback(() => {
+    if (frameRef.current !== null) return;
+    if (typeof requestAnimationFrame !== "function") {
+      setVersion((v) => v + 1);
+      return;
     }
-
-    return () => {
-      for (const name of names) {
-        dt.disconnect(name);
-      }
-    };
-  }, [stores, internals.devtools]);
-
-  useEffect(() => {
-    const unsub = internals.transport.onMessage((msg) => {
-      if (msg.type !== "EVENT") return;
-      internals.eventCount++;
-      if (ERROR_EVENTS.has(msg.entry.name)) {
-        internals.errorCount++;
-        internals.errors = [
-          ...internals.errors,
-          { entry: msg.entry, id: internals.nextErrorId++ },
-        ];
-      }
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
       setVersion((v) => v + 1);
     });
-    internals.unsubscribe = unsub;
-    return unsub;
-  }, [internals]);
+  }, []);
+
+  const flushRender = useCallback(() => {
+    if (frameRef.current !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(frameRef.current);
+    }
+    frameRef.current = null;
+    setVersion((v) => v + 1);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(frameRef.current);
+      }
+      frameRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const devtools = internals.devtools;
+    const names = Object.keys(stores);
+    for (const name of names) {
+      devtools.connect(stores[name], name);
+    }
+    return () => {
+      for (const name of names) {
+        devtools.disconnect(name);
+      }
+    };
+  }, [stores, internals]);
+
+  useEffect(() => {
+    return internals.transport.onMessage((message) => {
+      if (message.type === "CLEARED") {
+        internals.eventCount = 0;
+        resetErrors(internals);
+        flushRender();
+        return;
+      }
+      if (message.type !== "EVENT") return;
+      internals.eventCount += 1;
+      if (isErrorEventName(message.entry.name)) {
+        recordError(internals, message.entry);
+      }
+      scheduleRender();
+    });
+  }, [internals, scheduleRender, flushRender]);
 
   const getChain = useCallback(
     (correlationId: string) => internals.devtools.getChain(correlationId),
-    [internals.devtools],
+    [internals],
   );
 
   const getStateHistory = useCallback(
     (storeName: string) => internals.devtools.getStateHistory(storeName),
-    [internals.devtools],
+    [internals],
   );
 
   const clearErrors = useCallback(() => {
-    internals.errorCount = 0;
-    internals.errors = [];
-    setVersion((v) => v + 1);
-  }, [internals]);
+    resetErrors(internals);
+    flushRender();
+  }, [internals, flushRender]);
 
   const clear = useCallback(() => {
-    internals.unsubscribe?.();
-    internals.devtools.destroy();
+    internals.clearCount += 1;
+    internals.devtools.clear();
+  }, [internals]);
 
-    const transport = memoryTransport();
-    const devtools = createDevtools({ transport, maxEvents });
-    internals.devtools = devtools;
-    internals.transport = transport;
-    internals.eventCount = 0;
-    internals.errorCount = 0;
-    internals.errors = [];
-    internals.nextErrorId = 0;
-    internals.clearCount++;
+  const dataVersion = internals.devtools.getVersion();
 
-    const unsub = transport.onMessage((msg) => {
-      if (msg.type !== "EVENT") return;
-      internals.eventCount++;
-      if (ERROR_EVENTS.has(msg.entry.name)) {
-        internals.errorCount++;
-        internals.errors = [
-          ...internals.errors,
-          { entry: msg.entry, id: internals.nextErrorId++ },
-        ];
-      }
-      setVersion((v) => v + 1);
-    });
-    internals.unsubscribe = unsub;
+  const storeStates = useMemo(
+    () => Object.fromEntries(Object.entries(stores).map(([name, store]) => [name, store.state])),
+    [stores, dataVersion],
+  );
 
-    for (const [name, store] of Object.entries(stores)) {
-      devtools.connect(store, name);
-    }
+  const storeNames = useMemo(() => Object.keys(stores), [stores]);
 
-    setVersion((v) => v + 1);
-  }, [internals, stores, maxEvents]);
-
-  void version;
-
-  return {
-    timeline: internals.devtools.getTimeline(),
-    getChain,
-    getStateHistory,
-    storeStates: Object.fromEntries(
-      Object.entries(stores).map(([name, store]) => [name, store.state]),
-    ),
-    storeNames: Object.keys(stores),
-    eventCount: internals.eventCount,
-    errorCount: internals.errorCount,
-    errors: internals.errors,
-    clearCount: internals.clearCount,
-    clearErrors,
-    clear,
-  };
+  return useMemo(
+    () => ({
+      version,
+      timeline: internals.devtools.getTimeline(),
+      getChain,
+      getStateHistory,
+      storeStates,
+      storeNames,
+      eventCount: internals.eventCount,
+      errorCount: internals.errorCount,
+      errors: internals.errors,
+      clearCount: internals.clearCount,
+      clearErrors,
+      clear,
+    }),
+    [
+      version,
+      dataVersion,
+      internals,
+      getChain,
+      getStateHistory,
+      storeStates,
+      storeNames,
+      clearErrors,
+      clear,
+    ],
+  );
 }

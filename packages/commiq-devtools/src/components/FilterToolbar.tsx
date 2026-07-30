@@ -82,7 +82,7 @@ export function FilterToolbar({
   );
 }
 
-const styles: Record<string, CSSProperties> = {
+const styles = {
   toolbar: {
     display: "flex",
     alignItems: "center",
@@ -136,4 +136,4 @@ const styles: Record<string, CSSProperties> = {
     outline: "none",
     width: 160,
   },
-};
+} satisfies Record<string, CSSProperties>;
