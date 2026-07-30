@@ -4,9 +4,20 @@ on:
   push:
     tags:
       - 'v*'
+  # Lets a partially-failed release be re-run against an existing tag without
+  # deleting and re-pushing that tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to publish, e.g. v2.0.0. Defaults to the current ref.'
+        required: false
+        type: string
 
 permissions:
   contents: write
+  # Required for npm provenance / trusted publishing (see NPM_CONFIG_PROVENANCE
+  # on the publish step). Same pattern as deploy-examples.yml.
+  id-token: write
 
 concurrency:
   group: release
@@ -17,18 +28,69 @@ jobs:
     name: Publish packages
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release tag
+        id: tag
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="$GITHUB_REF_NAME"
+          fi
+          case "$TAG" in
+            v*.*.*) ;;
+            *)
+              echo "::error::Release tag must look like 'vX.Y.Z' (got '$TAG')."
+              exit 1
+              ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          ref: ${{ steps.tag.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      # pnpm/action-setup v4.4.0 — deliberately no `version:` input so the pnpm
+      # version is read from the root package.json `packageManager` field
+      # (pnpm@10.28.1).
+      - name: Setup pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.12.0
           cache: pnpm
           registry-url: 'https://registry.npmjs.org'
+
+      # The root `release` script passes --no-git-checks, which disables pnpm's
+      # own tag/version guard. This step is therefore the only thing standing
+      # between a hand-written tag and a silent no-op release.
+      - name: Validate tag against package manifests
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          MANIFEST_VERSION="$(node -p "require('./packages/commiq/package.json').version")"
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $TAG does not match packages/commiq/package.json ($MANIFEST_VERSION)."
+            echo "::error::Publishing would republish $MANIFEST_VERSION or silently no-op every package."
+            echo "::error::Run 'pnpm version:bump <patch|minor|major>' and push the tag it creates."
+            exit 1
+          fi
+          MISMATCHED=0
+          for MANIFEST in packages/*/package.json; do
+            VERSION="$(node -p "require('./$MANIFEST').version")"
+            if [ "$VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::$MANIFEST is at $VERSION, expected $TAG_VERSION."
+              MISMATCHED=1
+            fi
+          done
+          if [ "$MISMATCHED" -ne 0 ]; then
+            echo "::error::All packages must share one version. Aborting before any publish."
+            exit 1
+          fi
+          echo "Tag $TAG matches every package manifest at $TAG_VERSION."
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -36,12 +98,30 @@ jobs:
       - name: Build all packages
         run: pnpm build
 
+      # Must run after `build`: per-package tsconfigs resolve @naikidev/* through
+      # node_modules symlinks to dist/index.d.ts, which only exists post-build.
+      - name: Typecheck packages
+        run: pnpm typecheck
+
+      # Covers root-only sources (tooling/), which `pnpm -r typecheck` never sees.
+      - name: Typecheck root tooling
+        run: pnpm typecheck:root
+
+      - name: Test
+        run: pnpm test
+
       - name: Publish to npm
         run: pnpm release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Provenance is enabled here rather than in .npmrc so that a local
+          # `pnpm publish` outside CI keeps working. Migrating to npm trusted
+          # publishing means dropping NODE_AUTH_TOKEN and keeping id-token.
+          NPM_CONFIG_PROVENANCE: true
 
+      # softprops/action-gh-release v2.6.2
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
