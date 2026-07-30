@@ -175,6 +175,63 @@ describe("instrumentation", () => {
     expect(greetStarted.data.command.causedBy).toBe("custom-id");
   });
 
+  it("preserves explicit causedBy for a command queued onto the busy same store", async () => {
+    const userCreated = createEvent<{ name: string }>("userCreated");
+    const listener = vi.fn();
+    const store = createStore({ user: "", greeting: "" });
+
+    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
+      ctx.setState({ ...ctx.state, user: cmd.data.name });
+      ctx.emit(userCreated, { name: cmd.data.name });
+    });
+    store.addCommandHandler<{ name: string }>("greet", (ctx, cmd) => {
+      ctx.setState({ ...ctx.state, greeting: `Hello ${cmd.data.name}` });
+    });
+    store.addEventHandler(userCreated, (ctx, event) => {
+      ctx.queue(
+        createCommand(
+          "greet",
+          { name: event.data.name },
+          { causedBy: "custom-id" },
+        ),
+      );
+    });
+
+    store.openStream(listener);
+    store.queue(createCommand("createUser", { name: "Alice" }));
+    await store.flush();
+
+    const greetStarted = listener.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.name === "commandStarted")
+      .find((e) => e.data.command.name === "greet");
+    expect(greetStarted.data.command.causedBy).toBe("custom-id");
+  });
+
+  it("assigns a distinct correlationId each time one command object is queued", async () => {
+    const listener = vi.fn();
+    const store = createStore({ count: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+    store.openStream(listener);
+
+    const command = createCommand("inc", undefined);
+    store.queue(command);
+    store.queue(command);
+    await store.flush();
+
+    const started = listener.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.name === "commandStarted")
+      .map((e) => e.data.command.correlationId);
+
+    expect(started).toHaveLength(2);
+    expect(new Set(started).size).toBe(2);
+    expect(command.correlationId).toBe("");
+    expect(store.state.count).toBe(2);
+  });
+
   it("maintains correct causality with nested cross-store broadcasts", async () => {
     const eventA = createEvent<string>("eventA");
     const eventB = createEvent<string>("eventB");
@@ -197,6 +254,12 @@ describe("instrumentation", () => {
       ctx.setState({ c: cmd.data });
     });
 
+    const listenerA = vi.fn();
+    const listenerB = vi.fn();
+
+    storeA.openStream(listenerA);
+    storeB.openStream(listenerB);
+
     storeA.openStream((event) => {
       if (event.name === "eventA") {
         storeB.queue(createCommand("cmdB", "fromA"));
@@ -214,11 +277,17 @@ describe("instrumentation", () => {
     await storeB.flush();
     await storeC.flush();
 
-    const cmdCStarted = listenerC.mock.calls
-      .map((c) => c[0])
-      .find((e) => e.name === "commandStarted");
-    expect(cmdCStarted).toBeDefined();
-    expect(cmdCStarted.data.command.causedBy).not.toBeNull();
+    const findEvent = (listener: ReturnType<typeof vi.fn>, name: string) =>
+      listener.mock.calls.map((c) => c[0]).find((e) => e.name === name);
+
+    const eventAEmitted = findEvent(listenerA, "eventA");
+    const eventBEmitted = findEvent(listenerB, "eventB");
+    const cmdBStarted = findEvent(listenerB, "commandStarted");
+    const cmdCStarted = findEvent(listenerC, "commandStarted");
+
+    expect(cmdBStarted.data.command.causedBy).toBe(eventAEmitted.correlationId);
+    expect(eventBEmitted.causedBy).toBe(cmdBStarted.data.command.correlationId);
+    expect(cmdCStarted.data.command.causedBy).toBe(eventBEmitted.correlationId);
   });
 
   it("commands queued from outside have causedBy null", async () => {

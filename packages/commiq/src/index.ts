@@ -15,4 +15,9 @@ export type {
   CommandHandlerOptions,
   ContextExtensionDef,
   SealedStore,
+  StateUpdater,
+  StoreOptions,
+  StoreErrorSource,
+  StoreErrorReport,
+  ErrorReporter,
 } from "./types";

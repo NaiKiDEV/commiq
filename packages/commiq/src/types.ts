@@ -19,9 +19,32 @@ export type StoreEvent<D = unknown> = {
   causedBy: string | null;
 }
 
+export type StateUpdater<S> = (prev: S) => S;
+
+export type StoreErrorSource =
+  | "commandHandler"
+  | "eventHandler"
+  | "streamListener"
+  | "contextExtension"
+  | "disposedContext"
+  | "queueProcessor";
+
+export type StoreErrorReport = {
+  error: unknown;
+  source: StoreErrorSource;
+  command?: Command;
+  event?: StoreEvent;
+}
+
+export type ErrorReporter = (report: StoreErrorReport) => void;
+
+export type StoreOptions = {
+  onError?: ErrorReporter;
+}
+
 export type CommandContext<S> = {
   state: S;
-  setState: (next: S) => void;
+  setState: (next: S | StateUpdater<S>) => void;
   emit: <D>(eventDef: EventDef<D>, data: D) => void;
   signal?: AbortSignal;
 }

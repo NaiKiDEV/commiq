@@ -157,7 +157,7 @@ describe("context extensions", () => {
 
       const errors: { error: unknown }[] = [];
 
-      const store = createStore<State>({ count: 0 })
+      const store = createStore<State>({ count: 0 }, { onError: () => {} })
         .useExtension(ext)
         .addCommandHandler("test", () => {});
 
@@ -177,7 +177,7 @@ describe("context extensions", () => {
       );
     });
 
-    it("emits error when extension conflicts with base event context keys", async () => {
+    it("emits eventHandlingError when extension conflicts with base event context keys", async () => {
       const TestEvent = createEvent("testEvent");
 
       const ext: ContextExtensionDef<State, { queue: () => void }> = {
@@ -187,8 +187,12 @@ describe("context extensions", () => {
       };
 
       const errors: { error: unknown }[] = [];
+      const reported: unknown[] = [];
 
-      const store = createStore<State>({ count: 0 })
+      const store = createStore<State>(
+        { count: 0 },
+        { onError: (report) => reported.push(report.source) },
+      )
         .useExtension(ext)
         .addCommandHandler("fire", (ctx) => {
           ctx.emit(TestEvent, undefined);
@@ -196,7 +200,7 @@ describe("context extensions", () => {
         .addEventHandler(TestEvent, () => {});
 
       store.openStream((event) => {
-        if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+        if (matchEvent(event, BuiltinEvent.EventHandlingError)) {
           errors.push(event.data);
         }
       });
@@ -209,6 +213,7 @@ describe("context extensions", () => {
       expect((errors[0].error as Error).message).toBe(
         'Context extension key "queue" conflicts with existing context property',
       );
+      expect(reported).toEqual(["eventHandler"]);
     });
 
     it("emits error when two extensions produce the same key", async () => {
@@ -222,7 +227,7 @@ describe("context extensions", () => {
 
       const errors: { error: unknown }[] = [];
 
-      const store = createStore<State>({ count: 0 })
+      const store = createStore<State>({ count: 0 }, { onError: () => {} })
         .useExtension(ext1)
         .useExtension(ext2)
         .addCommandHandler("test", () => {});

@@ -3,8 +3,10 @@ import {
   createStore,
   createCommand,
   createEvent,
+  matchEvent,
   BuiltinEvent,
 } from "../index";
+import type { StoreErrorReport } from "../index";
 
 describe("events", () => {
   it("emits custom events from command handler", async () => {
@@ -79,7 +81,7 @@ describe("events", () => {
 
   it("emits commandHandlingError on handler error", async () => {
     const listener = vi.fn();
-    const store = createStore({});
+    const store = createStore({}, { onError: () => {} });
     store.addCommandHandler("fail", () => {
       throw new Error("oops");
     });
@@ -107,11 +109,15 @@ describe("events", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it("runs all event handlers even when one throws", async () => {
+  it("routes a throwing event handler to eventHandlingError and keeps commandHandled", async () => {
     const testEvent = createEvent("test");
     const handlerCalls: string[] = [];
+    const reported: StoreErrorReport[] = [];
 
-    const store = createStore({ count: 0 });
+    const store = createStore(
+      { count: 0 },
+      { onError: (report) => reported.push(report) },
+    );
     store.addCommandHandler("fire", (ctx) => {
       ctx.emit(testEvent, undefined);
     });
@@ -123,10 +129,16 @@ describe("events", () => {
       handlerCalls.push("second");
     });
 
-    const errors: unknown[] = [];
+    const eventErrors: unknown[] = [];
+    const commandErrors: unknown[] = [];
+    const names: string[] = [];
     store.openStream((event) => {
-      if (event.id === BuiltinEvent.CommandHandlingError.id) {
-        errors.push((event.data as { error: unknown }).error);
+      names.push(event.name);
+      if (matchEvent(event, BuiltinEvent.EventHandlingError)) {
+        eventErrors.push(event.data.error);
+      }
+      if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+        commandErrors.push(event.data.error);
       }
     });
 
@@ -134,12 +146,19 @@ describe("events", () => {
     await store.flush();
 
     expect(handlerCalls).toEqual(["first", "second"]);
-    expect(errors).toHaveLength(1);
-    expect((errors[0] as Error).message).toBe("handler error");
+    expect(eventErrors).toHaveLength(1);
+    expect((eventErrors[0] as Error).message).toBe("handler error");
+    expect(commandErrors).toEqual([]);
+    expect(names).toContain("commandHandled");
+    expect(reported.map((r) => r.source)).toEqual(["eventHandler"]);
   });
 
-  it("queue continues processing after event handler error on builtin event", async () => {
-    const store = createStore({ values: [] as string[] });
+  it("reports the error and keeps processing when a builtin event handler throws", async () => {
+    const reported: StoreErrorReport[] = [];
+    const store = createStore(
+      { values: [] as string[] },
+      { onError: (report) => reported.push(report) },
+    );
 
     store.addEventHandler(BuiltinEvent.CommandStarted, () => {
       throw new Error("commandStarted handler blew up");
@@ -154,10 +173,20 @@ describe("events", () => {
     await store.flush();
 
     expect(store.state.values).toEqual(["a", "b"]);
+    expect(reported).toHaveLength(2);
+    expect(reported[0].source).toBe("eventHandler");
+    expect(reported[0].event?.name).toBe("commandStarted");
+    expect((reported[0].error as Error).message).toBe(
+      "commandStarted handler blew up",
+    );
   });
 
-  it("flush resolves even when error event handler throws", async () => {
-    const store = createStore({ count: 0 });
+  it("reports the error and resolves flush when an error event handler throws", async () => {
+    const reported: StoreErrorReport[] = [];
+    const store = createStore(
+      { count: 0 },
+      { onError: (report) => reported.push(report) },
+    );
 
     store.addCommandHandler("fail", () => {
       throw new Error("command error");
@@ -175,6 +204,34 @@ describe("events", () => {
     await store.flush();
 
     expect(store.state.count).toBe(1);
+    const messages = reported.map((r) => (r.error as Error).message);
+    expect(messages).toContain("command error");
+    expect(messages).toContain("error handler also blew up");
+  });
+
+  it("does not recurse when an eventHandlingError handler throws", async () => {
+    const testEvent = createEvent("test");
+    const reported: StoreErrorReport[] = [];
+    const store = createStore(
+      { count: 0 },
+      { onError: (report) => reported.push(report) },
+    );
+
+    store.addCommandHandler("fire", (ctx) => {
+      ctx.emit(testEvent, undefined);
+    });
+    store.addEventHandler(testEvent, () => {
+      throw new Error("first failure");
+    });
+    store.addEventHandler(BuiltinEvent.EventHandlingError, () => {
+      throw new Error("reporter failure");
+    });
+
+    store.queue(createCommand("fire", undefined));
+    await store.flush();
+
+    expect(reported).toHaveLength(2);
+    expect((reported[1].error as Error).message).toBe("reporter failure");
   });
 
   it("emits auto-notify event when notify option is true", async () => {

@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { createStore, createCommand, BuiltinEvent, matchEvent } from "../index";
+import {
+  createStore,
+  createCommand,
+  createEvent,
+  BuiltinEvent,
+  matchEvent,
+} from "../index";
 import type { StoreEvent, Command } from "../types";
 import { createGate, drain } from "./gate";
 
@@ -169,9 +175,20 @@ describe("interruptable commands", () => {
     expect(store.state.values).toEqual([1, 2, 3]);
   });
 
-  it("rollbackOnInterrupt restores previous state when aborted", async () => {
+  it("rollbackOnInterrupt reverts the partial write and broadcasts the revert", async () => {
     const store = createStore({ value: "initial" });
     const gate = createGate();
+    const changes: string[] = [];
+    let valueAtInterrupt: string | undefined;
+
+    store.openStream((event: StoreEvent) => {
+      if (matchEvent(event, BuiltinEvent.StateChanged)) {
+        changes.push((event.data.next as { value: string }).value);
+      }
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        valueAtInterrupt = store.state.value;
+      }
+    });
 
     store.addCommandHandler("slow", async (ctx) => {
       ctx.setState({ value: "partial" });
@@ -181,13 +198,13 @@ describe("interruptable commands", () => {
       }
     }, { interruptable: true, rollbackOnInterrupt: true });
 
-    store.addCommandHandler("noop", () => {});
-
     store.queue(createCommand("slow", undefined));
     await gate.parked();
     store.queue(createCommand("slow", undefined));
     await drain(store, gate);
 
+    expect(valueAtInterrupt).toBe("initial");
+    expect(changes).toEqual(["partial", "initial", "partial", "done"]);
     expect(store.state.value).toBe("done");
   });
 
@@ -221,9 +238,20 @@ describe("interruptable commands", () => {
     expect(store.state.value).toBe("second");
   });
 
-  it("without rollbackOnInterrupt, partial state persists after interrupt", async () => {
+  it("without rollbackOnInterrupt, the partial write survives the interrupt", async () => {
     const store = createStore({ value: "initial" });
     const gate = createGate();
+    const changes: string[] = [];
+    let valueAtInterrupt: string | undefined;
+
+    store.openStream((event: StoreEvent) => {
+      if (matchEvent(event, BuiltinEvent.StateChanged)) {
+        changes.push((event.data.next as { value: string }).value);
+      }
+      if (matchEvent(event, BuiltinEvent.CommandInterrupted)) {
+        valueAtInterrupt = store.state.value;
+      }
+    });
 
     store.addCommandHandler("slow", async (ctx) => {
       ctx.setState({ value: "partial" });
@@ -238,7 +266,41 @@ describe("interruptable commands", () => {
     store.queue(createCommand("slow", undefined));
     await drain(store, gate);
 
+    expect(valueAtInterrupt).toBe("partial");
+    expect(changes).toEqual(["partial", "partial", "done"]);
     expect(store.state.value).toBe("done");
+  });
+
+  it("delivers state changes and emitted events of an aborted handler", async () => {
+    const progress = createEvent<string>("progress");
+    const store = createStore({ value: "initial" });
+    const gate = createGate();
+    const observed: string[] = [];
+
+    store.openStream((event: StoreEvent) => {
+      if (matchEvent(event, progress)) observed.push(`progress:${event.data}`);
+      if (matchEvent(event, BuiltinEvent.StateChanged)) {
+        observed.push(`state:${(event.data.next as { value: string }).value}`);
+      }
+    });
+
+    store.addCommandHandler<string>("stream", async (ctx, cmd) => {
+      ctx.setState({ value: cmd.data });
+      ctx.emit(progress, cmd.data);
+      await gate.wait();
+    }, { interruptable: true });
+
+    store.queue(createCommand("stream", "first"));
+    await gate.parked();
+    store.queue(createCommand("stream", "second"));
+    await drain(store, gate);
+
+    expect(observed).toEqual([
+      "state:first",
+      "progress:first",
+      "state:second",
+      "progress:second",
+    ]);
   });
 
   it("handler that throws AbortError when aborted emits CommandInterrupted", async () => {

@@ -1,5 +1,5 @@
 import { createEvent } from "./types";
-import type { Command } from "./types";
+import type { Command, StoreErrorReport, StoreEvent } from "./types";
 
 export const BuiltinEventName = {
   StateChanged: "stateChanged",
@@ -7,6 +7,8 @@ export const BuiltinEventName = {
   CommandStarted: "commandStarted",
   InvalidCommand: "invalidCommand",
   CommandHandlingError: "commandHandlingError",
+  EventHandlingError: "eventHandlingError",
+  UnhandledError: "unhandledError",
   StateReset: "stateReset",
   CommandInterrupted: "commandInterrupted",
 } as const;
@@ -19,6 +21,10 @@ export const BuiltinEvent = {
   CommandHandlingError: createEvent<{ command: Command; error: unknown }>(
     BuiltinEventName.CommandHandlingError,
   ),
+  EventHandlingError: createEvent<{ event: StoreEvent; error: unknown }>(
+    BuiltinEventName.EventHandlingError,
+  ),
+  UnhandledError: createEvent<StoreErrorReport>(BuiltinEventName.UnhandledError),
   StateReset: createEvent(BuiltinEventName.StateReset),
   CommandInterrupted: createEvent<{ command: Command; phase: "queued" | "running" }>(
     BuiltinEventName.CommandInterrupted,

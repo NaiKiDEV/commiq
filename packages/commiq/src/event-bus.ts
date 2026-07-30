@@ -1,3 +1,4 @@
+import { reportToConsole } from "./run-safe";
 import type { EventDef, StoreEvent, StreamListener } from "./types";
 
 type EventBusHandler<D = unknown> = (event: StoreEvent<D>) => void;
@@ -18,9 +19,15 @@ export function createEventBus() {
 
   const busListener: StreamListener = (event) => {
     const eventHandlers = handlers.get(event.id);
-    if (eventHandlers) {
-      for (const handler of eventHandlers) {
+    if (!eventHandlers) return;
+    for (const handler of [...eventHandlers]) {
+      try {
         handler(event);
+      } catch (error) {
+        reportToConsole(
+          `[commiq] event bus handler for "${event.name}" failed`,
+          error,
+        );
       }
     }
   };
