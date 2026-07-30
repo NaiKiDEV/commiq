@@ -1,19 +1,23 @@
 ---
 title: Migrating to v2
-description: What changed between commiq 1.x and 2.0, why it changed, and the edits you need to make.
+description: What changed between commiq 1.x and 2.x, why it changed, and the edits you need to make.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-# Migrating to 2.0
+# Migrating to 2.x
 
-All eight packages move to `2.0.0` together and are only tested against each other. Upgrade them in one step.
+All eight packages move to `2.1.0` together and are only tested against each other. Upgrade them in one step.
+
+<Callout type="warn">
+The 2.x line starts at **2.1.0**, not 2.0.0. Four packages have an unrelated `2.0.0` on npm from an aborted release in March that was never promoted to `latest`. Use a range (`^2.1.0`) or pin `2.1.0` exactly — pinning `2.0.0` will fetch that older, incompatible build for `commiq-react`, `commiq-devtools`, `commiq-persist` and `commiq-effects`.
+</Callout>
 
 <Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
   <Tab value="pnpm">
     ```bash
-    pnpm up '@naikidev/commiq*@^2.0.0'
+    pnpm up '@naikidev/commiq*@^2.1.0'
     ```
   </Tab>
   <Tab value="npm">
@@ -35,7 +39,7 @@ All eight packages move to `2.0.0` together and are only tested against each oth
 
 The 1.x documentation is preserved at [v1 (legacy)](/v1) and is no longer maintained.
 
-## Why 2.0
+## Why 2.x
 
 Three problems, none of which could be fixed without breaking the API.
 
@@ -368,7 +372,7 @@ New writes are `{ version, state }`. Bare 1.x values are still read, so an exist
 
 ## Upgrade checklist
 
-1. Bump all `@naikidev/commiq*` packages to `^2.0.0` and re-install so peer dependencies resolve to one core copy.
+1. Bump all `@naikidev/commiq*` packages to `^2.1.0` and re-install so peer dependencies resolve to one core copy.
 2. Run `tsc --noEmit`. Most of the work is `DeepReadonly` and broken `addEventHandler` chains — both are compile errors, not runtime surprises.
 3. Grep for `handledEvent(` and verify each handler body is still correct. It has never run.
 4. Grep for `flush()` inside handler bodies and remove them.

@@ -4,7 +4,7 @@ Command and event driven state management for JavaScript and TypeScript.
 
 Commiq models state as a pipeline: commands enter a queue, handlers process them one at a time, state updates are applied, and events are broadcast to subscribers. Stores stay decoupled from each other and from the UI layer.
 
-**Current version: 2.0.0.** 2.0 is a breaking release across every package. If you are on 1.x, read the [migration guide](https://naikidev.github.io/commiq/docs/migration-v2/) before upgrading.
+**Current version: 2.1.0.** The 2.x line is a breaking release across every package. If you are on 1.x, read the [migration guide](https://naikidev.github.io/commiq/docs/migration-v2/) before upgrading.
 
 ## What 2.0 changes
 
