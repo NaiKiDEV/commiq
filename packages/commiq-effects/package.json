@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-effects",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Structured side effects for Commiq stores: event-triggered work with AbortSignal cancellation, restart, and debounce.",
   "keywords": [
     "commiq",

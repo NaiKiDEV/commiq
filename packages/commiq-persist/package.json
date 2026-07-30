@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-persist",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "State persistence and rehydration for Commiq stores, with debounced writes and pluggable storage adapters.",
   "keywords": [
     "commiq",

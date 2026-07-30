@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-context",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Type-safe context extensions for Commiq handlers: guards, assertions, patches, deferred work, and state history.",
   "keywords": [
     "commiq",

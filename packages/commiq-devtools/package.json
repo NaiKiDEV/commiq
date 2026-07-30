@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-devtools",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Embedded React devtools panel for Commiq: inspect events, trace causality, diff state, and monitor performance.",
   "keywords": [
     "commiq",

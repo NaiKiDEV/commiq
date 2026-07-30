@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-react",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "React bindings for Commiq stores: selector, queue, and event hooks built on useSyncExternalStore.",
   "keywords": [
     "commiq",

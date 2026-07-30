@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq-devtools-core",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Headless instrumentation engine for Commiq stores: event timeline, causality chains, state history, and pluggable transports.",
   "keywords": [
     "commiq",

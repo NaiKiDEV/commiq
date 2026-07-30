@@ -1,6 +1,6 @@
 {
   "name": "@naikidev/commiq",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Command and event driven state management for JavaScript and TypeScript, with built-in causality tracking.",
   "keywords": [
     "state-management",
