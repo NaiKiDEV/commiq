@@ -120,7 +120,11 @@ describe("context extensions", () => {
     it("provides extension properties to event handlers", async () => {
       const TestEvent = createEvent<number>("testEvent");
 
-      const ext: ContextExtensionDef<State, { enqueue: (name: string) => void }> = {
+      const ext: ContextExtensionDef<
+        State,
+        {},
+        { enqueue: (name: string) => void }
+      > = {
         event: (ctx) => ({
           enqueue: (name: string) => ctx.queue(createCommand(name, undefined)),
         }),
@@ -145,6 +149,196 @@ describe("context extensions", () => {
       await store.flush();
 
       expect(handled).toEqual(["reaction"]);
+    });
+  });
+
+  describe("event context", () => {
+    it("does not expose command-only extensions to event handlers", async () => {
+      const TestEvent = createEvent("testEvent");
+
+      const ext: ContextExtensionDef<State, { onlyOnCommands: () => void }> = {
+        command: () => ({ onlyOnCommands: () => {} }),
+      };
+
+      const seen: string[] = [];
+
+      const store = createStore<State>({ count: 0 }, { onError: () => {} })
+        .useExtension(ext)
+        .addCommandHandler("fire", (ctx) => {
+          ctx.onlyOnCommands();
+          ctx.emit(TestEvent, undefined);
+        });
+
+      store.addEventHandler(TestEvent, (ctx) => {
+        // @ts-expect-error command-only extensions must not appear on event contexts
+        seen.push(typeof ctx.onlyOnCommands);
+      });
+
+      store.queue(createCommand("fire", undefined));
+      await store.flush();
+
+      expect(seen).toEqual(["undefined"]);
+    });
+
+    it("exposes both builders when an extension defines command and event", async () => {
+      const TestEvent = createEvent("testEvent");
+
+      const ext: ContextExtensionDef<
+        State,
+        { tagCommand: () => string },
+        { tagEvent: () => string }
+      > = {
+        command: () => ({ tagCommand: () => "command" }),
+        event: () => ({ tagEvent: () => "event" }),
+      };
+
+      const tags: string[] = [];
+
+      const store = createStore<State>({ count: 0 })
+        .useExtension(ext)
+        .addCommandHandler("fire", (ctx) => {
+          tags.push(ctx.tagCommand());
+          ctx.emit(TestEvent, undefined);
+        });
+
+      store.addEventHandler(TestEvent, (ctx) => {
+        tags.push(ctx.tagEvent());
+      });
+
+      store.queue(createCommand("fire", undefined));
+      await store.flush();
+
+      expect(tags).toEqual(["command", "event"]);
+    });
+
+    it("accumulates context types across chained useExtension calls", async () => {
+      const TestEvent = createEvent("testEvent");
+
+      const commandExt: ContextExtensionDef<State, { fromCommandExt: () => string }> = {
+        command: () => ({ fromCommandExt: () => "a" }),
+      };
+      const eventExt: ContextExtensionDef<State, {}, { fromEventExt: () => string }> = {
+        event: () => ({ fromEventExt: () => "b" }),
+      };
+
+      const tags: string[] = [];
+
+      const store = createStore<State>({ count: 0 })
+        .useExtension(commandExt)
+        .useExtension(eventExt)
+        .addCommandHandler("fire", (ctx) => {
+          tags.push(ctx.fromCommandExt());
+          ctx.emit(TestEvent, undefined);
+        });
+
+      store.addEventHandler(TestEvent, (ctx) => {
+        tags.push(ctx.fromEventExt());
+      });
+
+      store.queue(createCommand("fire", undefined));
+      await store.flush();
+
+      expect(tags).toEqual(["a", "b"]);
+    });
+  });
+
+  describe("removeExtension", () => {
+    it("detaches an extension so its properties stop being applied", async () => {
+      const ext: ContextExtensionDef<State, { bump: () => void }> = {
+        command: (ctx) => ({
+          bump: () => ctx.setState({ count: ctx.state.count + 1 }),
+        }),
+      };
+
+      const failures: unknown[] = [];
+
+      const store = createStore<State>(
+        { count: 0 },
+        { onError: (report) => failures.push(report.source) },
+      )
+        .useExtension(ext)
+        .addCommandHandler("bump", (ctx) => {
+          ctx.bump();
+        });
+
+      store.queue(createCommand("bump", undefined));
+      await store.flush();
+      expect(store.state.count).toBe(1);
+
+      expect(store.removeExtension(ext)).toBe(true);
+      expect(store.removeExtension(ext)).toBe(false);
+
+      store.queue(createCommand("bump", undefined));
+      await store.flush();
+
+      expect(store.state.count).toBe(1);
+      expect(failures).toEqual(["commandHandler"]);
+    });
+
+    it("runs the extension destroy hook on removal and on store destroy", async () => {
+      const destroyed: string[] = [];
+      const removedExt: ContextExtensionDef<State> = {
+        destroy: () => destroyed.push("removed"),
+      };
+      const keptExt: ContextExtensionDef<State> = {
+        destroy: () => destroyed.push("kept"),
+      };
+
+      const store = createStore<State>({ count: 0 })
+        .useExtension(removedExt)
+        .useExtension(keptExt);
+
+      store.removeExtension(removedExt);
+      expect(destroyed).toEqual(["removed"]);
+
+      store.destroy();
+      expect(destroyed).toEqual(["removed", "kept"]);
+    });
+
+    it("reports a throwing destroy hook without aborting teardown", () => {
+      const destroyed: string[] = [];
+      const sources: string[] = [];
+
+      const store = createStore<State>(
+        { count: 0 },
+        { onError: (report) => sources.push(report.source) },
+      )
+        .useExtension({
+          destroy: () => {
+            throw new Error("boom");
+          },
+        })
+        .useExtension({
+          destroy: () => destroyed.push("second"),
+        });
+
+      store.destroy();
+
+      expect(destroyed).toEqual(["second"]);
+      expect(sources).toEqual(["contextExtension"]);
+    });
+
+    it("stops running afterCommand hooks of a detached extension", async () => {
+      const calls: string[] = [];
+      const ext: ContextExtensionDef<State> = {
+        afterCommand: () => {
+          calls.push("after");
+        },
+      };
+
+      const store = createStore<State>({ count: 0 })
+        .useExtension(ext)
+        .addCommandHandler("noop", () => {});
+
+      store.queue(createCommand("noop", undefined));
+      await store.flush();
+      expect(calls).toEqual(["after"]);
+
+      store.removeExtension(ext);
+      store.queue(createCommand("noop", undefined));
+      await store.flush();
+
+      expect(calls).toEqual(["after"]);
     });
   });
 

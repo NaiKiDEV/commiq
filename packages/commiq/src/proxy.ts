@@ -1,4 +1,9 @@
-import type { DeepReadonly, SealedStore, StreamListener } from "./types";
+import type {
+  DeepReadonly,
+  SealedStore,
+  StreamListener,
+  Unsubscribe,
+} from "./types";
 import type { StoreImpl } from "./store";
 
 export function sealStore<S>(store: StoreImpl<S>): SealedStore<S> {
@@ -8,6 +13,7 @@ export function sealStore<S>(store: StoreImpl<S>): SealedStore<S> {
     },
     queue: store.queue,
     flush: () => store.flush(),
+    suspend: (): Unsubscribe => store.suspend(),
     openStream: (listener: StreamListener) => store.openStream(listener),
     closeStream: (listener: StreamListener) => store.closeStream(listener),
   });

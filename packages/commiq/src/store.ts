@@ -1,13 +1,12 @@
 import { nanoid } from "nanoid";
 import {
+  AnyContextExtension,
   Command,
   CommandContext,
   CommandDef,
   CommandHandle,
   CommandHandler,
   CommandHandlerOptions,
-  CommandResult,
-  CommandStatus,
   ContextExtensionDef,
   DeepReadonly,
   ErrorReporter,
@@ -15,7 +14,6 @@ import {
   EventDef,
   EventHandler,
   QueueFn,
-  StateUpdater,
   StoreErrorReport,
   StoreEvent,
   StoreOptions,
@@ -25,18 +23,30 @@ import {
   handledEvent,
   isCommandDef,
 } from "./types";
+import { BuiltinEvent } from "./constants";
 import {
-  BuiltinEvent,
-  RESERVED_COMMAND_CONTEXT_KEYS,
-  RESERVED_EVENT_CONTEXT_KEYS,
-} from "./constants";
-import {
-  CommandSettler,
-  createPendingHandle,
   createSettledHandle,
+  createSettlerRegistry,
 } from "./command-handle";
+import {
+  CommandContextHost,
+  CommandInvocation,
+  createCommandInvocation,
+} from "./command-context";
+import {
+  AfterHookName,
+  applyCommandExtensions,
+  applyEventExtensions,
+  destroyExtensions,
+  runAfterHooks,
+} from "./extensions";
+import {
+  DEFAULT_SUSPEND_WARNING_MS,
+  SuspensionGate,
+  createSuspensionGate,
+} from "./suspension";
 import { freezeState } from "./freeze";
-import { reportToConsole, runSafe } from "./run-safe";
+import { reportToConsole } from "./run-safe";
 
 const _causalStack: string[] = [];
 
@@ -47,22 +57,15 @@ type HandlerEntry<S> = {
   options?: CommandHandlerOptions;
 };
 
-type CommandInvocation<S> = {
-  ctx: CommandContext<S>;
-  dispose: () => void;
-};
-
-type AfterHookName = "afterCommand" | "afterEvent";
-
 const defaultErrorReporter: ErrorReporter = (report) => {
   reportToConsole(`[commiq] unhandled ${report.source} error`, report.error);
 };
 
-function isStateUpdater<S>(next: S | StateUpdater<S>): next is StateUpdater<S> {
-  return typeof next === "function";
-}
-
-export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
+export class StoreImpl<
+  S,
+  CmdCtx extends Record<string, unknown> = {},
+  EvtCtx extends Record<string, unknown> = {},
+> {
   private _state: S;
   private _commandHandlers = new Map<string, HandlerEntry<S>>();
   private _eventHandlers = new Map<symbol, EventHandler<S>[]>();
@@ -72,18 +75,33 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _flushResolvers: Array<() => void> = [];
   private _currentCorrelationId: string | null = null;
   private _interruptControllers = new Map<string, AbortController>();
-  private _contextExtensions: ContextExtensionDef<S>[] = [];
+  private _contextExtensions: AnyContextExtension<S>[] = [];
   private _pendingEvents: StoreEvent[] = [];
-  private _settlers = new Map<string, CommandSettler>();
+  private _settlers = createSettlerRegistry();
   private _handlerDepth = 0;
   private _active = false;
   private _destroyed = false;
   private _onError: ErrorReporter;
   private _isReporting = false;
+  private _gate: SuspensionGate;
+  private _commandHost: CommandContextHost<S> = {
+    getState: () => this.state,
+    applyState: (next: S) => this._applyState(next),
+    publish: (event: StoreEvent) => this._publish(event),
+    createEvent: <D>(eventDef: EventDef<D>, data: D) =>
+      this._createEvent(eventDef, data),
+    reportDisposed: (operation: string, command: Command) =>
+      this._reportDisposedContext(operation, command),
+  };
 
   constructor(initialState: S, options?: StoreOptions) {
     this._state = freezeState(initialState);
     this._onError = options?.onError ?? defaultErrorReporter;
+    this._gate = createSuspensionGate({
+      warningMs: options?.suspendWarningMs ?? DEFAULT_SUSPEND_WARNING_MS,
+      onWarn: (heldMs) => this._reportStalledGate(heldMs),
+      onResume: () => this._schedule(),
+    });
   }
 
   readonly queue: QueueFn = (
@@ -98,14 +116,40 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     return this._state as DeepReadonly<S>;
   }
 
-  useExtension<T extends Record<string, unknown>>(
-    ext: ContextExtensionDef<S, T>,
-  ): StoreImpl<S, Ctx & T> {
+  get isSuspended(): boolean {
+    return this._gate.isSuspended;
+  }
+
+  useExtension<
+    TCommand extends Record<string, unknown> = {},
+    TEvent extends Record<string, unknown> = {},
+  >(
+    ext: ContextExtensionDef<S, TCommand, TEvent>,
+  ): StoreImpl<S, CmdCtx & TCommand, EvtCtx & TEvent> {
     if (this._active) {
       throw new Error("Cannot add extensions to an active store");
     }
-    this._contextExtensions.push(ext as ContextExtensionDef<S>);
-    return this as StoreImpl<S, Ctx & T>;
+    this._contextExtensions.push(ext);
+    return this as StoreImpl<S, CmdCtx & TCommand, EvtCtx & TEvent>;
+  }
+
+  removeExtension<
+    TCommand extends Record<string, unknown> = {},
+    TEvent extends Record<string, unknown> = {},
+  >(ext: ContextExtensionDef<S, TCommand, TEvent>): boolean {
+    const index = this._contextExtensions.indexOf(ext);
+    if (index === -1) return false;
+    const [removed] = this._contextExtensions.splice(index, 1);
+    this._destroyExtensions([removed]);
+    return true;
+  }
+
+  suspend(): Unsubscribe {
+    if (this._destroyed) {
+      this._reportDestroyed("suspend()");
+      return noop;
+    }
+    return this._gate.suspend();
   }
 
   replaceState(next: S): void {
@@ -117,17 +161,17 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
   addCommandHandler<N extends string, D>(
     def: CommandDef<N, D>,
-    handler: CommandHandler<S, D, Ctx>,
+    handler: CommandHandler<S, D, CmdCtx>,
     options?: CommandHandlerOptions,
   ): this;
   addCommandHandler<D = unknown>(
     name: string,
-    handler: CommandHandler<S, D, Ctx>,
+    handler: CommandHandler<S, D, CmdCtx>,
     options?: CommandHandlerOptions,
   ): this;
   addCommandHandler(
     nameOrDef: string | CommandDef<string, never>,
-    handler: CommandHandler<S, never, Ctx>,
+    handler: CommandHandler<S, never, CmdCtx>,
     options?: CommandHandlerOptions,
   ): this {
     const name = typeof nameOrDef === "string" ? nameOrDef : nameOrDef.name;
@@ -160,7 +204,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
   addEventHandler<D>(
     eventDef: EventDef<D>,
-    handler: EventHandler<S, D, Ctx>,
+    handler: EventHandler<S, D, EvtCtx>,
   ): Unsubscribe {
     if (this._destroyed) {
       this._reportDestroyed(`addEventHandler("${eventDef.name}")`);
@@ -178,7 +222,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
   removeEventHandler<D>(
     eventDef: EventDef<D>,
-    handler: EventHandler<S, D, Ctx>,
+    handler: EventHandler<S, D, EvtCtx>,
   ): boolean {
     const handlers = this._eventHandlers.get(eventDef.id);
     if (!handlers) return false;
@@ -198,7 +242,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
       );
     }
     if (this._destroyed) return Promise.resolve();
-    if (!this._processing && !this._hasWork()) {
+    if (!this._processing && this._isQuiescent()) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
@@ -224,6 +268,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   destroy(): void {
     if (this._destroyed) return;
     this._destroyed = true;
+    this._gate.reset();
 
     for (const controller of this._interruptControllers.values()) {
       controller.abort();
@@ -235,16 +280,10 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     this._streamListeners.clear();
     this._eventHandlers.clear();
     this._commandHandlers.clear();
-    this._contextExtensions.length = 0;
+    this._destroyExtensions(this._contextExtensions.splice(0));
 
-    for (const settler of [...this._settlers.values()]) {
-      this._settleCommand(settler.command, "discarded");
-    }
-    this._settlers.clear();
-
-    for (const resolve of this._flushResolvers.splice(0)) {
-      resolve();
-    }
+    this._settlers.settleAll("discarded");
+    this._resolveFlushers();
   }
 
   private _dispatch(command: Command): CommandHandle {
@@ -263,7 +302,21 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   }
 
   private _hasWork(): boolean {
-    return this._queue.length > 0 || this._pendingEvents.length > 0;
+    return this._pendingEvents.length > 0 || this._canRunCommand();
+  }
+
+  private _canRunCommand(): boolean {
+    return this._queue.length > 0 && !this._gate.isSuspended;
+  }
+
+  private _isQuiescent(): boolean {
+    return this._queue.length === 0 && this._pendingEvents.length === 0;
+  }
+
+  private _resolveFlushers(): void {
+    for (const resolve of this._flushResolvers.splice(0)) {
+      resolve();
+    }
   }
 
   private _enqueue(
@@ -284,23 +337,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
     this._queue.push(queued);
 
-    const { handle, settler } = createPendingHandle(queued);
-    this._settlers.set(queued.correlationId, settler);
-    return handle;
-  }
-
-  private _settleCommand(
-    command: Command,
-    status: CommandStatus,
-    error?: unknown,
-  ): void {
-    const settler = this._settlers.get(command.correlationId);
-    if (!settler) return;
-    this._settlers.delete(command.correlationId);
-
-    const result: CommandResult =
-      status === "failed" ? { status, command, error } : { status, command };
-    settler.settle(result);
+    return this._settlers.register(queued);
   }
 
   private _interruptDuplicates(name: string): void {
@@ -318,14 +355,14 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
           phase: "queued" as const,
         }),
       );
-      this._settleCommand(command, "interrupted");
+      this._settlers.settle(command, "interrupted");
     }
 
     this._interruptControllers.get(name)?.abort();
   }
 
   private _schedule(): void {
-    if (this._processing || this._destroyed) return;
+    if (this._processing || this._destroyed || !this._hasWork()) return;
     void this._processQueue().catch((error: unknown) => {
       this._report({ error, source: "queueProcessor" });
     });
@@ -385,53 +422,37 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     this._schedule();
   }
 
-  private _applyCommandExtensions(
-    ctx: CommandContext<S>,
-    command: Command,
+  private _reportStalledGate(heldMs: number): void {
+    this._report({
+      error: new Error(
+        `Command processing has been suspended for more than ${heldMs}ms — a suspend() release was probably missed`,
+      ),
+      source: "suspendedQueue",
+    });
+  }
+
+  private _reportDisposedContext(operation: string, command: Command): void {
+    this._reportUnhandled({
+      error: new Error(
+        `${operation}() called after command "${command.name}" finished`,
+      ),
+      source: "disposedContext",
+      command,
+    });
+  }
+
+  private _destroyExtensions(
+    extensions: ReadonlyArray<AnyContextExtension<S>>,
   ): void {
-    const claimed = new Set<string>();
-    for (const ext of this._contextExtensions) {
-      if (!ext.command) continue;
-      const props = ext.command(ctx, command);
-      for (const key of Object.keys(props)) {
-        if (RESERVED_COMMAND_CONTEXT_KEYS.has(key) || claimed.has(key)) {
-          throw new Error(
-            `Context extension key "${key}" conflicts with existing context property`,
-          );
-        }
-        claimed.add(key);
-      }
-      Object.assign(ctx, props);
-    }
+    destroyExtensions(extensions, (error) =>
+      this._reportUnhandled({ error, source: "contextExtension" }),
+    );
   }
 
-  private _applyEventExtensions(ctx: EventContext<S>, event: StoreEvent): void {
-    const claimed = new Set<string>();
-    for (const ext of this._contextExtensions) {
-      if (!ext.event) continue;
-      const props = ext.event(ctx, event);
-      for (const key of Object.keys(props)) {
-        if (RESERVED_EVENT_CONTEXT_KEYS.has(key) || claimed.has(key)) {
-          throw new Error(
-            `Context extension key "${key}" conflicts with existing context property`,
-          );
-        }
-        claimed.add(key);
-      }
-      Object.assign(ctx, props);
-    }
-  }
-
-  private async _runAfterHooks(name: AfterHookName): Promise<void> {
-    for (const ext of this._contextExtensions) {
-      const hook = ext[name];
-      if (!hook) continue;
-      await runSafe(
-        () => hook(),
-        (error) =>
-          this._reportUnhandled({ error, source: "contextExtension" }),
-      );
-    }
+  private _runAfterHooks(name: AfterHookName): Promise<void> {
+    return runAfterHooks(this._contextExtensions, name, (error) =>
+      this._reportUnhandled({ error, source: "contextExtension" }),
+    );
   }
 
   private async _processQueue(): Promise<void> {
@@ -440,18 +461,14 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     try {
       while (this._hasWork()) {
         await this._dispatchPending();
-        if (this._queue.length > 0) {
+        if (this._canRunCommand()) {
           await this._processNextCommand();
         }
       }
     } finally {
       this._processing = false;
       this._currentCorrelationId = null;
-
-      const resolvers = this._flushResolvers.splice(0);
-      for (const resolve of resolvers) {
-        resolve();
-      }
+      if (this._isQuiescent()) this._resolveFlushers();
     }
   }
 
@@ -473,7 +490,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
       this._publish(
         this._createEvent(BuiltinEvent.InvalidCommand, { command }),
       );
-      this._settleCommand(command, "invalid");
+      this._settlers.settle(command, "invalid");
       this._currentCorrelationId = null;
       await this._dispatchPending();
       return;
@@ -499,7 +516,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     const invocation = this._createCommandContext(command, controller?.signal);
 
     try {
-      this._applyCommandExtensions(invocation.ctx, command);
+      applyCommandExtensions(this._contextExtensions, invocation.ctx, command);
       await this._invokeCommandHandler(entry, invocation.ctx, command);
 
       if (controller?.signal.aborted) {
@@ -547,7 +564,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
       );
     }
 
-    this._settleCommand(command, "handled");
+    this._settlers.settle(command, "handled");
   }
 
   private _finishInterrupted(
@@ -564,7 +581,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
         phase: "running" as const,
       }),
     );
-    this._settleCommand(command, "interrupted");
+    this._settlers.settle(command, "interrupted");
   }
 
   private _failCommand(command: Command, error: unknown): void {
@@ -572,7 +589,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     this._publish(
       this._createEvent(BuiltinEvent.CommandHandlingError, { command, error }),
     );
-    this._settleCommand(command, "failed", error);
+    this._settlers.settle(command, "failed", error);
   }
 
   private _createInterruptController(name: string): AbortController {
@@ -586,42 +603,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     command: Command,
     signal?: AbortSignal,
   ): CommandInvocation<S> {
-    const store = this;
-    let isDisposed = false;
-
-    const isUnusable = (operation: string): boolean => {
-      if (!isDisposed) return false;
-      store._reportUnhandled({
-        error: new Error(
-          `${operation}() called after command "${command.name}" finished`,
-        ),
-        source: "disposedContext",
-        command,
-      });
-      return true;
-    };
-
-    const ctx: CommandContext<S> = {
-      get state(): DeepReadonly<S> {
-        return store.state;
-      },
-      setState: (next: S | StateUpdater<S>) => {
-        if (isUnusable("setState")) return;
-        store._applyState(isStateUpdater(next) ? next(store.state) : next);
-      },
-      emit: <D>(eventDef: EventDef<D>, data: D) => {
-        if (isUnusable("emit")) return;
-        store._publish(store._createEvent(eventDef, data));
-      },
-      signal,
-    };
-
-    return {
-      ctx,
-      dispose: () => {
-        isDisposed = true;
-      },
-    };
+    return createCommandInvocation(this._commandHost, command, signal);
   }
 
   private _createEventContext(): EventContext<S> {
@@ -659,7 +641,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
     try {
       const eventCtx = this._createEventContext();
-      this._applyEventExtensions(eventCtx, event);
+      applyEventExtensions(this._contextExtensions, eventCtx, event);
 
       for (const handler of snapshot) {
         try {
@@ -706,6 +688,6 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 export function createStore<S>(
   initialState: S,
   options?: StoreOptions,
-): StoreImpl<S, {}> {
+): StoreImpl<S, {}, {}> {
   return new StoreImpl(initialState, options);
 }

@@ -102,7 +102,8 @@ export type StoreErrorSource =
   | "disposedContext"
   | "queueProcessor"
   | "duplicateHandler"
-  | "destroyedStore";
+  | "destroyedStore"
+  | "suspendedQueue";
 
 export type StoreErrorReport = {
   error: unknown;
@@ -115,6 +116,7 @@ export type ErrorReporter = (report: StoreErrorReport) => void;
 
 export type StoreOptions = {
   onError?: ErrorReporter;
+  suspendWarningMs?: number;
 }
 
 export type CommandContext<S> = {
@@ -139,12 +141,23 @@ export type EventHandler<S, D = unknown, Ctx extends Record<string, unknown> = {
   event: StoreEvent<D>
 ) => void | Promise<void>;
 
-export type ContextExtensionDef<S, T extends Record<string, unknown> = Record<string, unknown>> = {
-  command?: (ctx: CommandContext<S>, command: Command) => T;
-  event?: (ctx: EventContext<S>, event: StoreEvent) => T;
+export type ContextExtensionDef<
+  S,
+  TCommand extends Record<string, unknown> = {},
+  TEvent extends Record<string, unknown> = {},
+> = {
+  command?: (ctx: CommandContext<S>, command: Command) => TCommand;
+  event?: (ctx: EventContext<S>, event: StoreEvent) => TEvent;
   afterCommand?: () => void | Promise<void>;
   afterEvent?: () => void | Promise<void>;
+  destroy?: () => void;
 }
+
+export type AnyContextExtension<S> = ContextExtensionDef<
+  S,
+  Record<string, unknown>,
+  Record<string, unknown>
+>;
 
 export type StreamListener = (event: StoreEvent) => void;
 
@@ -158,6 +171,7 @@ export type SealedStore<S> = {
   readonly state: DeepReadonly<S>;
   queue: QueueFn;
   flush: () => Promise<void>;
+  suspend: () => Unsubscribe;
   openStream: (listener: StreamListener) => Unsubscribe;
   closeStream: (listener: StreamListener) => void;
 }

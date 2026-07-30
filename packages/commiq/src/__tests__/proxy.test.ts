@@ -40,6 +40,43 @@ describe("sealStore", () => {
     expect(sealed.state).toEqual({ count: 1 });
   });
 
+  it("exposes suspend so plugins can gate command processing", async () => {
+    const store = createStore({ count: 0 }, { suspendWarningMs: 0 });
+    store.addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
+
+    const sealed = sealStore(store);
+    const release = sealed.suspend();
+    sealed.queue(createCommand("inc", undefined));
+
+    for (let index = 0; index < 100; index += 1) {
+      await Promise.resolve();
+    }
+    expect(sealed.state).toEqual({ count: 0 });
+
+    release();
+    await sealed.flush();
+    expect(sealed.state).toEqual({ count: 1 });
+  });
+
+  it("seals a store that carries context extensions", async () => {
+    const store = createStore<{ count: number }>({ count: 0 })
+      .useExtension({
+        command: (ctx) => ({
+          bump: () => ctx.setState({ count: ctx.state.count + 1 }),
+        }),
+      })
+      .addCommandHandler("inc", (ctx) => {
+        ctx.bump();
+      });
+
+    const sealed = sealStore(store);
+    await sealed.queue(createCommand("inc", undefined));
+
+    expect(sealed.state).toEqual({ count: 1 });
+  });
+
   it("delivers events to a listener opened through the sealed store", async () => {
     const store = createStore({ count: 0 });
     store.addCommandHandler(inc, (ctx) => {

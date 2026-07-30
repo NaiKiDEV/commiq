@@ -11,6 +11,7 @@ export { sealStore } from "./proxy";
 export { createEventBus } from "./event-bus";
 export type { EventBus, EventBusHandler, Streamable } from "./event-bus";
 export type {
+  AnyContextExtension,
   Command,
   CommandDef,
   CommandHandle,
