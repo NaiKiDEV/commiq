@@ -8,7 +8,7 @@ import { StateDiff } from "../components/StateDiff";
 type StoreStateViewProps = {
   stores: Record<string, SealedStore<unknown>>;
   storeStates: Record<string, unknown>;
-  getStateHistory: (storeName: string) => StateSnapshot[];
+  getStateHistory: (storeName: string) => readonly StateSnapshot[];
 };
 
 type Mode = "live" | "history";

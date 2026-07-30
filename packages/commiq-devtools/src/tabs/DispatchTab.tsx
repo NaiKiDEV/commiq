@@ -6,7 +6,7 @@ import { colors, fonts, formatTime, sharedStyles } from "../theme";
 import { getCommandFromEntry } from "../types";
 
 type DispatchTabProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   stores: Record<string, SealedStore<unknown>>;
   storeNames: string[];
 }

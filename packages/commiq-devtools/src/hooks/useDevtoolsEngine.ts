@@ -15,9 +15,9 @@ export type ErrorEntry = {
 }
 
 export type DevtoolsEngine = {
-  timeline: TimelineEntry[];
-  getChain: (correlationId: string) => TimelineEntry[];
-  getStateHistory: (storeName: string) => StateSnapshot[];
+  timeline: readonly TimelineEntry[];
+  getChain: (correlationId: string) => readonly TimelineEntry[];
+  getStateHistory: (storeName: string) => readonly StateSnapshot[];
   storeStates: Record<string, unknown>;
   storeNames: string[];
   eventCount: number;

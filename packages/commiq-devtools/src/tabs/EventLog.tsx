@@ -19,7 +19,7 @@ import { entryKey, type PinActions } from "../types";
 const ERROR_EVENT_NAMES = new Set(["commandHandlingError", "invalidCommand"]);
 
 type EventLogProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   storeNames: string[];
   onSelectCorrelation?: (id: string) => void;
   errorFilter?: boolean;

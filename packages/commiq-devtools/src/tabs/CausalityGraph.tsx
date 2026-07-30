@@ -15,7 +15,7 @@ import { DetailPanel } from "../components/DetailPanel";
 import { getCommandFromEntry, entryKey, type PinActions } from "../types";
 
 type CausalityGraphProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   storeNames: string[];
   pinActions?: PinActions;
 }
@@ -214,7 +214,7 @@ function ChainNode({
   );
 }
 
-function buildChains(timeline: TimelineEntry[]): CommandGroup[] {
+function buildChains(timeline: readonly TimelineEntry[]): CommandGroup[] {
   if (timeline.length === 0) return [];
 
   const entryMap = new Map<string, TimelineEntry>();

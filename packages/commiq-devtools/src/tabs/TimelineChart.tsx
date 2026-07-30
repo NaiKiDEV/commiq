@@ -20,7 +20,7 @@ import { DetailPanel } from "../components/DetailPanel";
 import { getCommandFromEntry } from "../types";
 
 type TimelineChartProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   storeNames: string[];
 }
 

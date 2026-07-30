@@ -1,112 +1,102 @@
-import type { StoreEvent, StreamListener } from "@naikidev/commiq";
-import { BuiltinEvent, BuiltinEventName, matchEvent } from "@naikidev/commiq";
-import type { DevtoolsOptions, TimelineEntry, StateSnapshot, Transport } from "./types";
+import type {
+  Devtools,
+  DevtoolsErrorHandler,
+  DevtoolsMessage,
+  DevtoolsOptions,
+  DevtoolsStore,
+  StateSnapshot,
+  TimelineEntry,
+} from "./types";
 import { EventCollector } from "./collector";
 import { windowMessageTransport } from "./transport";
+import { createSnapshot } from "./snapshot";
+import { sendSafely } from "./serialize";
 
-type Streamable = {
-  readonly state: unknown;
-  openStream: (listener: StreamListener) => void;
-  closeStream: (listener: StreamListener) => void;
-}
+const defaultOnError: DevtoolsErrorHandler = (error) => {
+  console.warn("[commiq-devtools]", error);
+};
 
-type StoreConnection = {
-  store: Streamable;
-  listener: StreamListener;
-}
-
-export function createDevtools(options: DevtoolsOptions = {}) {
-  const transport: Transport = options.transport ?? windowMessageTransport();
-  const maxEvents = options.maxEvents ?? 1000;
+export function createDevtools(options: DevtoolsOptions = {}): Devtools {
+  const transport = options.transport ?? windowMessageTransport();
+  const snapshotMode = options.snapshotMode ?? "safe";
   const logToConsole = options.logToConsole ?? false;
+  const onError = options.onError ?? defaultOnError;
 
-  const collector = new EventCollector({ maxEvents });
-  const connections = new Map<string, StoreConnection>();
+  const send = (message: DevtoolsMessage): void => {
+    sendSafely((payload) => transport.send(payload), message, onError);
+  };
 
-  function connect(store: Streamable, storeName: string): void {
-    if (connections.has(storeName)) {
-      disconnect(storeName);
-    }
-
-    collector.connect(store, storeName);
-
-    const listener: StreamListener = (event: StoreEvent) => {
-      const entry: TimelineEntry = {
-        storeName,
-        type: isCommandEvent(event.name) ? "command" : "event",
-        name: event.name,
-        data: event.data,
-        correlationId: event.correlationId,
-        causedBy: event.causedBy,
-        timestamp: event.timestamp,
-      };
-
-      if (matchEvent(event, BuiltinEvent.StateChanged)) {
-        entry.stateBefore = event.data.prev;
-        entry.stateAfter = event.data.next;
-      }
-
-      transport.send({ type: "EVENT", entry });
-
+  const collector = new EventCollector({
+    maxEvents: options.maxEvents,
+    maxSnapshots: options.maxSnapshots,
+    snapshotMode,
+    onError,
+    onEntry: (entry) => {
+      send({ type: "EVENT", entry });
       if (logToConsole) {
-        const time = new Date(event.timestamp).toISOString().slice(11, 23);
-        const cause = event.causedBy ? ` (caused by ${event.causedBy.slice(0, 8)})` : "";
-        console.log(
-          `[${time}] ${storeName} | ${event.name} ${event.correlationId.slice(0, 8)}${cause}`
-        );
+        logEntry(entry);
       }
-    };
+    },
+  });
 
-    store.openStream(listener);
-    connections.set(storeName, { store, listener });
-
-    transport.send({
+  function connect(store: DevtoolsStore, storeName: string): void {
+    collector.connect(store, storeName);
+    send({
       type: "STORE_CONNECTED",
       storeName,
-      initialState: store.state,
+      initialState: createSnapshot(store.state, snapshotMode),
     });
   }
 
   function disconnect(storeName: string): void {
-    const connection = connections.get(storeName);
-    if (connection) {
-      connection.store.closeStream(connection.listener);
-      connections.delete(storeName);
+    if (!collector.isConnected(storeName)) {
+      return;
     }
     collector.disconnect(storeName);
-    transport.send({ type: "STORE_DISCONNECTED", storeName });
+    send({ type: "STORE_DISCONNECTED", storeName });
+  }
+
+  function clear(): void {
+    collector.clear();
+    send({ type: "CLEARED" });
   }
 
   function destroy(): void {
-    for (const storeName of [...connections.keys()]) {
-      disconnect(storeName);
+    for (const storeName of collector.getConnectedStores()) {
+      collector.disconnect(storeName);
+      send({ type: "STORE_DISCONNECTED", storeName });
     }
     collector.destroy();
     transport.destroy();
   }
 
-  function isCommandEvent(name: string): boolean {
-    return (
-      name === BuiltinEventName.CommandStarted ||
-      name === BuiltinEventName.CommandHandled ||
-      name === BuiltinEventName.InvalidCommand ||
-      name === BuiltinEventName.CommandHandlingError ||
-      name === BuiltinEventName.CommandInterrupted
-    );
-  }
-
   return {
     connect,
     disconnect,
+    clear,
     destroy,
-    getTimeline(storeName?: string): TimelineEntry[] {
+    getVersion(): number {
+      return collector.getVersion();
+    },
+    getTimeline(storeName?: string): readonly TimelineEntry[] {
       return collector.getTimeline(storeName);
     },
-    getChain(correlationId: string): TimelineEntry[] {
+    getChain(correlationId: string): readonly TimelineEntry[] {
       return collector.getChain(correlationId);
     },
-    getStateHistory(storeName: string): StateSnapshot[] {
+    getStateHistory(storeName: string): readonly StateSnapshot[] {
       return collector.getStateHistory(storeName);
     },
+    getConnectedStores(): readonly string[] {
+      return collector.getConnectedStores();
+    },
   };
+}
+
+function logEntry(entry: TimelineEntry): void {
+  const time = new Date(entry.timestamp).toISOString().slice(11, 23);
+  const cause = entry.causedBy ? ` (caused by ${entry.causedBy.slice(0, 8)})` : "";
+  console.log(
+    `[${time}] ${entry.storeName} | ${entry.name} ${entry.correlationId.slice(0, 8)}${cause}`,
+  );
 }

@@ -11,7 +11,7 @@ import { colors, fonts, sharedStyles } from "../theme";
 import { getCommandFromEntry } from "../types";
 
 type DependencyMapProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   storeNames: string[];
 };
 

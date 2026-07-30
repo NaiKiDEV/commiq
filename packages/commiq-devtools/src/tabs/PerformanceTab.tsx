@@ -4,7 +4,7 @@ import { colors, fonts, sharedStyles } from "../theme";
 import { getCommandFromEntry } from "../types";
 
 type PerformanceTabProps = {
-  timeline: TimelineEntry[];
+  timeline: readonly TimelineEntry[];
   storeNames: string[];
 }
 
