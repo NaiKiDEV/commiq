@@ -1,0 +1,199 @@
+---
+title: Real-Time Transports
+description: Integrate WebSockets, Socket.IO, and Server-Sent Events with Commiq stores.
+---
+
+# Real-Time Transports
+
+Commiq's command queue and event stream map directly onto real-time transports:
+
+- **Inbound messages** from the transport become commands queued into the store
+- **Outbound messages** are sent in response to store events
+
+No adapter package is required. The connection lifecycle is managed by the transport library of your choice — the bridge is a small amount of code in both directions.
+
+## The pattern
+
+```
+Transport → message → store.queue({ name, data })
+Store event → event.name match → transport.send(data)
+```
+
+The store remains unaware of the transport. The transport setup subscribes to the store's event stream and filters for relevant events.
+
+## Native WebSocket
+
+Define events and command handlers in the store:
+
+```ts title="stores/chat.ts"
+import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+
+type Message = { id: string; author: string; text: string };
+
+type ChatState = {
+  messages: Message[];
+};
+
+export const ChatEvent = {
+  MessageReceived: createEvent<Message>("chat:message-received"),
+  MessageSent: createEvent<{ text: string }>("chat:message-sent"),
+};
+
+const _store = createStore<ChatState>({ messages: [] });
+
+// Inbound: server pushed a message
+_store.addCommandHandler<Message>("chat:message", (ctx, cmd) => {
+  ctx.setState({ messages: [...ctx.state.messages, cmd.data] });
+  ctx.emit(ChatEvent.MessageReceived, cmd.data);
+});
+
+// Outbound: user wants to send — emit an event for the transport to act on
+_store.addCommandHandler<{ text: string }>("chat:send", (ctx, cmd) => {
+  ctx.emit(ChatEvent.MessageSent, cmd.data);
+});
+
+export const chatStore = sealStore(_store);
+```
+
+Set up the WebSocket bridge during application startup:
+
+```ts title="transport/chat-ws.ts"
+import { chatStore, ChatEvent } from "../stores/chat";
+
+const ws = new WebSocket("wss://example.com/chat");
+
+// Inbound: translate server messages into commands
+ws.addEventListener("message", (event) => {
+  const message = JSON.parse(event.data) as Message;
+  chatStore.queue({ name: "chat:message", data: message });
+});
+
+// Outbound: send when the store emits the send event
+chatStore.stream.subscribe((event) => {
+  if (event.name === ChatEvent.MessageSent.name && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(event.data));
+  }
+});
+```
+
+Dispatching from a component is no different from any other command:
+
+```tsx
+const queue = useQueue(chatStore);
+queue({ name: "chat:send", data: { text: inputValue } });
+```
+
+## Connection state
+
+Model the WebSocket lifecycle as store state to make connection status reactive:
+
+```ts title="stores/connection.ts"
+import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+
+type ConnectionState = {
+  status: "connecting" | "connected" | "disconnected" | "error";
+  error: string | null;
+};
+
+export const ConnectionEvent = {
+  Connected: createEvent("connection:connected"),
+  Disconnected: createEvent("connection:disconnected"),
+};
+
+const _store = createStore<ConnectionState>({
+  status: "connecting",
+  error: null,
+});
+
+_store.addCommandHandler("connection:connected", (ctx) => {
+  ctx.setState({ status: "connected", error: null });
+  ctx.emit(ConnectionEvent.Connected, undefined);
+});
+
+_store.addCommandHandler<{ reason: string }>("connection:disconnected", (ctx, cmd) => {
+  ctx.setState({ status: "disconnected", error: cmd.data.reason });
+  ctx.emit(ConnectionEvent.Disconnected, undefined);
+});
+
+export const connectionStore = sealStore(_store);
+```
+
+Drive it from WebSocket lifecycle events:
+
+```ts title="transport/chat-ws.ts"
+ws.addEventListener("open", () => {
+  connectionStore.queue({ name: "connection:connected" });
+});
+
+ws.addEventListener("close", (event) => {
+  connectionStore.queue({
+    name: "connection:disconnected",
+    data: { reason: event.reason },
+  });
+});
+```
+
+The connection status is now available via `useSelector` like any other state. Components rendering a connection indicator or disabling the send button react automatically.
+
+## Socket.IO
+
+The pattern is identical — only the transport API differs:
+
+```ts title="transport/chat-socketio.ts"
+import { io } from "socket.io-client";
+import { chatStore, ChatEvent } from "../stores/chat";
+
+const socket = io("https://example.com");
+
+// Inbound
+socket.on("chat:message", (message: Message) => {
+  chatStore.queue({ name: "chat:message", data: message });
+});
+
+// Outbound
+chatStore.stream.subscribe((event) => {
+  if (event.name === ChatEvent.MessageSent.name) {
+    socket.emit("chat:message", event.data);
+  }
+});
+```
+
+Socket.IO's built-in reconnection, rooms, and namespaces are preserved. Commiq does not interfere with the transport layer.
+
+## Server-Sent Events
+
+SSE is one-directional — the server pushes events, the client never sends. Only the inbound side is needed:
+
+```ts title="transport/notifications-sse.ts"
+import { notificationStore } from "../stores/notifications";
+
+const sse = new EventSource("/api/notifications");
+
+sse.addEventListener("notification", (event) => {
+  const data = JSON.parse(event.data);
+  notificationStore.queue({ name: "notification:received", data });
+});
+
+sse.addEventListener("error", () => {
+  notificationStore.queue({ name: "notification:connection-error" });
+});
+```
+
+## Where to initialize the transport
+
+Initialize transports in a single application-level module, not inside components or stores. A React entry point or a dedicated bootstrap file works well:
+
+```ts title="main.ts"
+import "./transport/chat-ws";
+import "./transport/notifications-sse";
+import { createRoot } from "react-dom/client";
+import { App } from "./App";
+
+createRoot(document.getElementById("root")!).render(<App />);
+```
+
+Importing the transport module once causes it to execute and establish the connection. Keeping transport setup in dedicated files makes it straightforward to swap implementations and avoids re-establishing connections on component re-renders.
+
+<Callout type="info">
+Commiq processes commands sequentially. If messages arrive faster than handlers can process them, they are queued and processed in order. No messages are dropped as long as the application is running.
+</Callout>

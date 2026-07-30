@@ -1,0 +1,187 @@
+---
+title: State Normalization
+description: Structure store state for collections to simplify lookups, selectors, and updates.
+---
+
+import { Tabs, Tab } from 'fumadocs-ui/components/tabs';
+
+# State Normalization
+
+Stores that manage collections — users, products, messages — face a choice: arrays or maps. The wrong choice leads to O(n) lookups on every render, complex update logic, and selectors that return new references unnecessarily. Normalizing state eliminates these problems.
+
+## Arrays vs. maps
+
+<Tabs items={["Array (simple)", "Map (normalized)"]}>
+<Tab value="Array (simple)">
+```ts
+type ProductState = {
+  products: Product[];
+};
+
+// Lookup: O(n) every time
+const product = state.products.find((p) => p.id === id);
+
+// Update: map over entire array
+const updated = state.products.map((p) =>
+  p.id === id ? { ...p, stock: p.stock - 1 } : p,
+);
+```
+</Tab>
+<Tab value="Map (normalized)">
+```ts
+type ProductState = {
+  products: Record<string, Product>;
+  productIds: string[];
+};
+
+// Lookup: O(1)
+const product = state.products[id];
+
+// Update: replace single entry
+const updated = {
+  ...state.products,
+  [id]: { ...state.products[id], stock: state.products[id].stock - 1 },
+};
+```
+</Tab>
+</Tabs>
+
+Arrays are simpler to initialize and iterate. Maps are faster for lookups and targeted updates. The tradeoff matters when the collection grows or when components frequently access individual items.
+
+## Normalized shape
+
+The standard normalized shape uses two fields: an entity map keyed by ID, and an ordered array of IDs:
+
+```ts title="stores/product.ts"
+type Product = {
+  id: string;
+  name: string;
+  price: number;
+  stock: number;
+};
+
+type ProductState = {
+  byId: Record<string, Product>;
+  ids: string[];
+};
+
+const initialState: ProductState = {
+  byId: {},
+  ids: [],
+};
+```
+
+The `ids` array preserves insertion order and drives list rendering. The `byId` map provides instant lookup for detail views, updates, and selectors.
+
+## Command handlers with normalized state
+
+Adding and removing items updates both fields:
+
+```ts title="stores/product.ts"
+_store.addCommandHandler<Product>("product:add", (ctx, cmd) => {
+  const product = cmd.data;
+  ctx.setState({
+    byId: { ...ctx.state.byId, [product.id]: product },
+    ids: [...ctx.state.ids, product.id],
+  });
+});
+
+_store.addCommandHandler<{ id: string }>("product:remove", (ctx, cmd) => {
+  const { [cmd.data.id]: _, ...remaining } = ctx.state.byId;
+  ctx.setState({
+    byId: remaining,
+    ids: ctx.state.ids.filter((id) => id !== cmd.data.id),
+  });
+});
+
+_store.addCommandHandler<{ id: string; stock: number }>("product:update-stock", (ctx, cmd) => {
+  const product = ctx.state.byId[cmd.data.id];
+  if (!product) return;
+
+  ctx.setState({
+    ...ctx.state,
+    byId: {
+      ...ctx.state.byId,
+      [cmd.data.id]: { ...product, stock: cmd.data.stock },
+    },
+  });
+});
+```
+
+## Selectors for normalized state
+
+Write selectors that derive what the component needs:
+
+```ts title="hooks.ts"
+import { useSelector } from "@naikidev/commiq-react";
+
+// Full ordered list — only re-renders when ids or entities change
+export function useProducts() {
+  const byId = useSelector(productStore, (s) => s.byId);
+  const ids = useSelector(productStore, (s) => s.ids);
+  return ids.map((id) => byId[id]);
+}
+
+// Single item — re-renders only when this product changes
+export function useProduct(id: string) {
+  return useSelector(productStore, (s) => s.byId[id]);
+}
+
+// Derived count — re-renders only when the number of items changes
+export function useProductCount() {
+  return useSelector(productStore, (s) => s.ids.length);
+}
+```
+
+<Callout type="warn">
+Avoid creating new arrays or objects inside `useSelector`. A selector like `(s) => s.ids.map(id => s.byId[id])` returns a new array reference on every call, defeating memoization and causing unnecessary re-renders. Derive lists in the hook body or use a memoization layer.
+</Callout>
+
+## Keeping state flat
+
+Deeply nested state increases the cost of immutable updates and makes selectors brittle. Prefer flat, adjacent fields over nested structures:
+
+```ts
+// Avoid: deeply nested
+type State = {
+  order: {
+    customer: {
+      address: {
+        city: string;
+      };
+    };
+  };
+};
+
+// Prefer: flat
+type State = {
+  orderId: string;
+  customerName: string;
+  shippingCity: string;
+};
+```
+
+When entities reference other entities, store the ID rather than embedding the full object:
+
+```ts
+type Order = {
+  id: string;
+  customerId: string; // Reference, not embedded Customer object
+  itemIds: string[];  // References, not embedded Item objects
+};
+```
+
+This avoids stale data when the referenced entity is updated elsewhere and keeps each store's state minimal.
+
+## When arrays are fine
+
+Not every collection needs normalization. Arrays are the simpler choice when:
+
+| Condition | Why arrays work |
+|---|---|
+| The collection is small (under ~50 items) | O(n) lookups are negligible |
+| Items are never accessed individually by ID | No random access needed |
+| The list is append-only (logs, history) | No updates or deletions |
+| Insertion order is the only ordering | An `ids` array would duplicate the structure |
+
+Start with arrays. Normalize when you observe performance issues or when update logic becomes unwieldy.

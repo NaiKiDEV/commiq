@@ -1,0 +1,17 @@
+{
+  "title": "v1 (legacy)",
+  "description": "Unmaintained documentation for commiq 1.x",
+  "root": true,
+  "pages": [
+    "index",
+    "getting-started",
+    "---",
+    "api",
+    "react",
+    "---",
+    "plugins",
+    "---",
+    "patterns",
+    "examples"
+  ]
+}

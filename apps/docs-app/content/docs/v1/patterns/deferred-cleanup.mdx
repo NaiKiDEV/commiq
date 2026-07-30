@@ -1,0 +1,188 @@
+---
+title: Deferred Cleanup
+description: Guarantee resource cleanup in command handlers using ctx.defer, regardless of success or failure.
+---
+
+Command handlers sometimes acquire resources that must be released — connections, object URLs, locks, timers, temporary DOM state. If the handler throws before reaching the cleanup code, the resource leaks. `ctx.defer(fn)` from `withDefer` solves this by registering callbacks that always run after the handler finishes, even on error.
+
+## Basic usage
+
+```ts title="stores/export.ts"
+import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { withDefer } from "@naikidev/commiq-context";
+
+type ExportState = { csv: string | null; exporting: boolean };
+
+const _store = createStore<ExportState>({ csv: null, exporting: false })
+  .useExtension(withDefer<ExportState>())
+  .addCommandHandler<{ query: string }>("export:generate", async (ctx, cmd) => {
+    const db = await connectToDatabase();
+    ctx.defer(() => db.release());
+
+    ctx.setState({ ...ctx.state, exporting: true });
+    const rows = await db.query(cmd.data.query);
+    const csv = rows.map((r) => Object.values(r).join(",")).join("\n");
+    ctx.setState({ ...ctx.state, csv, exporting: false });
+  });
+
+export const exportStore = sealStore(_store);
+```
+
+If `db.query()` throws, the connection is still released. Without `ctx.defer`, you would need a try/finally inside the handler — `defer` keeps the happy path clean.
+
+## Execution order
+
+Deferred callbacks run in registration order after the handler completes. This is predictable: the first resource acquired is the first to be cleaned up.
+
+```ts
+_store.addCommandHandler("work", (ctx) => {
+  ctx.defer(() => console.log("first"));
+  ctx.defer(() => console.log("second"));
+  console.log("handler");
+});
+
+// Output: handler → first → second
+```
+
+## Revoking object URLs
+
+Browsers leak memory when `URL.createObjectURL` results are not revoked. A command that generates a preview URL can defer the revocation of the previous one:
+
+```ts title="stores/image-editor.ts"
+import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { withDefer } from "@naikidev/commiq-context";
+
+type EditorState = {
+  previewUrl: string | null;
+  previousUrl: string | null;
+};
+
+const _store = createStore<EditorState>({ previewUrl: null, previousUrl: null })
+  .useExtension(withDefer<EditorState>())
+  .addCommandHandler<{ file: File }>("editor:setPreview", (ctx, cmd) => {
+    const oldUrl = ctx.state.previewUrl;
+    if (oldUrl) {
+      ctx.defer(() => URL.revokeObjectURL(oldUrl));
+    }
+
+    const newUrl = URL.createObjectURL(cmd.data.file);
+    ctx.setState({ ...ctx.state, previewUrl: newUrl, previousUrl: oldUrl });
+  });
+
+export const editorStore = sealStore(_store);
+```
+
+The old URL is revoked after the handler completes, so the state update referencing it is safe.
+
+## Removing temporary DOM state
+
+Handlers that add temporary CSS classes, event listeners, or ARIA attributes to the DOM during processing can defer the cleanup:
+
+```ts title="stores/drag-drop.ts"
+import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { withDefer } from "@naikidev/commiq-context";
+
+type DragState = { dragging: boolean; targetId: string | null };
+
+const _store = createStore<DragState>({ dragging: false, targetId: null })
+  .useExtension(withDefer<DragState>())
+  .addCommandHandler<{ targetId: string }>("drag:start", (ctx, cmd) => {
+    const el = document.getElementById(cmd.data.targetId);
+    if (!el) return;
+
+    el.classList.add("drag-active");
+    el.setAttribute("aria-grabbed", "true");
+
+    ctx.defer(() => {
+      el.classList.remove("drag-active");
+      el.removeAttribute("aria-grabbed");
+    });
+
+    ctx.setState({ ...ctx.state, dragging: true, targetId: cmd.data.targetId });
+  });
+
+export const dragStore = sealStore(_store);
+```
+
+## Releasing performance marks
+
+When profiling command handlers with the Performance API, defer the `measure` call so it captures the full handler duration:
+
+```ts title="stores/profiled.ts"
+import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { withDefer } from "@naikidev/commiq-context";
+
+type AppState = { items: string[] };
+
+const _store = createStore<AppState>({ items: [] })
+  .useExtension(withDefer<AppState>())
+  .addCommandHandler<string[]>("app:loadItems", async (ctx, cmd) => {
+    const markName = `cmd:app:loadItems:${Date.now()}`;
+    performance.mark(markName);
+    ctx.defer(() => {
+      performance.measure(`app:loadItems`, markName);
+      performance.clearMarks(markName);
+    });
+
+    const items = await fetchItems(cmd.data);
+    ctx.setState({ ...ctx.state, items });
+  });
+
+export const appStore = sealStore(_store);
+```
+
+## Error handling in deferred callbacks
+
+Errors thrown inside deferred callbacks are swallowed — they never propagate to the handler or the store's error events. This prevents cleanup code from masking the original error:
+
+```ts
+_store.addCommandHandler("work", (ctx) => {
+  ctx.defer(() => { throw new Error("cleanup failed"); });
+  ctx.setState({ ...ctx.state, value: 42 });
+});
+
+// State is updated to 42. The deferred error is silently discarded.
+```
+
+If you need to observe cleanup failures, handle them inside the callback itself:
+
+```ts
+ctx.defer(async () => {
+  try {
+    await connection.release();
+  } catch (e) {
+    errorReportingService.capture(e);
+  }
+});
+```
+
+## Isolation between commands
+
+Each command gets a clean slate. Deferred callbacks registered during one command do not carry over to the next:
+
+```ts
+_store.addCommandHandler("first", (ctx) => {
+  ctx.defer(() => console.log("first cleanup"));
+});
+
+_store.addCommandHandler("second", (ctx) => {
+  console.log("second handler");
+});
+
+store.queue(createCommand("first", undefined));
+store.queue(createCommand("second", undefined));
+await store.flush();
+
+// Output: first cleanup → second handler
+```
+
+## When to use defer vs effects
+
+| Concern | Tool | Why |
+| --- | --- | --- |
+| Release a resource acquired in the handler | `ctx.defer` | Cleanup is synchronous with handler completion |
+| Revoke a blob URL after state update | `ctx.defer` | Must happen immediately after handler, not on a future event |
+| Call an API in response to an event | Effects plugin | Async work with cancellation, debounce, restart |
+| Queue a follow-up command after an event | Effects plugin | Domain logic decoupled from the handler |
+
+`ctx.defer` is for cleanup that belongs to the handler. Effects are for reactions that belong to the domain.

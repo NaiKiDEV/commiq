@@ -1,0 +1,154 @@
+---
+title: Error Handling and Recovery
+description: Handle command errors, detect invalid commands, and implement retry patterns.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+# Error Handling and Recovery
+
+Commiq provides builtin events for every error scenario: a command handler throws, a command has no registered handler, or an interruptable command is aborted. Building on these events gives you consistent error handling without scattering try-catch blocks across your application.
+
+## Structured error state
+
+Use a `status` discriminant with an `errorMessage` field, as described in [async loading states](/patterns/async-loading-states). Set the error state inside the handler's catch block, and emit a semantic error event so the UI can react via [event-driven side effects](/patterns/event-driven-side-effects).
+
+This section focuses on errors that go _beyond_ individual handler try-catch blocks — builtin error events, retries, and centralized monitoring.
+
+## CommandHandlingError
+
+When a command handler throws an unhandled exception, Commiq emits `BuiltinEvent.CommandHandlingError` with the original command and the error. This fires _in addition to_ the exception propagating — the store remains functional.
+
+Use it for centralized error logging:
+
+```ts title="stores/error-monitor.ts"
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
+
+_store.openStream((event) => {
+  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+    const { command, error } = event.data;
+    console.error(`Command "${command.name}" failed:`, error);
+    errorReportingService.capture(error, { command: command.name });
+  }
+});
+```
+
+This listener can live on any store — including a dedicated monitoring store — since `openStream` receives all events emitted by that store.
+
+## InvalidCommand
+
+When a command is queued but no handler is registered for its name, Commiq emits `BuiltinEvent.InvalidCommand`. This catches typos, missing registrations, and commands dispatched to the wrong store:
+
+```ts title="stores/diagnostics.ts"
+import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
+
+_store.openStream((event) => {
+  if (matchEvent(event, BuiltinEvent.InvalidCommand)) {
+    const { command } = event.data;
+    console.warn(`No handler registered for command "${command.name}"`);
+  }
+});
+```
+
+<Callout type="info">
+In production, invalid commands are typically programming errors. Log them as warnings during development and consider reporting them to your error tracking service.
+</Callout>
+
+## Retry pattern
+
+An event handler can re-queue a failed command. Track the attempt count in the command data to prevent infinite retries:
+
+```ts title="stores/sync.ts"
+const SyncEvent = {
+  Failed: createEvent<{ endpoint: string; attempt: number }>("sync:failed"),
+};
+
+_store.addCommandHandler<{ endpoint: string; attempt?: number }>(
+  "sync:push",
+  async (ctx, cmd) => {
+    const attempt = cmd.data.attempt ?? 1;
+
+    try {
+      await pushToServer(cmd.data.endpoint);
+      ctx.setState({ ...ctx.state, synced: true });
+    } catch (e) {
+      ctx.emit(SyncEvent.Failed, { endpoint: cmd.data.endpoint, attempt });
+    }
+  },
+);
+
+_store.addEventHandler(SyncEvent.Failed, (ctx, event) => {
+  if (event.data.attempt < 3) {
+    ctx.queue(
+      createCommand("sync:push", {
+        endpoint: event.data.endpoint,
+        attempt: event.data.attempt + 1,
+      }),
+    );
+  } else {
+    ctx.queue(createCommand("sync:set-error", "Sync failed after 3 attempts"));
+  }
+});
+```
+
+<Callout type="warn">
+Always cap retry attempts. An event handler that unconditionally re-queues a failing command creates an infinite loop. Use the attempt count or a maximum-retries constant to break the cycle.
+</Callout>
+
+The retry flow:
+
+<Steps>
+<Step>
+
+### Command fails
+
+The handler catches the error and emits `SyncEvent.Failed` with the current attempt number.
+
+</Step>
+<Step>
+
+### Event handler evaluates
+
+If the attempt count is below the limit, the event handler queues the same command with an incremented attempt.
+
+</Step>
+<Step>
+
+### Final failure
+
+After exhausting retries, the event handler queues a command that sets an error state for the UI to display.
+
+</Step>
+</Steps>
+
+## Surfacing errors to the UI
+
+Use `useEvent` to display transient error notifications — the store emits what happened, the component decides how to present it. See [event-driven side effects](/patterns/event-driven-side-effects) for the full pattern.
+
+```tsx title="pages/SyncPage.tsx"
+useEvent(syncStore, SyncEvent.Failed, (event) => {
+  if (event.data.attempt >= 3) {
+    showToast(`Sync to ${event.data.endpoint} failed permanently`, { type: "error" });
+  }
+});
+```
+
+## Centralized error monitoring
+
+For unexpected errors that slip through handler-level try-catch blocks, attach a `CommandHandlingError` listener that reports to your error tracking service. The `correlationId` on the command links the error to the full causality chain in devtools:
+
+```ts title="stores/setup.ts"
+import { BuiltinEvent } from "@naikidev/commiq";
+
+export function attachErrorMonitoring(store: SealedStore<unknown>) {
+  store.openStream((event) => {
+    if (event.id === BuiltinEvent.CommandHandlingError.id) {
+      const { command, error } = event.data as { command: Command; error: unknown };
+      errorReportingService.capture(error, {
+        command: command.name,
+        correlationId: command.correlationId,
+      });
+    }
+  });
+}
+```

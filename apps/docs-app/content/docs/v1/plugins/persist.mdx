@@ -1,0 +1,106 @@
+---
+title: Persistence
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# Persist API
+
+`@naikidev/commiq-persist` provides state persistence and rehydration for commiq stores. It subscribes to state changes, debounce-writes to storage, and hydrates on initialization via `replaceState`.
+
+## Installation
+
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @naikidev/commiq-persist
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @naikidev/commiq-persist
+    ```
+  </Tab>
+  <Tab value="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-persist
+    ```
+  </Tab>
+  <Tab value="Bun">
+    ```bash
+    bun add @naikidev/commiq-persist
+    ```
+  </Tab>
+</Tabs>
+
+## Basic Usage
+
+```ts
+import { createStore } from "@naikidev/commiq";
+import { persistStore } from "@naikidev/commiq-persist";
+
+const store = createStore({ count: 0 });
+
+const { destroy, hydrated } = persistStore(store, {
+  key: "app-state",
+});
+
+await hydrated; // state is now loaded from localStorage
+```
+
+## Async Storage
+
+Use any storage backend by providing a custom `StorageAdapter`:
+
+```ts
+const { destroy, hydrated } = persistStore(store, {
+  key: "app-state",
+  storage: {
+    getItem: async (key) => {
+      const res = await fetch(`/api/state/${key}`);
+      return res.ok ? await res.text() : null;
+    },
+    setItem: async (key, value) => {
+      await fetch(`/api/state/${key}`, { method: "PUT", body: value });
+    },
+  },
+});
+
+await hydrated;
+```
+
+## `persistStore(store, options)`
+
+Attaches persistence to a store. Returns a handle to destroy the subscription and a promise that resolves when hydration completes.
+
+### Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `key` | `string` | *required* | Storage key |
+| `storage` | `StorageAdapter` | `localStorage` | Storage backend |
+| `debounce` | `number` | `300` | Debounce delay in ms |
+| `serialize` | `(state: S) => string` | `JSON.stringify` | Custom serializer |
+| `deserialize` | `(raw: string) => S` | `JSON.parse` | Custom deserializer |
+
+### Return Value
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `destroy` | `() => void` | Closes the stream listener and cancels pending writes |
+| `hydrated` | `Promise<void>` | Resolves when initial hydration is complete |
+
+## `StorageAdapter`
+
+```ts
+type StorageAdapter = {
+  getItem(key: string): string | null | Promise<string | null>;
+  setItem(key: string, value: string): void | Promise<void>;
+};
+```
+
+Both sync and async implementations are supported. `localStorage` and `sessionStorage` conform to this interface natively.
+
+## Rehydration Loop Prevention
+
+When `persistStore` hydrates state, it internally skips writing back to storage. This prevents the hydration → stateChanged → write cycle. No configuration needed.

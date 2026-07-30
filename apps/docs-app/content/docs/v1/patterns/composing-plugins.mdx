@@ -1,0 +1,149 @@
+---
+title: Composing Plugins
+description: Initialize multiple plugins on a single store with correct ordering and cleanup.
+---
+
+import { Steps, Step } from 'fumadocs-ui/components/steps';
+
+Commiq plugins — devtools, effects, persist — each attach to a sealed store independently. As your application grows, a single store may use two or three plugins simultaneously. Getting the initialization order right and cleaning up correctly prevents subtle bugs.
+
+## Plugin initialization order
+
+All plugins consume a sealed store. The sequence is always:
+
+<Steps>
+<Step>
+
+### Create and configure the raw store
+
+Register context extensions first (if any), then command handlers and event handlers on the raw `StoreImpl`:
+
+```ts
+const _store = createStore<AppState>(initialState)
+  .useExtension(myExtension)       // extensions first
+  .addCommandHandler("app:load", /* ... */)
+  .addEventHandler(AppEvent.Loaded, /* ... */);
+```
+
+Context extensions must be registered before the first command is processed. See [context extensions](/plugins/context) for details.
+
+</Step>
+<Step>
+
+### Seal the store
+
+Create the read-only proxy that plugins will consume:
+
+```ts
+export const appStore = sealStore(_store);
+```
+
+</Step>
+<Step>
+
+### Attach plugins to the sealed store
+
+Each plugin receives the sealed store and subscribes to its event stream internally:
+
+```ts
+const devtools = createDevtools({ stores: [{ name: "app", store: appStore }] });
+const effects = createEffects(appStore);
+```
+
+</Step>
+</Steps>
+
+<Callout type="info">
+Plugins must be created _after_ `sealStore`. They depend on the sealed store's `openStream` and `queue` methods. Passing a raw `StoreImpl` directly will work at runtime but bypasses the sealed interface, which defeats the purpose of encapsulation.
+</Callout>
+
+## Devtools + Effects
+
+The most common combination. Devtools observes all events (including those triggered by effects), and effects react to events emitted by command handlers:
+
+```ts title="stores/search.ts"
+import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { createEffects } from "@naikidev/commiq-effects";
+import { searchStore, SearchEvent } from "./search";
+
+const devtools = createDevtools({
+  stores: [{ name: "search", store: searchStore }],
+});
+
+const effects = createEffects(searchStore);
+
+effects.on(
+  SearchEvent.Completed,
+  (data, ctx) => {
+    ctx.queue(createCommand("search:add-recent", data.query));
+  },
+  { debounce: 300 },
+);
+```
+
+Devtools captures every event in the timeline, including `search:add-recent` commands queued by the effect. This gives full visibility into the cause-and-effect chain. See [effects and cancellation](/patterns/effects-and-cancellation) for the full effects API.
+
+## Full composition example
+
+A store with devtools, effects, and OpenTelemetry:
+
+```ts title="stores/order.ts"
+import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { createEffects } from "@naikidev/commiq-effects";
+import { createOtelPlugin } from "@naikidev/commiq-otel";
+
+// ── Store (handlers registered, then sealed) ──
+
+export const orderStore = sealStore(_store);
+
+// ── Plugins ──
+
+const devtools = createDevtools({
+  stores: [{ name: "order", store: orderStore }],
+  maxEvents: 500,
+});
+
+const effects = createEffects(orderStore);
+effects.on(OrderEvent.Placed, async (data, ctx) => {
+  await sendConfirmationEmail(data.orderId);
+});
+
+const otel = createOtelPlugin(orderStore, {
+  serviceName: "order-service",
+});
+```
+
+Each plugin operates independently. They share the same event stream but do not interfere with each other.
+
+## Cleanup
+
+Destroy plugins in reverse initialization order. This matters in tests and during hot-module replacement:
+
+```ts
+// Teardown
+effects.destroy();  // Stop effects first — prevents new commands from being queued
+devtools.destroy();  // Then disconnect devtools
+```
+
+In tests, always clean up to prevent event listeners from leaking between test cases:
+
+```ts title="order.test.ts"
+let effects: Effects;
+
+beforeEach(() => {
+  effects = createEffects(orderStore);
+  // ... register effects
+});
+
+afterEach(() => {
+  effects.destroy();
+});
+```
+
+## Writing plugin-friendly stores
+
+Plugins work best when stores follow these conventions:
+
+**Keep the raw store private.** Export only the sealed store — see [store file structure](/patterns/store-file-structure). Register all handlers before calling `sealStore`.
+
+**Emit events for meaningful transitions.** Plugins like effects react to events. A handler that silently mutates state without emitting events is invisible to effects — only `BuiltinEvent.StateChanged` fires, which carries no domain semantics. Emit explicit events for transitions that other parts of the system need to observe.

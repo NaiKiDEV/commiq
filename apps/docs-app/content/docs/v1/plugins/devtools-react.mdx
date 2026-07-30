@@ -1,0 +1,170 @@
+---
+title: Devtools React
+---
+
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# Devtools React
+
+`@naikidev/commiq-devtools` provides an embedded devtools panel for your applications. Drop it into your app to inspect events, trace causality, view state, and monitor performance — no browser extension required.
+
+## Installation
+
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm add @naikidev/commiq-devtools
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @naikidev/commiq-devtools
+    ```
+  </Tab>
+  <Tab value="Yarn">
+    ```bash
+    yarn add @naikidev/commiq-devtools
+    ```
+  </Tab>
+  <Tab value="Bun">
+    ```bash
+    bun add @naikidev/commiq-devtools
+    ```
+  </Tab>
+</Tabs>
+
+Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
+
+## Basic Usage
+
+No provider required. Pass stores directly as props or mount imperatively.
+
+### As a Component
+
+```tsx
+import { CommiqDevtools } from "@naikidev/commiq-devtools";
+import { counterStore } from "./stores/counter";
+import { todoStore } from "./stores/todos";
+
+function App() {
+  return (
+    <>
+      <YourApp />
+      <CommiqDevtools
+        stores={{ counter: counterStore, todos: todoStore }}
+      />
+    </>
+  );
+}
+```
+
+### Without JSX
+
+Mount from anywhere — `main.ts`, a store file, or a plain script:
+
+```ts
+import { mountDevtools } from "@naikidev/commiq-devtools";
+import { counterStore } from "./stores/counter";
+import { todoStore } from "./stores/todos";
+
+const unmount = mountDevtools({
+  stores: { counter: counterStore, todos: todoStore },
+});
+
+// Later, to remove:
+unmount();
+```
+
+Both approaches render a floating button in the corner of the screen. Click it to open the devtools panel.
+
+## Props
+
+| Prop          | Type                                                           | Default          | Description                                                                 |
+| ------------- | -------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------- |
+| `stores`      | `Record<string, SealedStore<any>>`                             | (required)       | Stores to monitor, keyed by display name                                    |
+| `enabled`     | `boolean`                                                      | auto-detect      | `true` = always show, `false` = never show, `undefined` = hide in production |
+| `position`    | `"bottom-left" \| "bottom-right" \| "top-left" \| "top-right"` | `"bottom-right"` | Position of the floating trigger button                                     |
+| `initialOpen` | `boolean`                                                      | `false`          | Whether the panel starts open                                               |
+| `maxEvents`   | `number`                                                       | `500`            | Maximum events kept in the timeline ring buffer                             |
+| `panelHeight` | `number`                                                       | `360`            | Panel height in pixels                                                      |
+| `buttonStyle` | `CSSProperties`                                                | —                | Additional styles for the trigger button                                    |
+
+## Features
+
+### Events Tab
+
+Linear event log showing all store activity. Filter by store or toggle built-in events. Click any row to expand details including event data and state diffs.
+
+### Causality Graph
+
+Hierarchical tree view of command causality chains. See which commands triggered other commands and events, with expandable detail panels.
+
+### Timeline
+
+Visual SVG timeline with per-store swimlanes. Events appear as dots connected by causality links. Zoom with scroll, pan by dragging.
+
+### Performance
+
+Aggregated command metrics: total/average/min/max duration per command type, with visual bar charts. Sort by total time, average time, max time, or call count.
+
+### State
+
+Current state of each connected store displayed as a collapsible JSON tree.
+
+### Dependency Map
+
+Force-directed graph showing inter-store dependencies. Nodes represent stores, edges show command flows between them with call counts.
+
+## Production Gating
+
+By default, `CommiqDevtools` auto-detects the environment and renders nothing in production. Override this with the `enabled` prop:
+
+```tsx
+// Always show (e.g., staging environment)
+<CommiqDevtools stores={stores} enabled={true} />
+
+// Never show
+<CommiqDevtools stores={stores} enabled={false} />
+
+// Auto-detect (default) — hidden when NODE_ENV === "production"
+<CommiqDevtools stores={stores} />
+```
+
+## Custom Devtools UI
+
+Use the `useDevtoolsEngine` hook to build your own devtools interface:
+
+```tsx
+import { useDevtoolsEngine } from "@naikidev/commiq-devtools";
+
+function MyDevtools() {
+  const engine = useDevtoolsEngine({ counter: counterStore });
+
+  return (
+    <div>
+      <p>Events: {engine.eventCount}</p>
+      <ul>
+        {engine.timeline.map((entry) => (
+          <li key={entry.correlationId}>{entry.name}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+```
+
+The hook returns a `DevtoolsEngine` with:
+
+| Property          | Type                                          | Description                          |
+| ----------------- | --------------------------------------------- | ------------------------------------ |
+| `timeline`        | `TimelineEntry[]`                             | All collected events                 |
+| `getChain`        | `(correlationId: string) => TimelineEntry[]`  | Events linked by causality           |
+| `getStateHistory` | `(storeName: string) => StateSnapshot[]`      | State changes over time              |
+| `storeStates`     | `Record<string, unknown>`                     | Current state of each store          |
+| `storeNames`      | `string[]`                                    | Connected store names                |
+| `eventCount`      | `number`                                      | Total events collected               |
+| `clear`           | `() => void`                                  | Reset collection                     |
+
+## Export and Import
+
+The devtools panel includes export/import buttons. Export saves the current timeline as a JSON file. Import loads a previously exported timeline for offline inspection.

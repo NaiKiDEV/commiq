@@ -1,0 +1,160 @@
+---
+title: Commands & Events
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+# Commands & Events
+
+## `createCommand(name, data)`
+
+Creates a command object to be queued on a store.
+
+```ts
+import { createCommand } from "@naikidev/commiq";
+
+const cmd = createCommand("addTodo", { text: "Buy milk" });
+// { name: "addTodo", data: { text: "Buy milk" }, correlationId: "", causedBy: null }
+```
+
+Note: `correlationId` is assigned automatically when the command is queued via `store.queue()`. The empty string from `createCommand` is overwritten with a unique nanoid.
+
+Tip: wrap in factory functions for a clean API:
+
+```ts
+export const addTodo = (text: string) => createCommand("addTodo", text);
+export const toggleTodo = (id: number) => createCommand("toggleTodo", id);
+```
+
+## `createEvent<D>(name)`
+
+Creates an event definition. The returned object contains a unique `symbol` id — this ensures events are matched by identity, not string comparison.
+
+```ts
+import { createEvent } from "@naikidev/commiq";
+
+const userCreated = createEvent<{ name: string }>("userCreated");
+```
+
+Use it to emit from a handler:
+
+```ts
+store.addCommandHandler("createUser", (ctx, cmd) => {
+  ctx.setState({ user: cmd.data });
+  ctx.emit(userCreated, { name: cmd.data.name });
+});
+```
+
+And to listen:
+
+```ts
+store.addEventHandler(userCreated, (ctx, event) => {
+  ctx.queue(createCommand("sendEmail", { to: event.data.name }));
+});
+```
+
+## `handledEvent(commandName)`
+
+Creates an event definition matching the auto-notify naming convention (`<commandName>:handled`). Useful when subscribing to auto-notified command events.
+
+```ts
+import { handledEvent } from "@naikidev/commiq";
+
+const incHandled = handledEvent("increment");
+// { id: Symbol("increment:handled"), name: "increment:handled" }
+```
+
+To auto-notify, set `notify: true` on the handler:
+
+```ts
+store.addCommandHandler("increment", handler, { notify: true });
+```
+
+## `matchEvent(event, eventDef)`
+
+Type guard that narrows a `StoreEvent` to its specific data type based on the event definition's symbol identity.
+
+```ts
+import { matchEvent, BuiltinEvent } from "@naikidev/commiq";
+
+store.openStream((event) => {
+  if (matchEvent(event, BuiltinEvent.StateChanged)) {
+    // event.data is typed as { prev: S; next: S }
+    console.log(event.data.prev, "→", event.data.next);
+  }
+});
+```
+
+`openStream` listeners receive `StoreEvent` with `data: unknown`. Since TypeScript cannot narrow generic types through symbol identity checks, `matchEvent` provides the type-safe bridge:
+
+```ts
+// Without matchEvent — requires unsafe cast
+if (event.id === BuiltinEvent.CommandHandlingError.id) {
+  const { command, error } = event.data as { command: Command; error: unknown };
+}
+
+// With matchEvent — fully typed
+if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+  const { command, error } = event.data; // inferred
+}
+```
+
+Works with custom events too:
+
+```ts
+const OrderPlaced = createEvent<{ orderId: string }>("order:placed");
+
+store.openStream((event) => {
+  if (matchEvent(event, OrderPlaced)) {
+    console.log(event.data.orderId); // string
+  }
+});
+```
+
+<Callout type="info">
+Typed APIs like `addEventHandler`, `bus.on`, and `effects.on` already infer data types from the `EventDef` — use `matchEvent` only in raw `openStream` listeners.
+</Callout>
+
+## `sealStore(store)`
+
+Wraps a store in a read-only proxy that only exposes:
+
+- `state` — current state (getter)
+- `queue(command)` — dispatch a command
+- `flush()` — wait for all queued commands to complete
+- `openStream(listener)` / `closeStream(listener)` — subscribe to events
+
+```ts
+import { sealStore } from "@naikidev/commiq";
+
+const sealed = sealStore(store);
+sealed.state; // allowed
+sealed.queue(cmd); // allowed
+await sealed.flush(); // allowed
+sealed.addCommandHandler; // undefined (not exposed)
+```
+
+## `createEventBus()`
+
+Creates a bus that routes events between multiple stores.
+
+```ts
+import { createEventBus } from "@naikidev/commiq";
+
+const bus = createEventBus();
+bus.connect(storeA);
+bus.connect(storeB);
+
+bus.on(userCreated, (event) => {
+  storeB.queue(createCommand("greet", { name: event.data.name }));
+});
+
+// Later, disconnect:
+bus.disconnect(storeA);
+```
+
+| Method       | Description                             |
+| ------------ | --------------------------------------- |
+| `connect`    | Subscribe the bus to a store's stream   |
+| `disconnect` | Unsubscribe from a store's stream       |
+| `on`         | Register a handler for a specific event |

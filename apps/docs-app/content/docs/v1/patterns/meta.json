@@ -1,0 +1,22 @@
+{
+  "title": "Usage Patterns",
+  "pages": [
+    "index",
+    "store-file-structure",
+    "typed-command-factories",
+    "domain-hooks",
+    "async-loading-states",
+    "event-driven-side-effects",
+    "real-time-transports",
+    "testing",
+    "multi-store-coordination",
+    "effects-and-cancellation",
+    "error-handling",
+    "optimistic-updates",
+    "state-normalization",
+    "composing-plugins",
+    "command-validation",
+    "dependency-injection",
+    "deferred-cleanup"
+  ]
+}
