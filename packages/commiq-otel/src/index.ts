@@ -1,2 +1,11 @@
 export { instrumentStore } from "./instrument";
-export type { InstrumentOptions } from "./types";
+export { createTraceRegistry } from "./registry";
+export { defaultSanitizeError } from "./errors";
+export type {
+  ErrorSanitizer,
+  InstrumentOptions,
+  StoreInstrumentation,
+  TraceLink,
+  TraceRegistry,
+  TraceRegistryOptions,
+} from "./types";
