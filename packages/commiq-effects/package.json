@@ -1,11 +1,29 @@
 {
   "name": "@naikidev/commiq-effects",
-  "version": "1.1.0",
+  "version": "2.0.0",
+  "description": "Structured side effects for Commiq stores: event-triggered work with AbortSignal cancellation, restart, and debounce.",
+  "keywords": [
+    "commiq",
+    "effects",
+    "side-effects",
+    "cancellation",
+    "abortsignal",
+    "debounce",
+    "state-management"
+  ],
+  "license": "MIT",
+  "author": "Paulius Čepovič",
+  "homepage": "https://github.com/NaiKiDEV/commiq#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NaiKiDEV/commiq"
+    "url": "git+https://github.com/NaiKiDEV/commiq.git",
+    "directory": "packages/commiq-effects"
+  },
+  "bugs": {
+    "url": "https://github.com/NaiKiDEV/commiq/issues"
   },
   "type": "module",
+  "sideEffects": false,
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,12 +31,19 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
-    }
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "!src/__tests__"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -26,6 +51,7 @@
     "build": "vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "vite build --watch"
   },
   "peerDependencies": {

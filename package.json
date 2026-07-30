@@ -1,12 +1,16 @@
 {
   "name": "commiq-monorepo",
   "private": true,
-  "workspaces": [
-    "packages/*"
-  ],
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "pnpm -r typecheck",
+    "typecheck:root": "tsc --noEmit -p tsconfig.json",
     "dev": "pnpm -r dev",
     "example": "pnpm --filter @naikidev/commiq-example dev",
     "docs": "pnpm --filter @naikidev/docs start",
@@ -19,6 +23,12 @@
     "aspire:stop": "docker compose down",
     "version:bump": "node scripts/bump.mjs",
     "release": "pnpm -r publish --access public --no-git-checks"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@vitest/coverage-v8": "^3.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
