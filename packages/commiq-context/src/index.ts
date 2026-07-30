@@ -1,4 +1,3 @@
-export { extendStore } from "./extend-store";
 export { AssertionError, ContextCheckError, GuardError } from "./errors";
 export { withLogger } from "./extensions/logger";
 export { withMeta } from "./extensions/meta";
@@ -11,9 +10,6 @@ export { withAssert } from "./extensions/assert";
 export type {
   CheckOptions,
   CommandMeta,
-  ContextExtension,
-  ContextExtensionFactory,
-  ExtendedStore,
   ExtensionTarget,
   HistoryOptions,
   LogEntry,

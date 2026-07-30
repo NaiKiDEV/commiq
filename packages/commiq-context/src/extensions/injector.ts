@@ -1,4 +1,4 @@
-import type { ContextExtensionFactory } from "../types";
+import type { ContextExtensionDef } from "@naikidev/commiq";
 
 type InjectorExtProps<Deps extends Record<string, unknown>> = {
   deps: Deps;
@@ -7,16 +7,16 @@ type InjectorExtProps<Deps extends Record<string, unknown>> = {
 export function withInjector<S>() {
   return <Deps extends Record<string, unknown>>(
     deps: Deps,
-  ): ContextExtensionFactory<
+  ): ContextExtensionDef<
     S,
     InjectorExtProps<Deps>,
     InjectorExtProps<Deps>
   > => {
     const props: InjectorExtProps<Deps> = { deps };
 
-    return () => ({
+    return {
       command: () => props,
       event: () => props,
-    });
+    };
   };
 }

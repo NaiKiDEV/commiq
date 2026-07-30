@@ -12,16 +12,16 @@ pnpm add @naikidev/commiq-context
 
 ```ts
 import { createStore } from "@naikidev/commiq";
-import { extendStore, withPatch, withGuard, withInjector } from "@naikidev/commiq-context";
+import { withPatch, withGuard, withInjector } from "@naikidev/commiq-context";
 
 type State = { user: User | null; loading: boolean };
 
 const store = createStore<State>({ user: null, loading: false });
 
-const extended = extendStore(store)
-  .use(withPatch<State>())
-  .use(withGuard<State>())
-  .use(withInjector<State>()({ api: new ApiClient() }));
+const extended = store
+  .useExtension(withPatch<State>())
+  .useExtension(withGuard<State>())
+  .useExtension(withInjector<State>()({ api: new ApiClient() }));
 
 extended.addCommandHandler("user:load", async (ctx, cmd) => {
   ctx.guard(cmd.data.id !== "", "user ID required");
@@ -31,20 +31,11 @@ extended.addCommandHandler("user:load", async (ctx, cmd) => {
 });
 ```
 
-`extendStore(store)` returns a host that registers handlers on the real store while
-tracking which extension properties exist on **command** contexts and which exist on
-**event** contexts. Register handlers through the host (`extended.addCommandHandler`,
-`extended.addEventHandler`) so the extension properties are typed; `store.queue`,
-`store.flush` and `store.state` stay on the store itself.
-
-Extension state is created **per host**, so the same factory can be reused across
-stores without sharing buffers or pending callbacks:
-
-```ts
-const history = withHistory<State>();
-extendStore(storeA).use(history);
-extendStore(storeB).use(history);
-```
+`store.useExtension(ext)` returns the same store with its **command** and **event**
+context types widened separately, so chaining accumulates properties and
+`addCommandHandler` / `addEventHandler` see exactly the properties that apply to them.
+`store.queue`, `store.flush` and `store.state` are unchanged. Extensions must be
+registered before the first command is queued.
 
 ## Pre-built Extensions
 
@@ -57,7 +48,7 @@ extendStore(storeB).use(history);
 | `withInjector()(deps)` | `deps` | commands + events | Typed dependency injection via property access |
 | `withLogger(options?)` | `log(level, message)` | commands + events | Structured logging with configurable handler |
 | `withMeta()` | `meta` | commands + events | Command/event metadata (name, correlationId, causedBy, timestamp) |
-| `withHistory(options?)` | `history` | commands + events | Bounded log of state transitions |
+| `withHistory(target, options?)` | `history` | commands + events | Bounded log of state transitions |
 
 Command-only extensions are not typed on event handler contexts — using `ctx.patch` or
 `ctx.guard` inside `addEventHandler` is a compile error rather than a runtime `TypeError`.
@@ -81,46 +72,61 @@ Options: `maxEntries` (default `10`, minimum `1`). A command that never calls
 `setState` records nothing, so `previous` never degrades into a duplicate of
 `ctx.state`.
 
-## Cleanup
-
-The host satisfies core's `Disposable` contract:
+`withHistory` opens a stream on the store it observes, so it takes that store (or any
+`ExtensionTarget<S>` — anything exposing `state` and `openStream`, including a
+`SealedStore`) as its first argument. One call binds one target, which keeps buffers
+per store:
 
 ```ts
-const extended = extendStore(store).use(withHistory<State>()).use(withDefer<State>());
-extended.destroy();
+storeA.useExtension(withHistory<State>(storeA));
+storeB.useExtension(withHistory<State>(storeB));
 ```
 
-`destroy()` is idempotent. It unsubscribes internal stream listeners, releases
-retained state snapshots, drops pending deferred callbacks, and makes further
-`use()` calls throw. Handlers registered through the host stay registered — call
-`store.destroy()` to tear the store down as well.
+## Cleanup
+
+Every stateful extension implements core's `destroy?()` hook, which core runs on
+`store.destroy()` and on explicit detach:
+
+```ts
+const history = withHistory<State>(store);
+store.useExtension(history);
+
+store.removeExtension(history); // → true, runs history.destroy()
+```
+
+`removeExtension(ext)` detaches by identity and returns `false` when the extension was
+not registered. It unsubscribes `withHistory`'s stream listener and releases its
+retained state snapshots, and drops `withDefer`'s pending callbacks. Detaching removes
+the runtime hooks, so the properties stop appearing on new contexts — it cannot narrow
+the already-widened context types. `store.destroy()` detaches and destroys every
+registered extension.
 
 ## Custom Extensions
 
 ```ts
-import type { ContextExtensionFactory } from "@naikidev/commiq-context";
+import type { ContextExtensionDef } from "@naikidev/commiq";
 
-const withTimestamp = <S>(): ContextExtensionFactory<S, { now: () => number }> => () => ({
+const withTimestamp = <S>(): ContextExtensionDef<S, { now: () => number }> => ({
   command: () => ({ now: () => Date.now() }),
 });
 ```
 
-The factory receives the store, so per-store state belongs inside it:
+Declare only `command` for a command-only extension, only `event` for an event-only one
+(`ContextExtensionDef<S, {}, TEvent>`), or both when the property belongs on each.
+`afterCommand` / `afterEvent` hooks run after the corresponding handler; errors thrown
+from them are reported on the store's error channel as `contextExtension`. Anything that
+retains state or subscriptions should expose `destroy?()` and take its target
+explicitly, so one call yields one store's worth of state:
 
 ```ts
-const withCounter = <S>(): ContextExtensionFactory<S, { count: () => number }> => () => {
+const withCounter = <S>(): ContextExtensionDef<S, { count: () => number }> => {
   let calls = 0;
   return {
-    command: () => ({ count: () => ++calls }),
+    command: () => ({ count: () => (calls += 1) }),
     destroy: () => { calls = 0; },
   };
 };
 ```
-
-Declare only `command` for a command-only extension, only `event` for an event-only
-one, or both when the property belongs on each. `afterCommand` / `afterEvent` hooks run
-after the corresponding handler; errors thrown from them are reported on the store's
-error channel as `contextExtension`.
 
 ## Documentation
 

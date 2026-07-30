@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createStore, createCommand, createEvent } from "@naikidev/commiq";
-import { extendStore, withLogger, withMeta, withHistory } from "../index";
-import type { LogEntry } from "../index";
+import { withLogger, withMeta, withHistory } from "../index";
+import type { LogEntry, StateHistory } from "../index";
 
 type State = { count: number };
 
@@ -10,8 +10,8 @@ describe("withLogger", () => {
     const entries: LogEntry[] = [];
 
     const store = createStore<State>({ count: 0 });
-    extendStore(store)
-      .use(withLogger<State>({ onLog: (entry) => entries.push(entry) }))
+    store
+      .useExtension(withLogger<State>({ onLog: (entry) => entries.push(entry) }))
       .addCommandHandler("test", (ctx) => {
         ctx.log("info", "handling test command");
         ctx.log("debug", "some detail");
@@ -33,7 +33,7 @@ describe("withLogger", () => {
     const entries: LogEntry[] = [];
 
     const store = createStore<State>({ count: 0 });
-    const extended = extendStore(store).use(
+    const extended = store.useExtension(
       withLogger<State>({ onLog: (entry) => entries.push(entry) }),
     );
 
@@ -53,8 +53,8 @@ describe("withLogger", () => {
 
   it("works without onLog handler", async () => {
     const store = createStore<State>({ count: 0 });
-    extendStore(store)
-      .use(withLogger<State>())
+    store
+      .useExtension(withLogger<State>())
       .addCommandHandler("test", (ctx) => {
         ctx.log("info", "no handler");
       });
@@ -71,14 +71,12 @@ describe("withMeta", () => {
     const metas: { commandName: string; correlationId: string }[] = [];
 
     const store = createStore<State>({ count: 0 });
-    extendStore(store)
-      .use(withMeta<State>())
-      .addCommandHandler("increment", (ctx) => {
-        metas.push({
-          commandName: ctx.meta.commandName,
-          correlationId: ctx.meta.correlationId,
-        });
+    store.useExtension(withMeta<State>()).addCommandHandler("increment", (ctx) => {
+      metas.push({
+        commandName: ctx.meta.commandName,
+        correlationId: ctx.meta.correlationId,
       });
+    });
 
     store.queue(createCommand("increment", undefined));
     await store.flush();
@@ -93,7 +91,7 @@ describe("withMeta", () => {
     const metas: { commandName: string }[] = [];
 
     const store = createStore<State>({ count: 0 });
-    const extended = extendStore(store).use(withMeta<State>());
+    const extended = store.useExtension(withMeta<State>());
 
     extended.addCommandHandler("fire", (ctx) => {
       ctx.emit(TestEvent, undefined);
@@ -115,15 +113,13 @@ describe("withHistory", () => {
     const snapshots: { previous: State | undefined; length: number }[] = [];
 
     const store = createStore<State>({ count: 0 });
-    extendStore(store)
-      .use(withHistory<State>())
-      .addCommandHandler("inc", (ctx) => {
-        snapshots.push({
-          previous: ctx.history.previous,
-          length: ctx.history.entries.length,
-        });
-        ctx.setState({ count: ctx.state.count + 1 });
+    store.useExtension(withHistory<State>(store)).addCommandHandler("inc", (ctx) => {
+      snapshots.push({
+        previous: ctx.history.previous,
+        length: ctx.history.entries.length,
       });
+      ctx.setState({ count: ctx.state.count + 1 });
+    });
 
     store.queue(createCommand("inc", undefined));
     store.queue(createCommand("inc", undefined));
@@ -144,8 +140,8 @@ describe("withHistory", () => {
     const lengths: number[] = [];
 
     const store = createStore<State>({ count: 0 });
-    extendStore(store)
-      .use(withHistory<State>({ maxEntries: 2 }))
+    store
+      .useExtension(withHistory<State>(store, { maxEntries: 2 }))
       .addCommandHandler("inc", (ctx) => {
         lengths.push(ctx.history.entries.length);
         ctx.setState({ count: ctx.state.count + 1 });
@@ -164,7 +160,7 @@ describe("withHistory", () => {
     const snapshots: { previous: State | undefined; length: number }[] = [];
 
     const store = createStore<State>({ count: 0 });
-    const extended = extendStore(store).use(withHistory<State>());
+    const extended = store.useExtension(withHistory<State>(store));
 
     extended.addCommandHandler("inc", (ctx) => {
       ctx.setState({ count: ctx.state.count + 1 });
@@ -194,7 +190,7 @@ describe("withHistory", () => {
     const lengths: number[] = [];
 
     const store = createStore<State>({ count: 0 });
-    const extended = extendStore(store).use(withHistory<State>());
+    const extended = store.useExtension(withHistory<State>(store));
 
     extended.addCommandHandler("fire", (ctx) => {
       ctx.emit(TestEvent, undefined);
@@ -215,8 +211,7 @@ describe("withHistory", () => {
     const store = createStore<State>({ count: 0 });
     let observed: ReadonlyArray<State> = [];
 
-    const extended = extendStore(store).use(withHistory<State>());
-    extended.addCommandHandler("bump", (ctx) => {
+    store.useExtension(withHistory<State>(store)).addCommandHandler("bump", (ctx) => {
       ctx.setState({ count: 1 });
       ctx.setState({ count: 2 });
       ctx.setState({ count: 3 });
@@ -238,8 +233,7 @@ describe("withHistory", () => {
     const store = createStore<State>({ count: 0 });
     const seen: (State | undefined)[] = [];
 
-    const extended = extendStore(store).use(withHistory<State>());
-    extended.addCommandHandler("bump", (ctx) => {
+    store.useExtension(withHistory<State>(store)).addCommandHandler("bump", (ctx) => {
       seen.push(ctx.history.previous);
       ctx.setState({ count: 1 });
       seen.push(ctx.history.previous);
@@ -256,7 +250,7 @@ describe("withHistory", () => {
     const store = createStore<State>({ count: 0 });
     const results: { length: number; previous: State | undefined }[] = [];
 
-    const extended = extendStore(store).use(withHistory<State>());
+    const extended = store.useExtension(withHistory<State>(store));
     extended.addCommandHandler("inc", (ctx) => {
       ctx.setState({ count: ctx.state.count + 1 });
     });
@@ -276,15 +270,14 @@ describe("withHistory", () => {
     expect(results).toEqual([{ length: 1, previous: undefined }]);
   });
 
-  it("keeps history per store when one factory is shared", async () => {
-    const factory = withHistory<State>({ maxEntries: 5 });
+  it("keeps history per store because each extension is bound to its target", async () => {
     const storeA = createStore<State>({ count: 0 });
     const storeB = createStore<State>({ count: 100 });
     const lengths: number[] = [];
 
     const register = (store: typeof storeA) => {
-      extendStore(store)
-        .use(factory)
+      store
+        .useExtension(withHistory<State>(store, { maxEntries: 5 }))
         .addCommandHandler("inc", (ctx) => {
           ctx.setState({ count: ctx.state.count + 1 });
           lengths.push(ctx.history.entries.length);
@@ -306,26 +299,48 @@ describe("withHistory", () => {
     expect(storeB.state.count).toBe(101);
   });
 
-  it("releases retained snapshots and stops recording after destroy", async () => {
+  it("releases snapshots and the stream subscription on removeExtension", async () => {
     const store = createStore<State>({ count: 0 });
-    const extended = extendStore(store).use(withHistory<State>());
-    const lengths: number[] = [];
+    const history = withHistory<State>(store);
+    const captured: StateHistory<State>[] = [];
 
-    extended.addCommandHandler("inc", (ctx) => {
+    store.useExtension(history).addCommandHandler("inc", (ctx) => {
       ctx.setState({ count: ctx.state.count + 1 });
-      lengths.push(ctx.history.entries.length);
+      captured.push(ctx.history);
+    });
+    store.addCommandHandler("bump", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
     });
 
     store.queue(createCommand("inc", undefined));
     await store.flush();
-    expect(lengths).toEqual([2]);
+    expect(captured[0].entries).toHaveLength(2);
 
-    extended.destroy();
+    expect(store.removeExtension(history)).toBe(true);
+    expect(store.removeExtension(history)).toBe(false);
+
+    store.queue(createCommand("bump", undefined));
+    await store.flush();
+
+    expect(captured[0].entries).toEqual([]);
+    expect(store.state.count).toBe(2);
+  });
+
+  it("releases snapshots and the stream subscription on store destroy", async () => {
+    const store = createStore<State>({ count: 0 });
+    const captured: StateHistory<State>[] = [];
+
+    store.useExtension(withHistory<State>(store)).addCommandHandler("inc", (ctx) => {
+      ctx.setState({ count: ctx.state.count + 1 });
+      captured.push(ctx.history);
+    });
 
     store.queue(createCommand("inc", undefined));
     await store.flush();
+    expect(captured[0].entries).toHaveLength(2);
 
-    expect(lengths).toEqual([2, 0]);
-    expect(store.state.count).toBe(2);
+    store.destroy();
+
+    expect(captured[0].entries).toEqual([]);
   });
 });

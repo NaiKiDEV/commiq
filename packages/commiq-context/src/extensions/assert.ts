@@ -1,5 +1,6 @@
+import type { ContextExtensionDef } from "@naikidev/commiq";
 import { AssertionError } from "../errors";
-import type { CheckOptions, ContextExtensionFactory } from "../types";
+import type { CheckOptions } from "../types";
 import { createCheck } from "./check";
 import type { CheckFn } from "./check";
 
@@ -9,10 +10,10 @@ type AssertExtProps = {
 
 export function withAssert<S>(
   options?: CheckOptions,
-): ContextExtensionFactory<S, AssertExtProps, AssertExtProps> {
+): ContextExtensionDef<S, AssertExtProps, AssertExtProps> {
   const props: AssertExtProps = {
     assert: createCheck(options, (message) => new AssertionError(message)),
   };
 
-  return () => ({ command: () => props, event: () => props });
+  return { command: () => props, event: () => props };
 }

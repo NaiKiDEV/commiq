@@ -1,4 +1,4 @@
-import type { ContextExtensionFactory } from "../types";
+import type { ContextExtensionDef } from "@naikidev/commiq";
 
 type DeferredFn = () => void | Promise<void>;
 
@@ -6,8 +6,13 @@ type DeferExtProps = {
   defer: (fn: DeferredFn) => void;
 };
 
-async function drain(queue: DeferredFn[]): Promise<void> {
-  const callbacks = queue.splice(0);
+type DeferPhase = {
+  open: () => DeferExtProps;
+  close: () => Promise<void>;
+  reset: () => void;
+};
+
+async function drain(callbacks: ReadonlyArray<DeferredFn>): Promise<void> {
   const errors: unknown[] = [];
 
   for (const callback of callbacks) {
@@ -21,36 +26,46 @@ async function drain(queue: DeferredFn[]): Promise<void> {
   if (errors.length > 0) throw errors[0];
 }
 
-export function withDefer<S>(): ContextExtensionFactory<
+function createPhase(isDisposed: () => boolean): DeferPhase {
+  const open: DeferredFn[][] = [];
+
+  return {
+    open: () => {
+      const callbacks: DeferredFn[] = [];
+      open.push(callbacks);
+      return {
+        defer: (fn: DeferredFn) => {
+          if (isDisposed()) return;
+          callbacks.push(fn);
+        },
+      };
+    },
+    close: () => drain(open.pop() ?? []),
+    reset: () => {
+      open.length = 0;
+    },
+  };
+}
+
+export function withDefer<S>(): ContextExtensionDef<
   S,
   DeferExtProps,
   DeferExtProps
 > {
-  return () => {
-    const commandCallbacks: DeferredFn[] = [];
-    const eventCallbacks: DeferredFn[] = [];
-    let isDisposed = false;
+  let isDisposed = false;
+  const checkDisposed = () => isDisposed;
+  const commands = createPhase(checkDisposed);
+  const events = createPhase(checkDisposed);
 
-    const collector = (queue: DeferredFn[]): DeferExtProps => ({
-      defer: (fn: DeferredFn) => {
-        if (isDisposed) return;
-        queue.push(fn);
-      },
-    });
-
-    const commandProps = collector(commandCallbacks);
-    const eventProps = collector(eventCallbacks);
-
-    return {
-      command: () => commandProps,
-      event: () => eventProps,
-      afterCommand: () => drain(commandCallbacks),
-      afterEvent: () => drain(eventCallbacks),
-      destroy: () => {
-        isDisposed = true;
-        commandCallbacks.length = 0;
-        eventCallbacks.length = 0;
-      },
-    };
+  return {
+    command: () => commands.open(),
+    event: () => events.open(),
+    afterCommand: () => commands.close(),
+    afterEvent: () => events.close(),
+    destroy: () => {
+      isDisposed = true;
+      commands.reset();
+      events.reset();
+    },
   };
 }

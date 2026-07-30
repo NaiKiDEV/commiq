@@ -11,7 +11,6 @@ import {
   AssertionError,
   ContextCheckError,
   GuardError,
-  extendStore,
   withPatch,
   withDefer,
   withInjector,
@@ -28,11 +27,9 @@ describe("withPatch", () => {
       count: 0,
       active: false,
     });
-    extendStore(store)
-      .use(withPatch<State>())
-      .addCommandHandler("activate", (ctx) => {
-        ctx.patch({ active: true, count: ctx.state.count + 1 });
-      });
+    store.useExtension(withPatch<State>()).addCommandHandler("activate", (ctx) => {
+      ctx.patch({ active: true, count: ctx.state.count + 1 });
+    });
 
     store.queue(createCommand("activate", undefined));
     await store.flush();
@@ -46,8 +43,8 @@ describe("withPatch", () => {
       count: 5,
       active: true,
     });
-    extendStore(store)
-      .use(withPatch<State>())
+    store
+      .useExtension(withPatch<State>())
       .addCommandHandler<string>("rename", (ctx, cmd) => {
         ctx.patch({ name: cmd.data });
       });
@@ -70,8 +67,8 @@ describe("withPatch", () => {
       active: false,
     });
 
-    extendStore(store)
-      .use(withPatch<State>())
+    store
+      .useExtension(withPatch<State>())
       // @ts-expect-error patch is command-only and must not be typed on event contexts
       .addEventHandler(TestEvent, (ctx) => ctx.patch({ active: true }));
 
@@ -86,18 +83,16 @@ describe("withDefer", () => {
     const order: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    extendStore(store)
-      .use(withDefer<State>())
-      .addCommandHandler("work", (ctx) => {
-        ctx.defer(() => {
-          order.push("deferred-1");
-        });
-        ctx.defer(() => {
-          order.push("deferred-2");
-        });
-        order.push("handler");
-        ctx.setState({ value: 1 });
+    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+      ctx.defer(() => {
+        order.push("deferred-1");
       });
+      ctx.defer(() => {
+        order.push("deferred-2");
+      });
+      order.push("handler");
+      ctx.setState({ value: 1 });
+    });
 
     store.queue(createCommand("work", undefined));
     await store.flush();
@@ -110,12 +105,10 @@ describe("withDefer", () => {
     const cleanedUp = vi.fn();
 
     const store = createStore<State>({ value: 0 }, { onError: () => {} });
-    extendStore(store)
-      .use(withDefer<State>())
-      .addCommandHandler("fail", (ctx) => {
-        ctx.defer(cleanedUp);
-        throw new Error("handler error");
-      });
+    store.useExtension(withDefer<State>()).addCommandHandler("fail", (ctx) => {
+      ctx.defer(cleanedUp);
+      throw new Error("handler error");
+    });
 
     store.queue(createCommand("fail", undefined));
     await store.flush();
@@ -130,14 +123,12 @@ describe("withDefer", () => {
       { value: 0 },
       { onError: (report) => reports.push(report) },
     );
-    extendStore(store)
-      .use(withDefer<State>())
-      .addCommandHandler("work", (ctx) => {
-        ctx.defer(() => {
-          throw new Error("deferred error");
-        });
-        ctx.setState({ value: 42 });
+    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+      ctx.defer(() => {
+        throw new Error("deferred error");
       });
+      ctx.setState({ value: 42 });
+    });
 
     store.queue(createCommand("work", undefined));
     await store.flush();
@@ -148,19 +139,44 @@ describe("withDefer", () => {
     expect((reports[0].error as Error).message).toBe("deferred error");
   });
 
+  it("reports deferred event callback errors through the error channel", async () => {
+    const TestEvent = createEvent("deferredEvent");
+    const reports: StoreErrorReport[] = [];
+
+    const store = createStore<State>(
+      { value: 0 },
+      { onError: (report) => reports.push(report) },
+    );
+    const extended = store.useExtension(withDefer<State>());
+
+    extended.addCommandHandler("fire", (ctx) => {
+      ctx.emit(TestEvent, undefined);
+    });
+    extended.addEventHandler(TestEvent, (ctx) => {
+      ctx.defer(() => {
+        throw new Error("deferred event error");
+      });
+    });
+
+    store.queue(createCommand("fire", undefined));
+    await store.flush();
+
+    expect(reports).toHaveLength(1);
+    expect(reports[0].source).toBe("contextExtension");
+    expect((reports[0].error as Error).message).toBe("deferred event error");
+  });
+
   it("supports async deferred callbacks", async () => {
     const results: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    extendStore(store)
-      .use(withDefer<State>())
-      .addCommandHandler("work", (ctx) => {
-        ctx.defer(async () => {
-          await Promise.resolve();
-          results.push("async-cleanup");
-        });
-        results.push("handler");
+    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+      ctx.defer(async () => {
+        await Promise.resolve();
+        results.push("async-cleanup");
       });
+      results.push("handler");
+    });
 
     store.queue(createCommand("work", undefined));
     await store.flush();
@@ -172,7 +188,7 @@ describe("withDefer", () => {
     const calls: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    const extended = extendStore(store).use(withDefer<State>());
+    const extended = store.useExtension(withDefer<State>());
 
     extended.addCommandHandler("first", (ctx) => {
       ctx.defer(() => {
@@ -190,29 +206,25 @@ describe("withDefer", () => {
     expect(calls).toEqual(["first-defer", "second-handler"]);
   });
 
-  it("keeps deferred callbacks per store when one factory is shared", async () => {
-    const factory = withDefer<State>();
+  it("keeps deferred callbacks per store when one extension is shared", async () => {
+    const shared = withDefer<State>();
     const calls: string[] = [];
 
     const storeA = createStore<State>({ value: 0 });
     const storeB = createStore<State>({ value: 0 });
 
-    extendStore(storeA)
-      .use(factory)
-      .addCommandHandler("hold", (ctx) => {
-        ctx.defer(() => {
-          calls.push("a-defer");
-        });
-        return new Promise<void>((resolve) => {
-          setTimeout(resolve, 5);
-        });
+    storeA.useExtension(shared).addCommandHandler("hold", (ctx) => {
+      ctx.defer(() => {
+        calls.push("a-defer");
       });
+      return new Promise<void>((resolve) => {
+        setTimeout(resolve, 5);
+      });
+    });
 
-    extendStore(storeB)
-      .use(factory)
-      .addCommandHandler("quick", () => {
-        calls.push("b-handler");
-      });
+    storeB.useExtension(shared).addCommandHandler("quick", () => {
+      calls.push("b-handler");
+    });
 
     const pending = storeA.queue(createCommand("hold", undefined));
     storeB.queue(createCommand("quick", undefined));
@@ -226,17 +238,17 @@ describe("withDefer", () => {
     expect(calls).toEqual(["b-handler", "a-defer"]);
   });
 
-  it("drops pending callbacks after destroy", async () => {
+  it("drops pending callbacks when the extension is removed", async () => {
     const deferred = vi.fn();
 
     const store = createStore<State>({ value: 0 });
-    const extended = extendStore(store).use(withDefer<State>());
+    const defer = withDefer<State>();
 
-    extended.addCommandHandler("work", (ctx) => {
+    store.useExtension(defer).addCommandHandler("work", async (ctx) => {
       ctx.defer(deferred);
+      expect(store.removeExtension(defer)).toBe(true);
+      await Promise.resolve();
     });
-
-    extended.destroy();
 
     store.queue(createCommand("work", undefined));
     await store.flush();
@@ -254,8 +266,8 @@ describe("withInjector", () => {
     };
 
     const store = createStore<State>({ data: "" });
-    extendStore(store)
-      .use(
+    store
+      .useExtension(
         withInjector<State>()({
           api: apiClient,
           baseUrl: "https://example.com",
@@ -277,7 +289,7 @@ describe("withInjector", () => {
     const results: string[] = [];
 
     const store = createStore<State>({ data: "" });
-    const extended = extendStore(store).use(
+    const extended = store.useExtension(
       withInjector<State>()({ label: "injected" }),
     );
 
@@ -299,8 +311,8 @@ describe("withInjector", () => {
 
     const createTestStore = (api: { fetch: () => string }) => {
       const store = createStore<State>({ data: "" });
-      extendStore(store)
-        .use(withInjector<State>()({ api }))
+      store
+        .useExtension(withInjector<State>()({ api }))
         .addCommandHandler("load", (ctx) => {
           ctx.setState({ data: ctx.deps.api.fetch() });
         });
@@ -320,12 +332,10 @@ describe("withGuard", () => {
 
   it("allows handler to continue when condition is true", async () => {
     const store = createStore<State>({ items: ["a"] });
-    extendStore(store)
-      .use(withGuard<State>())
-      .addCommandHandler("process", (ctx) => {
-        ctx.guard(ctx.state.items.length > 0, "items must not be empty");
-        ctx.setState({ items: [...ctx.state.items, "processed"] });
-      });
+    store.useExtension(withGuard<State>()).addCommandHandler("process", (ctx) => {
+      ctx.guard(ctx.state.items.length > 0, "items must not be empty");
+      ctx.setState({ items: [...ctx.state.items, "processed"] });
+    });
 
     store.queue(createCommand("process", undefined));
     await store.flush();
@@ -337,12 +347,10 @@ describe("withGuard", () => {
     const errors: { error: unknown }[] = [];
 
     const store = createStore<State>({ items: [] }, { onError: () => {} });
-    extendStore(store)
-      .use(withGuard<State>())
-      .addCommandHandler("process", (ctx) => {
-        ctx.guard(ctx.state.items.length > 0, "items must not be empty");
-        ctx.setState({ items: ["should not reach"] });
-      });
+    store.useExtension(withGuard<State>()).addCommandHandler("process", (ctx) => {
+      ctx.guard(ctx.state.items.length > 0, "items must not be empty");
+      ctx.setState({ items: ["should not reach"] });
+    });
 
     store.openStream((event) => {
       if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
@@ -369,12 +377,10 @@ describe("withGuard", () => {
       email: "test@test.com",
       age: 20,
     });
-    extendStore(store)
-      .use(withGuard<FormState>())
-      .addCommandHandler("submit", (ctx) => {
-        ctx.guard(ctx.state.email.includes("@"), "invalid email");
-        ctx.guard(ctx.state.age >= 18, "must be 18 or older");
-      });
+    store.useExtension(withGuard<FormState>()).addCommandHandler("submit", (ctx) => {
+      ctx.guard(ctx.state.email.includes("@"), "invalid email");
+      ctx.guard(ctx.state.age >= 18, "must be 18 or older");
+    });
 
     store.queue(createCommand("submit", undefined));
     await store.flush();
@@ -382,8 +388,8 @@ describe("withGuard", () => {
 
   it("becomes a no-op when disabled", async () => {
     const store = createStore<State>({ items: [] });
-    extendStore(store)
-      .use(withGuard<State>({ enabled: false }))
+    store
+      .useExtension(withGuard<State>({ enabled: false }))
       .addCommandHandler("process", (ctx) => {
         ctx.guard(false, "never thrown");
         ctx.setState({ items: ["reached"] });
@@ -399,8 +405,8 @@ describe("withGuard", () => {
     const TestEvent = createEvent("guardAttempt");
     const store = createStore<State>({ items: [] });
 
-    extendStore(store)
-      .use(withGuard<State>())
+    store
+      .useExtension(withGuard<State>())
       // @ts-expect-error guard is command-only and must not be typed on event contexts
       .addEventHandler(TestEvent, (ctx) => ctx.guard(true, "unreachable"));
 
@@ -418,14 +424,9 @@ describe("withAssert", () => {
       { items: undefined },
       { onError: () => {} },
     );
-    extendStore(store)
-      .use(withAssert<State>())
-      .addCommandHandler("check", (ctx) => {
-        ctx.assert(
-          ctx.state.items !== undefined,
-          "items should be initialized",
-        );
-      });
+    store.useExtension(withAssert<State>()).addCommandHandler("check", (ctx) => {
+      ctx.assert(ctx.state.items !== undefined, "items should be initialized");
+    });
 
     store.openStream((event) => {
       if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
@@ -447,11 +448,9 @@ describe("withAssert", () => {
 
   it("passes through when assertion is true", async () => {
     const store = createStore<State>({ items: ["a"] });
-    extendStore(store)
-      .use(withAssert<State>())
-      .addCommandHandler("check", (ctx) => {
-        ctx.assert(ctx.state.items !== undefined, "items should exist");
-      });
+    store.useExtension(withAssert<State>()).addCommandHandler("check", (ctx) => {
+      ctx.assert(ctx.state.items !== undefined, "items should exist");
+    });
 
     store.queue(createCommand("check", undefined));
     await store.flush();
@@ -459,8 +458,8 @@ describe("withAssert", () => {
 
   it("becomes no-op when disabled", async () => {
     const store = createStore<State>({ items: undefined });
-    extendStore(store)
-      .use(withAssert<State>({ enabled: false }))
+    store
+      .useExtension(withAssert<State>({ enabled: false }))
       .addCommandHandler("check", (ctx) => {
         ctx.assert(false, "this should not throw");
         ctx.setState({ items: ["ok"] });
@@ -480,7 +479,7 @@ describe("withAssert", () => {
       { items: undefined },
       { onError: () => {} },
     );
-    const extended = extendStore(store).use(withAssert<State>());
+    const extended = store.useExtension(withAssert<State>());
 
     extended.addCommandHandler("fire", (ctx) => {
       ctx.emit(TestEvent, undefined);
@@ -506,5 +505,35 @@ describe("withAssert", () => {
     expect((errors[0].error as Error).message).toBe(
       "Assertion failed: items missing in event handler",
     );
+  });
+});
+
+describe("extension composition", () => {
+  type State = { count: number; label: string };
+
+  it("accumulates command and event context types across chained extensions", async () => {
+    const TestEvent = createEvent("composed");
+    const seen: string[] = [];
+
+    const store = createStore<State>({ count: 0, label: "" });
+    const extended = store
+      .useExtension(withPatch<State>())
+      .useExtension(withGuard<State>())
+      .useExtension(withInjector<State>()({ label: "composed" }));
+
+    extended.addCommandHandler("run", (ctx) => {
+      ctx.guard(ctx.state.count === 0, "count must start at zero");
+      ctx.patch({ count: 1, label: ctx.deps.label });
+      ctx.emit(TestEvent, undefined);
+    });
+    extended.addEventHandler(TestEvent, (ctx) => {
+      seen.push(ctx.deps.label);
+    });
+
+    store.queue(createCommand("run", undefined));
+    await store.flush();
+
+    expect(store.state).toEqual({ count: 1, label: "composed" });
+    expect(seen).toEqual(["composed"]);
   });
 });

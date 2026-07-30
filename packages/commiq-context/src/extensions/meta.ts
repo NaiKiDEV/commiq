@@ -1,15 +1,16 @@
-import type { CommandMeta, ContextExtensionFactory } from "../types";
+import type { ContextExtensionDef } from "@naikidev/commiq";
+import type { CommandMeta } from "../types";
 
 type MetaExtProps = {
   meta: CommandMeta;
 };
 
-export function withMeta<S>(): ContextExtensionFactory<
+export function withMeta<S>(): ContextExtensionDef<
   S,
   MetaExtProps,
   MetaExtProps
 > {
-  return () => ({
+  return {
     command: (_ctx, command) => ({
       meta: {
         commandName: command.name,
@@ -26,5 +27,5 @@ export function withMeta<S>(): ContextExtensionFactory<
         timestamp: event.timestamp,
       },
     }),
-  });
+  };
 }
