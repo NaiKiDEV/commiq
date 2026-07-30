@@ -1,2 +1,12 @@
 export { createEffects } from "./effects";
-export type { Effects, EffectContext, EffectHandler, EffectOptions } from "./types";
+export type {
+  EffectConcurrencyMode,
+  EffectContext,
+  EffectErrorReport,
+  EffectErrorReporter,
+  EffectErrorSource,
+  EffectHandler,
+  EffectOptions,
+  Effects,
+  EffectsOptions,
+} from "./types";
