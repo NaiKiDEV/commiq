@@ -67,26 +67,93 @@ describe("persistStore", () => {
       persisted.destroy();
     });
 
-    it("reports a hydration race when state changes before an async read resolves", async () => {
-      const reports: PersistErrorReport[] = [];
-      let release: (value: string | null) => void = () => {};
+    it("runs a command queued during async hydration against the hydrated state", async () => {
+      let releaseRead: (value: string | null) => void = () => {};
       const storage: StorageAdapter = {
         getItem: () =>
           new Promise<string | null>((resolve) => {
-            release = resolve;
+            releaseRead = resolve;
           }),
         setItem: () => {},
       };
       const store = setup();
+
+      const persisted = persistStore(store, { key: "test", storage });
+      const handle = store.queue(createCommand("increment", 7));
+
+      expect(store.isSuspended).toBe(true);
+      expect(store.state).toEqual({ count: 0 });
+
+      releaseRead(stored({ count: 100 }));
+      await persisted.hydrated;
+      await store.flush();
+
+      expect(store.state).toEqual({ count: 107 });
+      expect((await handle).status).toBe("handled");
+      persisted.destroy();
+    });
+
+    it("preserves command order across the hydration gate", async () => {
+      const order: number[] = [];
+      let releaseRead: (value: string | null) => void = () => {};
+      const storage: StorageAdapter = {
+        getItem: () =>
+          new Promise<string | null>((resolve) => {
+            releaseRead = resolve;
+          }),
+        setItem: () => {},
+      };
+      const store = createStore<TestState>({ count: 0 }, { onError: () => {} });
+      store.addCommandHandler<number>("push", (ctx, cmd) => {
+        order.push(cmd.data);
+        ctx.setState({ count: ctx.state.count * 10 + cmd.data });
+      });
+
+      const persisted = persistStore(store, { key: "test", storage });
+      store.queue(createCommand("push", 1));
+      store.queue(createCommand("push", 2));
+      store.queue(createCommand("push", 3));
+
+      expect(order).toEqual([]);
+      releaseRead(stored({ count: 5 }));
+      await persisted.hydrated;
+      await store.flush();
+
+      expect(order).toEqual([1, 2, 3]);
+      expect(store.state).toEqual({ count: 5123 });
+      persisted.destroy();
+    });
+
+    it("still reports a hydration race when an in-flight command mutates state", async () => {
+      const reports: PersistErrorReport[] = [];
+      let releaseRead: (value: string | null) => void = () => {};
+      let releaseCommand: () => void = () => {};
+      const storage: StorageAdapter = {
+        getItem: () =>
+          new Promise<string | null>((resolve) => {
+            releaseRead = resolve;
+          }),
+        setItem: () => {},
+      };
+      const store = createStore<TestState>({ count: 0 }, { onError: () => {} });
+      store.addCommandHandler("slow", async (ctx) => {
+        await new Promise<void>((resolve) => {
+          releaseCommand = resolve;
+        });
+        ctx.setState({ count: 42 });
+      });
+
+      store.queue(createCommand("slow", undefined));
+      await vi.advanceTimersByTimeAsync(1);
 
       const persisted = persistStore(store, {
         key: "test",
         storage,
         onError: (report) => reports.push(report),
       });
-      store.queue(createCommand("increment", 1));
-      await store.flush();
-      release(stored({ count: 5 }));
+      releaseCommand();
+      await vi.advanceTimersByTimeAsync(1);
+      releaseRead(stored({ count: 5 }));
       await persisted.hydrated;
 
       expect(reports.map((report) => report.source)).toContain("hydrationRace");
@@ -151,6 +218,150 @@ describe("persistStore", () => {
       await persisted.hydrated;
 
       expect(reports[0]?.source).toBe("read");
+      persisted.destroy();
+    });
+  });
+
+  describe("hydration gate", () => {
+    function asyncStorage(raw: string | null): StorageAdapter {
+      return {
+        getItem: () => Promise.resolve(raw),
+        setItem: () => {},
+        removeItem: () => {},
+      };
+    }
+
+    it("releases the gate when the adapter rejects", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: {
+          getItem: () => Promise.reject(new Error("offline")),
+          setItem: () => {},
+        },
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(store.isSuspended).toBe(false);
+      persisted.destroy();
+    });
+
+    it("releases the gate when the stored payload is corrupt", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: asyncStorage("{not json"),
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(store.isSuspended).toBe(false);
+      persisted.destroy();
+    });
+
+    it("releases the gate when migrate throws", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: asyncStorage(stored({ count: 1 }, 1)),
+        version: 2,
+        migrate: () => {
+          throw new Error("no path");
+        },
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(store.isSuspended).toBe(false);
+      persisted.destroy();
+    });
+
+    it("releases the gate when validate throws", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: asyncStorage(stored({ count: 1 })),
+        validate: () => {
+          throw new Error("bad shape");
+        },
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(store.isSuspended).toBe(false);
+      persisted.destroy();
+    });
+
+    it("runs commands queued during a failed hydration instead of stranding them", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: {
+          getItem: () => Promise.reject(new Error("offline")),
+          setItem: () => {},
+        },
+        onError: () => {},
+      });
+      store.queue(createCommand("increment", 4));
+      await persisted.hydrated;
+      await store.flush();
+
+      expect(store.state).toEqual({ count: 4 });
+      persisted.destroy();
+    });
+
+    it("releases the gate and unblocks flush when destroyed mid-hydration", async () => {
+      const storage: StorageAdapter = {
+        getItem: () => new Promise<string | null>(() => {}),
+        setItem: () => {},
+      };
+      const store = setup();
+      const persisted = persistStore(store, { key: "test", storage });
+
+      expect(store.isSuspended).toBe(true);
+      store.queue(createCommand("increment", 3));
+      persisted.destroy();
+
+      expect(store.isSuspended).toBe(false);
+      await store.flush();
+      expect(store.state).toEqual({ count: 3 });
+    });
+
+    it("does not report a suspended queue for a synchronous adapter", async () => {
+      const reports: string[] = [];
+      localStorage.setItem("test", stored({ count: 3 }));
+      const store = createStore<TestState>(
+        { count: 0 },
+        { onError: (report) => reports.push(report.source) },
+      );
+
+      const persisted = persistStore(store, { key: "test" });
+
+      expect(store.isSuspended).toBe(false);
+      expect(store.state).toEqual({ count: 3 });
+      await vi.advanceTimersByTimeAsync(10000);
+
+      expect(reports).not.toContain("suspendedQueue");
+      persisted.destroy();
+    });
+
+    it("neither hangs nor rejects hydrated, flush and clear when hydration fails", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage: {
+          getItem: () => Promise.reject(new Error("offline")),
+          setItem: () => {},
+          removeItem: () => {},
+        },
+        onError: () => {},
+      });
+
+      await expect(persisted.hydrated).resolves.toBeUndefined();
+      await expect(persisted.flush()).resolves.toBeUndefined();
+      await expect(persisted.clear()).resolves.toBeUndefined();
+      expect(store.isSuspended).toBe(false);
       persisted.destroy();
     });
   });

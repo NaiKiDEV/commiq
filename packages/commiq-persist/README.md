@@ -31,11 +31,15 @@ persisted.clear();   // remove the stored value (use on logout)
 persisted.destroy(); // flush, unsubscribe, stop persisting
 ```
 
-`persistStore` accepts any object with `state`, `replaceState`, `openStream` and `closeStream` — a `StoreImpl` or your own test double. `PersistResult` satisfies core's `Disposable`, and `destroy()` is idempotent.
+`persistStore` accepts any object with `state`, `replaceState`, `suspend`, `openStream` and `closeStream` — a `StoreImpl` or your own test double. `PersistResult` satisfies core's `Disposable`, and `destroy()` is idempotent.
 
 ### Asynchronous adapters
 
-`hydrated` resolves once the initial read has been applied. With an asynchronous adapter (IndexedDB, network), commands dispatched before that point are overwritten by the restored state, so await `hydrated` before dispatching. Doing it anyway is reported through `onError` with `source: "hydrationRace"` rather than failing silently.
+`persistStore` takes a `store.suspend()` gate for the duration of the initial read and releases it once hydration has settled — on success, on failure and on corrupt data alike. Commands dispatched during an asynchronous hydration are therefore **accepted, kept in order, and executed against the hydrated state** rather than being overwritten by it. Their `CommandHandle`s resolve normally, and `flush()` resolves once the gate opens and the queue drains.
+
+`hydrated` resolves once the initial read has been applied. You still need to await it before *reading* `store.state`, since the restored value is not visible until then — but you no longer need to await it before dispatching.
+
+The gate covers command execution only. A command that was already mid-flight when `persistStore` was called keeps running, so its state change can still be overwritten by hydration; that narrow case is reported through `onError` with `source: "hydrationRace"` rather than failing silently.
 
 ## Options
 
@@ -108,7 +112,7 @@ A custom adapter needs `getItem` and `setItem`; add `removeItem` to support `cle
 
 ## Server rendering
 
-The default adapter is resolved lazily and degrades to a no-op when `localStorage` is missing or throws (Next.js/Remix server rendering, Safari private mode), so rendering never crashes. On the server nothing is read or written and `hydrated` resolves immediately; the browser hydrates on mount. Pass `memoryStorageAdapter()` explicitly if you want deterministic behaviour in server tests.
+The default adapter is resolved lazily and degrades to a no-op when `localStorage` is missing or throws (Next.js/Remix server rendering, Safari private mode), so rendering never crashes. On the server nothing is read or written, `hydrated` resolves immediately and the suspension gate is taken and released within the same tick, so command processing is never delayed. The browser hydrates on mount. Pass `memoryStorageAdapter()` explicitly if you want deterministic behaviour in server tests.
 
 ## Cross-tab sync
 

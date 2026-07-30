@@ -10,6 +10,7 @@ export type StorageAdapter = {
 export type PersistableStore<S> = Streamable & {
   readonly state: DeepReadonly<S>;
   replaceState(next: S): void;
+  suspend(): Unsubscribe;
 };
 
 export type PersistedSnapshot = {

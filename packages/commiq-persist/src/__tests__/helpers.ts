@@ -69,18 +69,32 @@ export function createSpyStorage(
 
 export type FakeStore = PersistableStore<TestState> & {
   listenerCount: () => number;
+  readonly isSuspended: boolean;
 };
 
 export function createFakeStore(initial: TestState): FakeStore {
   const listeners = new Set<StreamListener>();
   let current = initial;
+  let held = 0;
 
   return {
     get state() {
       return current;
     },
+    get isSuspended() {
+      return held > 0;
+    },
     replaceState: (next) => {
       current = next;
+    },
+    suspend: () => {
+      held += 1;
+      let isReleased = false;
+      return () => {
+        if (isReleased) return;
+        isReleased = true;
+        held -= 1;
+      };
     },
     openStream: (listener) => {
       listeners.add(listener);

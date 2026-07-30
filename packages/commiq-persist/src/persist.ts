@@ -46,6 +46,11 @@ type Flags = {
   destroyed: boolean;
 };
 
+type Hydration = {
+  hydrated: Promise<void>;
+  release: Unsubscribe;
+};
+
 function resolveOptions<S>(options: PersistOptions<S>): Resolved<S> {
   const report = createReporter(options.key, options.onError);
   return {
@@ -126,29 +131,43 @@ function createApply<S>(
 }
 
 function createReader<S>(
+  store: PersistableStore<S>,
   config: Resolved<S>,
   flags: Flags,
   apply: (raw: string) => void,
-): () => Promise<void> {
-  const finish = (raw: string | null): void => {
-    if (flags.changed) {
-      config.report(
-        "hydrationRace",
-        new Error(
-          "State changed before asynchronous hydration completed; await `hydrated` before dispatching commands",
-        ),
-      );
-    }
-    if (raw !== null && !flags.destroyed) apply(raw);
+): Hydration {
+  const release = store.suspend();
+
+  const settle = (): void => {
     flags.awaitingRead = false;
+    release();
+  };
+
+  const finish = (raw: string | null): void => {
+    try {
+      if (flags.changed) {
+        config.report(
+          "hydrationRace",
+          new Error(
+            "State changed while asynchronous hydration held the command gate; an in-flight command handler mutated state and its change was overwritten",
+          ),
+        );
+      }
+      if (raw !== null && !flags.destroyed) apply(raw);
+    } finally {
+      settle();
+    }
   };
 
   const fail = (error: unknown): void => {
-    config.report("read", error);
-    flags.awaitingRead = false;
+    try {
+      config.report("read", error);
+    } finally {
+      settle();
+    }
   };
 
-  return () => {
+  const read = (): Promise<void> => {
     let raw: string | null | Promise<string | null>;
     try {
       raw = config.storage.getItem(config.key);
@@ -162,6 +181,8 @@ function createReader<S>(
     }
     return raw.then(finish, fail);
   };
+
+  return { hydrated: read(), release };
 }
 
 function createStateWriter<S>(
@@ -216,7 +237,7 @@ export function persistStore<S>(
   const apply = createApply(store, config, flags, () => {
     if (config.clearOnCorrupt) void writer.clear();
   });
-  const hydrated = createReader(config, flags, apply)();
+  const hydration = createReader(store, config, flags, apply);
 
   const unsubscribeSync = config.syncTabs
     ? subscribeExternal(
@@ -237,11 +258,17 @@ export function persistStore<S>(
   const destroy = () => {
     if (flags.destroyed) return;
     flags.destroyed = true;
+    hydration.release();
     unsubscribe();
     unsubscribeSync();
     unregisterHide();
     void writer.flush();
   };
 
-  return { destroy, flush: writer.flush, clear: writer.clear, hydrated };
+  return {
+    destroy,
+    flush: writer.flush,
+    clear: writer.clear,
+    hydrated: hydration.hydrated,
+  };
 }
