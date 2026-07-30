@@ -1,5 +1,9 @@
-import type { ContextExtensionDef } from "@naikidev/commiq";
-import type { LogLevel, LogEntry, LoggerOptions } from "../types";
+import type {
+  ContextExtensionFactory,
+  LogEntry,
+  LoggerOptions,
+  LogLevel,
+} from "../types";
 
 type LoggerExtProps = {
   log: (level: LogLevel, message: string) => void;
@@ -7,24 +11,19 @@ type LoggerExtProps = {
 
 export function withLogger<S>(
   options?: LoggerOptions,
-): ContextExtensionDef<S, LoggerExtProps> {
+): ContextExtensionFactory<S, LoggerExtProps, LoggerExtProps> {
   const handler = options?.onLog;
 
-  const createLog = (): LoggerExtProps => ({
+  const props: LoggerExtProps = {
     log: (level: LogLevel, message: string) => {
-      const entry: LogEntry = {
-        level,
-        message,
-        timestamp: Date.now(),
-      };
-      if (handler) {
-        handler(entry);
-      }
+      if (!handler) return;
+      const entry: LogEntry = { level, message, timestamp: Date.now() };
+      handler(entry);
     },
-  });
-
-  return {
-    command: () => createLog(),
-    event: () => createLog(),
   };
+
+  return () => ({
+    command: () => props,
+    event: () => props,
+  });
 }

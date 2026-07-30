@@ -1,37 +1,60 @@
-import type { ContextExtensionDef } from "@naikidev/commiq";
+import { BuiltinEventName } from "@naikidev/commiq";
+import type { DeepReadonly } from "@naikidev/commiq";
+import type {
+  ContextExtensionFactory,
+  HistoryOptions,
+  StateHistory,
+} from "../types";
 
-type HistoryOptions = {
-  maxEntries?: number;
-};
+const DEFAULT_MAX_ENTRIES = 10;
 
 type HistoryExtProps<S> = {
-  history: {
-    entries: ReadonlyArray<S>;
-    previous: S | undefined;
-  };
+  history: StateHistory<S>;
 };
 
 export function withHistory<S>(
   options?: HistoryOptions,
-): ContextExtensionDef<S, HistoryExtProps<S>> {
-  const maxEntries = options?.maxEntries ?? 10;
-  const buffer: S[] = [];
+): ContextExtensionFactory<S, HistoryExtProps<S>, HistoryExtProps<S>> {
+  const maxEntries = Math.max(
+    1,
+    Math.floor(options?.maxEntries ?? DEFAULT_MAX_ENTRIES),
+  );
 
-  const snapshot = (state: S): HistoryExtProps<S> => {
-    buffer.push(state);
-    if (buffer.length > maxEntries) {
-      buffer.shift();
-    }
-    return {
-      history: {
-        entries: [...buffer],
-        previous: buffer.length > 1 ? buffer[buffer.length - 2] : undefined,
+  return (target) => {
+    let buffer: DeepReadonly<S>[] = [target.state];
+
+    const record = (next: DeepReadonly<S>): void => {
+      if (buffer[buffer.length - 1] === next) return;
+      buffer.push(next);
+      if (buffer.length > maxEntries) buffer.shift();
+    };
+
+    const unsubscribe = target.openStream((event) => {
+      if (event.name !== BuiltinEventName.StateChanged) return;
+      record(target.state);
+    });
+
+    const history: StateHistory<S> = {
+      get entries() {
+        return [...buffer];
+      },
+      get previous() {
+        return buffer.length > 1 ? buffer[buffer.length - 2] : undefined;
+      },
+      clear: () => {
+        buffer = buffer.length > 0 ? buffer.slice(-1) : [];
       },
     };
-  };
 
-  return {
-    command: (ctx) => snapshot(ctx.state),
-    event: (ctx) => snapshot(ctx.state),
+    const props: HistoryExtProps<S> = { history };
+
+    return {
+      command: () => props,
+      event: () => props,
+      destroy: () => {
+        unsubscribe();
+        buffer = [];
+      },
+    };
   };
 }

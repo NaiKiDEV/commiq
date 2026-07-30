@@ -1,4 +1,5 @@
-export { defineContextExtension } from "./define";
+export { extendStore } from "./extend-store";
+export { AssertionError, ContextCheckError, GuardError } from "./errors";
 export { withLogger } from "./extensions/logger";
 export { withMeta } from "./extensions/meta";
 export { withHistory } from "./extensions/history";
@@ -8,8 +9,15 @@ export { withInjector } from "./extensions/injector";
 export { withGuard } from "./extensions/guard";
 export { withAssert } from "./extensions/assert";
 export type {
-  LogLevel,
+  CheckOptions,
+  CommandMeta,
+  ContextExtension,
+  ContextExtensionFactory,
+  ExtendedStore,
+  ExtensionTarget,
+  HistoryOptions,
   LogEntry,
   LoggerOptions,
-  CommandMeta,
+  LogLevel,
+  StateHistory,
 } from "./types";

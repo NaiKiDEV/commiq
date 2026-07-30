@@ -1,39 +1,56 @@
-import type { ContextExtensionDef } from "@naikidev/commiq";
+import type { ContextExtensionFactory } from "../types";
+
+type DeferredFn = () => void | Promise<void>;
 
 type DeferExtProps = {
-  defer: (fn: () => void | Promise<void>) => void;
+  defer: (fn: DeferredFn) => void;
 };
 
-export function withDefer<S>(): ContextExtensionDef<S, DeferExtProps> {
-  let commandCallbacks: Array<() => void | Promise<void>> = [];
-  let eventCallbacks: Array<() => void | Promise<void>> = [];
+async function drain(queue: DeferredFn[]): Promise<void> {
+  const callbacks = queue.splice(0);
+  const errors: unknown[] = [];
 
-  return {
-    command: () => ({
-      defer: (fn: () => void | Promise<void>) => { commandCallbacks.push(fn); },
-    }),
-    afterCommand: async () => {
-      const callbacks = commandCallbacks.splice(0);
-      for (const cb of callbacks) {
-        try {
-          await cb();
-        } catch {
-          // deferred callback errors are swallowed
-        }
-      }
-    },
-    event: () => ({
-      defer: (fn: () => void | Promise<void>) => { eventCallbacks.push(fn); },
-    }),
-    afterEvent: async () => {
-      const callbacks = eventCallbacks.splice(0);
-      for (const cb of callbacks) {
-        try {
-          await cb();
-        } catch {
-          // deferred callback errors are swallowed
-        }
-      }
-    },
+  for (const callback of callbacks) {
+    try {
+      await callback();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  if (errors.length > 0) throw errors[0];
+}
+
+export function withDefer<S>(): ContextExtensionFactory<
+  S,
+  DeferExtProps,
+  DeferExtProps
+> {
+  return () => {
+    const commandCallbacks: DeferredFn[] = [];
+    const eventCallbacks: DeferredFn[] = [];
+    let isDisposed = false;
+
+    const collector = (queue: DeferredFn[]): DeferExtProps => ({
+      defer: (fn: DeferredFn) => {
+        if (isDisposed) return;
+        queue.push(fn);
+      },
+    });
+
+    const commandProps = collector(commandCallbacks);
+    const eventProps = collector(eventCallbacks);
+
+    return {
+      command: () => commandProps,
+      event: () => eventProps,
+      afterCommand: () => drain(commandCallbacks),
+      afterEvent: () => drain(eventCallbacks),
+      destroy: () => {
+        isDisposed = true;
+        commandCallbacks.length = 0;
+        eventCallbacks.length = 0;
+      },
+    };
   };
 }

@@ -1,30 +1,18 @@
-import type { ContextExtensionDef } from "@naikidev/commiq";
-
-type AssertOptions = {
-  enabled?: boolean;
-};
+import { AssertionError } from "../errors";
+import type { CheckOptions, ContextExtensionFactory } from "../types";
+import { createCheck } from "./check";
+import type { CheckFn } from "./check";
 
 type AssertExtProps = {
-  assert: (condition: boolean, message: string) => void;
+  assert: CheckFn;
 };
 
-export function withAssert<S>(options?: AssertOptions): ContextExtensionDef<S, AssertExtProps> {
-  const enabled = options?.enabled ?? true;
-
-  return {
-    command: () => ({
-      assert: (condition: boolean, message: string) => {
-        if (enabled && !condition) {
-          throw new Error(`Assertion failed: ${message}`);
-        }
-      },
-    }),
-    event: () => ({
-      assert: (condition: boolean, message: string) => {
-        if (enabled && !condition) {
-          throw new Error(`Assertion failed: ${message}`);
-        }
-      },
-    }),
+export function withAssert<S>(
+  options?: CheckOptions,
+): ContextExtensionFactory<S, AssertExtProps, AssertExtProps> {
+  const props: AssertExtProps = {
+    assert: createCheck(options, (message) => new AssertionError(message)),
   };
+
+  return () => ({ command: () => props, event: () => props });
 }

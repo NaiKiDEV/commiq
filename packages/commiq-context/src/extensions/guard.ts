@@ -1,17 +1,18 @@
-import type { ContextExtensionDef } from "@naikidev/commiq";
+import { GuardError } from "../errors";
+import type { CheckOptions, ContextExtensionFactory } from "../types";
+import { createCheck } from "./check";
+import type { CheckFn } from "./check";
 
 type GuardExtProps = {
-  guard: (condition: boolean, message: string) => void;
+  guard: CheckFn;
 };
 
-export function withGuard<S>(): ContextExtensionDef<S, GuardExtProps> {
-  return {
-    command: () => ({
-      guard: (condition: boolean, message: string) => {
-        if (!condition) {
-          throw new Error(message);
-        }
-      },
-    }),
+export function withGuard<S>(
+  options?: CheckOptions,
+): ContextExtensionFactory<S, GuardExtProps> {
+  const props: GuardExtProps = {
+    guard: createCheck(options, (message) => new GuardError(message)),
   };
+
+  return () => ({ command: () => props });
 }
