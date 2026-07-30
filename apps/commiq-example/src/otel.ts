@@ -6,7 +6,7 @@ import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
-import { instrumentStore } from "@naikidev/commiq-otel";
+import { createTraceRegistry, instrumentStore } from "@naikidev/commiq-otel";
 import { counterStore } from "./features/counter";
 import { todoStore } from "./features/todo";
 import { inventoryStore, shopCartStore } from "./features/shop";
@@ -33,21 +33,24 @@ export function setupOtel(): void {
   provider.addSpanProcessor(new SimpleSpanProcessor(exporter));
   provider.register();
 
-  const cleanups = [
-    instrumentStore(counterStore, { storeName: "counter" }),
-    instrumentStore(todoStore, { storeName: "todo" }),
-    instrumentStore(inventoryStore, { storeName: "inventory" }),
-    instrumentStore(shopCartStore, { storeName: "shopCart" }),
-    instrumentStore(userStore, { storeName: "users" }),
-    instrumentStore(orderStore, { storeName: "order" }),
-    instrumentStore(paymentStore, { storeName: "payment" }),
-    instrumentStore(fulfillmentStore, { storeName: "fulfillment" }),
-    instrumentStore(notificationStore, { storeName: "notification" }),
+  const registry = createTraceRegistry();
+
+  const instrumentations = [
+    instrumentStore(counterStore, { storeName: "counter", registry }),
+    instrumentStore(todoStore, { storeName: "todo", registry }),
+    instrumentStore(inventoryStore, { storeName: "inventory", registry }),
+    instrumentStore(shopCartStore, { storeName: "shopCart", registry }),
+    instrumentStore(userStore, { storeName: "users", registry }),
+    instrumentStore(orderStore, { storeName: "order", registry }),
+    instrumentStore(paymentStore, { storeName: "payment", registry }),
+    instrumentStore(fulfillmentStore, { storeName: "fulfillment", registry }),
+    instrumentStore(notificationStore, { storeName: "notification", registry }),
   ];
 
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
-      cleanups.forEach((fn) => fn());
+      instrumentations.forEach((instrumentation) => instrumentation.destroy());
+      registry.clear();
       provider.shutdown();
     });
   }

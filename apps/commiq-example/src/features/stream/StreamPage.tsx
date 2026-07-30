@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { useSelector, useQueue } from "@naikidev/commiq-react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useSelector, useQueue, useStream } from "@naikidev/commiq-react";
 import { createCommand, type StoreEvent } from "@naikidev/commiq";
 import { counterStore } from "../counter";
 import { todoStore, TodoCommand } from "../todo";
@@ -16,69 +16,83 @@ type LogEntry = {
   time: string;
 };
 
+const MAX_ENTRIES = 200;
+
 let entryId = 0;
+
+function eventColor(
+  name: string,
+): "green" | "indigo" | "red" | "amber" | "zinc" {
+  const n = name.toLowerCase();
+  if (n.includes("error") || n.includes("invalid")) return "red";
+  if (n.includes("changed")) return "green";
+  if (n.includes("started")) return "amber";
+  if (n.includes("handled")) return "indigo";
+  return "zinc";
+}
+
+function toEntry(storeName: string, event: StoreEvent): LogEntry {
+  return {
+    id: ++entryId,
+    storeName,
+    eventName: event.name,
+    data: event.data,
+    time: new Date().toISOString().slice(11, 23),
+  };
+}
 
 export function StreamPage() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-
-  function toggleExpand(id: number) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const { count, increment, decrement, reset, throwError } = useCounter();
   const todoCount = useSelector(todoStore, (s) => s.todos.length);
   const queueTodo = useQueue(todoStore);
 
-  useEffect(() => {
-    const makeListener = (storeName: string) => (event: StoreEvent) => {
-      if (pausedRef.current) return;
+  const append = useCallback(
+    (storeName: string, event: StoreEvent) => {
+      if (paused) return;
       setEntries((prev) => [
-        ...prev.slice(-200),
-        {
-          id: ++entryId,
-          storeName,
-          eventName: event.name,
-          data: event.data,
-          time: new Date().toISOString().slice(11, 23),
-        },
+        ...prev.slice(-MAX_ENTRIES),
+        toEntry(storeName, event),
       ]);
-    };
+    },
+    [paused],
+  );
 
-    const counterListener = makeListener("counter");
-    const todoListener = makeListener("todo");
+  useStream(counterStore, (event) => append("counter", event));
+  useStream(todoStore, (event) => append("todo", event));
 
-    counterStore.openStream(counterListener);
-    todoStore.openStream(todoListener);
+  function toggleExpand(id: number) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
-    return () => {
-      counterStore.closeStream(counterListener);
-      todoStore.closeStream(todoListener);
-    };
-  }, []);
+  function handleTogglePause() {
+    setPaused((prev) => !prev);
+  }
+
+  function handleClear() {
+    setEntries([]);
+  }
+
+  function handleAddRandomTodo() {
+    queueTodo(TodoCommand.add(`Task ${Date.now().toString(36).slice(-4)}`));
+  }
+
+  function handleQueueUnknown() {
+    counterStore.queue(createCommand("nonExistent", undefined));
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [entries]);
-
-  const eventColor = (
-    name: string,
-  ): "green" | "indigo" | "red" | "amber" | "zinc" => {
-    const n = name.toLowerCase();
-    if (n.includes("error") || n.includes("invalid")) return "red";
-    if (n.includes("changed")) return "green";
-    if (n.includes("started")) return "amber";
-    if (n.includes("handled")) return "indigo";
-    return "zinc";
-  };
 
   return (
     <CodeExplorer
@@ -109,13 +123,7 @@ export function StreamPage() {
               <Button
                 variant="primary"
                 size="xs"
-                onClick={() =>
-                  queueTodo(
-                    TodoCommand.add(
-                      `Task ${Date.now().toString(36).slice(-4)}`,
-                    ),
-                  )
-                }
+                onClick={handleAddRandomTodo}
               >
                 Add Random Todo
               </Button>
@@ -125,13 +133,7 @@ export function StreamPage() {
           <Card>
             <CardHeader title="Fire Invalid" />
             <CardBody>
-              <Button
-                size="xs"
-                variant="danger"
-                onClick={() =>
-                  counterStore.queue(createCommand("nonExistent", undefined))
-                }
-              >
+              <Button size="xs" variant="danger" onClick={handleQueueUnknown}>
                 Queue Unknown Command
               </Button>
               <p className="mt-2 text-[11px] text-zinc-400">
@@ -163,11 +165,11 @@ export function StreamPage() {
               <Button
                 size="xs"
                 variant={paused ? "primary" : "default"}
-                onClick={() => setPaused(!paused)}
+                onClick={handleTogglePause}
               >
                 {paused ? "Resume" : "Pause"}
               </Button>
-              <Button size="xs" variant="ghost" onClick={() => setEntries([])}>
+              <Button size="xs" variant="ghost" onClick={handleClear}>
                 Clear
               </Button>
             </div>

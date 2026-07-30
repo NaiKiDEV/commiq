@@ -1,5 +1,6 @@
 import { createStore, sealStore } from "@naikidev/commiq";
 import { CounterEvent } from "./events";
+import { CounterCommand } from "./commands";
 
 export type CounterState = {
   count: number;
@@ -10,20 +11,20 @@ export const initialState: CounterState = { count: 0 };
 const _store = createStore<CounterState>(initialState);
 
 _store
-  .addCommandHandler("counter:increment", (ctx) => {
+  .addCommandHandler(CounterCommand.increment, (ctx) => {
     ctx.setState({ count: ctx.state.count + 1 });
   })
-  .addCommandHandler("counter:decrement", (ctx) => {
+  .addCommandHandler(CounterCommand.decrement, (ctx) => {
     ctx.setState({ count: ctx.state.count - 1 });
   })
-  .addCommandHandler<{ amount: number }>("counter:incrementBy", (ctx, cmd) => {
+  .addCommandHandler(CounterCommand.incrementBy, (ctx, cmd) => {
     ctx.setState({ count: ctx.state.count + cmd.data.amount });
   })
-  .addCommandHandler("counter:reset", (ctx) => {
+  .addCommandHandler(CounterCommand.reset, (ctx) => {
     ctx.setState(initialState);
     ctx.emit(CounterEvent.Reset, undefined);
   })
-  .addCommandHandler("counter:throwError", () => {
+  .addCommandHandler(CounterCommand.throwError, () => {
     throw new Error("Something went wrong");
   });
 

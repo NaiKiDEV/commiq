@@ -1,21 +1,27 @@
-import { useRef, useEffect } from "react";
-import type { SealedStore, EventDef, StoreEvent } from "@naikidev/commiq";
+import { useEffect } from "react";
+import type { EventDef, StoreEvent } from "@naikidev/commiq";
+import { matchEvent } from "@naikidev/commiq";
+import { isolate } from "./internal/rethrow-async";
+import { useLatestRef } from "./internal/use-latest-ref";
+import { useResolvedStore } from "./internal/use-resolved-store";
+import type { StoreSource } from "./types";
 
-export function useEvent<D>(
-  store: SealedStore<any>,
+export function useEvent<S, D>(
+  source: StoreSource<S>,
   eventDef: EventDef<D>,
   handler: (event: StoreEvent<D>) => void,
 ): void {
-  const handlerRef = useRef(handler);
-  handlerRef.current = handler;
+  const store = useResolvedStore<S>(source);
+  const handlerRef = useLatestRef(handler);
+  const defRef = useLatestRef(eventDef);
+  const eventId = eventDef.id;
 
   useEffect(() => {
-    const listener = (event: StoreEvent) => {
-      if (event.id === eventDef.id) {
-        handlerRef.current(event as StoreEvent<D>);
-      }
-    };
-    store.openStream(listener);
-    return () => store.closeStream(listener);
-  }, [store, eventDef.id]);
+    return store.openStream(
+      isolate((event) => {
+        if (!matchEvent(event, defRef.current)) return;
+        handlerRef.current(event);
+      }),
+    );
+  }, [store, eventId, defRef, handlerRef]);
 }

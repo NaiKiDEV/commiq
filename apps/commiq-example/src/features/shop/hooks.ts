@@ -1,9 +1,23 @@
-import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { useSelector, useQueue, shallowEqual } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
 import { inventoryStore, shopCartStore } from "./store";
+import type { InventoryState, ShopCartState } from "./store";
 import { InventoryCommand, ShopCartCommand } from "./commands";
 
+function selectProducts(s: DeepReadonly<InventoryState>) {
+  return s.products;
+}
+
+function selectShopCart(s: DeepReadonly<ShopCartState>) {
+  return {
+    items: s.items,
+    lastError: s.lastError,
+    total: s.items.reduce((sum, i) => sum + i.price * i.qty, 0),
+  };
+}
+
 export function useInventory() {
-  const products = useSelector(inventoryStore, (s) => s.products);
+  const products = useSelector(inventoryStore, selectProducts);
   const queue = useQueue(inventoryStore);
 
   return {
@@ -16,11 +30,12 @@ export function useInventory() {
 }
 
 export function useShopCart() {
-  const items = useSelector(shopCartStore, (s) => s.items);
-  const lastError = useSelector(shopCartStore, (s) => s.lastError);
+  const { items, lastError, total } = useSelector(
+    shopCartStore,
+    selectShopCart,
+    shallowEqual,
+  );
   const queue = useQueue(shopCartStore);
-
-  const total = items.reduce((s, i) => s + i.price * i.qty, 0);
 
   return {
     items,

@@ -67,11 +67,13 @@ export function DevtoolsPage() {
   const { products, reserveStock, releaseStock } = useInventory();
   const { items, lastError, total, remove, clearError } = useShopCart();
 
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
-  const [chain, setChain] = useState<TimelineEntry[]>([]);
+  const [timeline, setTimeline] = useState<readonly TimelineEntry[]>([]);
+  const [chain, setChain] = useState<readonly TimelineEntry[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [inventoryHistory, setInventoryHistory] = useState<StateSnapshot[]>([]);
-  const [cartHistory, setCartHistory] = useState<StateSnapshot[]>([]);
+  const [inventoryHistory, setInventoryHistory] = useState<
+    readonly StateSnapshot[]
+  >([]);
+  const [cartHistory, setCartHistory] = useState<readonly StateSnapshot[]>([]);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   const refresh = useCallback(() => {

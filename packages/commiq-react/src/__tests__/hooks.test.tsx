@@ -1,47 +1,57 @@
 import { describe, it, expect, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, render, act } from "@testing-library/react";
 import React from "react";
 import {
   createStore,
   createCommand,
-  createEvent,
+  createCommandDef,
   sealStore,
-  type SealedStore,
 } from "@naikidev/commiq";
-import { CommiqProvider, useSelector, useQueue, useEvent } from "../index";
+import {
+  useSelector,
+  useStore,
+  useQueue,
+  useFlush,
+  shallowEqual,
+} from "../index";
+import { spyOnSubscriptions } from "./helpers";
 
-function createWrapper(stores: Record<string, SealedStore<any>>) {
-  return ({ children }: { children: React.ReactNode }) =>
-    React.createElement(CommiqProvider, { stores }, children);
+type CounterState = {
+  count: number;
+  name: string;
+}
+
+const incDef = createCommandDef("inc");
+const loadDef = createCommandDef("load");
+const failDef = createCommandDef("fail");
+
+function createCounter() {
+  const store = createStore<CounterState>({ count: 0, name: "Alice" });
+  store.addCommandHandler(incDef, (ctx) => {
+    ctx.setState({ ...ctx.state, count: ctx.state.count + 1 });
+  });
+  store.addCommandHandler<string>("setName", (ctx, cmd) => {
+    ctx.setState({ ...ctx.state, name: cmd.data });
+  });
+  return { store, sealed: sealStore(store) };
 }
 
 describe("useSelector", () => {
   it("returns the selected slice of state", () => {
-    const store = createStore({ count: 5 });
-    const sealed = sealStore(store);
+    const { sealed } = createCounter();
 
-    const { result } = renderHook(() => useSelector(sealed, (s) => s.count), {
-      wrapper: createWrapper({ counter: sealed }),
-    });
+    const { result } = renderHook(() => useSelector(sealed, (s) => s.count));
 
-    expect(result.current).toBe(5);
+    expect(result.current).toBe(0);
   });
 
   it("re-renders when selected state changes", async () => {
-    const store = createStore({ count: 0 });
-    store.addCommandHandler("inc", (ctx) => {
-      ctx.setState({ count: ctx.state.count + 1 });
-    });
-    const sealed = sealStore(store);
+    const { store, sealed } = createCounter();
 
-    const { result } = renderHook(() => useSelector(sealed, (s) => s.count), {
-      wrapper: createWrapper({ counter: sealed }),
-    });
-
-    expect(result.current).toBe(0);
+    const { result } = renderHook(() => useSelector(sealed, (s) => s.count));
 
     await act(async () => {
-      store.queue(createCommand("inc", undefined));
+      store.queue(incDef);
       await store.flush();
     });
 
@@ -49,125 +59,291 @@ describe("useSelector", () => {
   });
 
   it("does not re-render when unrelated state changes", async () => {
-    const store = createStore({ count: 0, name: "Alice" });
-    store.addCommandHandler<string>("setName", (ctx, cmd) => {
-      ctx.setState({ ...ctx.state, name: cmd.data });
-    });
-    const sealed = sealStore(store);
+    const { store, sealed } = createCounter();
     const renderCount = vi.fn();
 
-    renderHook(
-      () => {
-        renderCount();
-        return useSelector(sealed, (s) => s.count);
-      },
-      { wrapper: createWrapper({ user: sealed }) },
-    );
+    renderHook(() => {
+      renderCount();
+      return useSelector(sealed, (s) => s.count);
+    });
 
-    const initialRenderCount = renderCount.mock.calls.length;
+    const before = renderCount.mock.calls.length;
 
     await act(async () => {
       store.queue(createCommand("setName", "Bob"));
       await store.flush();
     });
 
-    expect(renderCount.mock.calls.length).toBe(initialRenderCount);
+    expect(renderCount.mock.calls.length).toBe(before);
+  });
+
+  it("observes intermediate state written inside an async handler", async () => {
+    const store = createStore<{ status: string }>({ status: "idle" });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    store.addCommandHandler(loadDef, async (ctx) => {
+      ctx.setState({ status: "loading" });
+      await gate;
+      ctx.setState({ status: "done" });
+    });
+    const sealed = sealStore(store);
+    const seen: string[] = [];
+
+    renderHook(() => {
+      seen.push(useSelector(sealed, (s) => s.status));
+    });
+
+    await act(async () => {
+      store.queue(loadDef);
+      await Promise.resolve();
+    });
+
+    expect(seen).toContain("loading");
+    expect(seen).not.toContain("done");
+
+    await act(async () => {
+      release();
+      await store.flush();
+    });
+
+    expect(seen).toContain("done");
+  });
+
+  it("caches an object-returning selector instead of looping", async () => {
+    const { store, sealed } = createCounter();
+    const renderCount = vi.fn();
+
+    const { result } = renderHook(() => {
+      renderCount();
+      return useSelector(sealed, (s) => ({ count: s.count, name: s.name }));
+    });
+
+    expect(result.current).toEqual({ count: 0, name: "Alice" });
+    const rendersAfterMount = renderCount.mock.calls.length;
+    expect(rendersAfterMount).toBeLessThan(5);
+
+    await act(async () => {
+      store.queue(incDef);
+      await store.flush();
+    });
+
+    expect(result.current).toEqual({ count: 1, name: "Alice" });
+    expect(renderCount.mock.calls.length).toBeLessThan(rendersAfterMount + 5);
+  });
+
+  it("keeps an object selection stable across renders with shallowEqual", async () => {
+    const { store, sealed } = createCounter();
+
+    const { result, rerender } = renderHook(() =>
+      useSelector(sealed, (s) => ({ name: s.name }), shallowEqual),
+    );
+
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+
+    await act(async () => {
+      store.queue(incDef);
+      await store.flush();
+    });
+
+    expect(result.current).toBe(first);
+  });
+
+  it("re-runs a derived selector when the source state changes", async () => {
+    const store = createStore<{ items: { done: boolean }[] }>({ items: [] });
+    store.addCommandHandler(incDef, (ctx) => {
+      ctx.setState({ items: [...ctx.state.items, { done: true }] });
+    });
+    const sealed = sealStore(store);
+
+    const { result } = renderHook(() =>
+      useSelector(sealed, (s) => s.items.filter((i) => i.done).length),
+    );
+
+    expect(result.current).toBe(0);
+
+    await act(async () => {
+      store.queue(incDef);
+      await store.flush();
+    });
+
+    expect(result.current).toBe(1);
+  });
+
+  it("shares one store between two components", async () => {
+    const { store, sealed } = createCounter();
+    const counts: number[] = [];
+    const doubles: number[] = [];
+
+    function Count() {
+      counts.push(useSelector(sealed, (s) => s.count));
+      return null;
+    }
+
+    function Doubled() {
+      doubles.push(useSelector(sealed, (s) => s.count * 2));
+      return null;
+    }
+
+    render(
+      <>
+        <Count />
+        <Doubled />
+      </>,
+    );
+
+    await act(async () => {
+      store.queue(incDef);
+      await store.flush();
+    });
+
+    expect(counts.at(-1)).toBe(1);
+    expect(doubles.at(-1)).toBe(2);
+  });
+
+  it("opens exactly one subscription and releases it on unmount", () => {
+    const { sealed } = createCounter();
+    const spy = spyOnSubscriptions(sealed);
+
+    const { unmount } = renderHook(() =>
+      useSelector(spy.store, (s) => s.count),
+    );
+
+    expect(spy.activeCount()).toBe(1);
+    unmount();
+    expect(spy.activeCount()).toBe(0);
+    expect(spy.unsubscribeCount()).toBe(spy.openCount());
+  });
+});
+
+describe("useStore", () => {
+  it("returns the whole state and updates on change", async () => {
+    const { store, sealed } = createCounter();
+
+    const { result } = renderHook(() => useStore(sealed));
+
+    expect(result.current.count).toBe(0);
+
+    await act(async () => {
+      store.queue(incDef);
+      await store.flush();
+    });
+
+    expect(result.current.count).toBe(1);
   });
 });
 
 describe("useQueue", () => {
-  it("returns a queue function bound to the store", async () => {
-    const store = createStore({ count: 0 });
-    store.addCommandHandler("inc", (ctx) => {
-      ctx.setState({ count: ctx.state.count + 1 });
-    });
-    const sealed = sealStore(store);
+  it("returns a handle that resolves with the command result", async () => {
+    const { store, sealed } = createCounter();
 
-    const { result } = renderHook(() => useQueue(sealed), {
-      wrapper: createWrapper({ counter: sealed }),
-    });
+    const { result } = renderHook(() => useQueue(sealed));
 
     await act(async () => {
-      result.current(createCommand("inc", undefined));
-      await store.flush();
+      const outcome = await result.current(incDef);
+      expect(outcome.status).toBe("handled");
     });
 
     expect(store.state.count).toBe(1);
   });
 
-  it("returns a stable reference across re-renders", () => {
-    const store = createStore({ count: 0 });
+  it("reports a failing command through the handle", async () => {
+    const store = createStore<{ count: number }>(
+      { count: 0 },
+      { onError: () => {} },
+    );
+    store.addCommandHandler(failDef, () => {
+      throw new Error("nope");
+    });
     const sealed = sealStore(store);
 
-    const { result, rerender } = renderHook(() => useQueue(sealed), {
-      wrapper: createWrapper({ counter: sealed }),
+    const { result } = renderHook(() => useQueue(sealed));
+
+    await act(async () => {
+      const outcome = await result.current(failDef);
+      expect(outcome.status).toBe("failed");
+      expect(outcome.error).toBeInstanceOf(Error);
     });
+  });
+
+  it("returns a stable reference across re-renders", () => {
+    const { sealed } = createCounter();
+
+    const { result, rerender } = renderHook(() => useQueue(sealed));
 
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
   });
-});
 
-describe("useEvent", () => {
-  it("calls handler when a matching event is emitted", async () => {
-    const userCreated = createEvent<{ name: string }>("userCreated");
-    const store = createStore({ user: "" });
-    store.addCommandHandler<{ name: string }>("createUser", (ctx, cmd) => {
-      ctx.setState({ user: cmd.data.name });
-      ctx.emit(userCreated, { name: cmd.data.name });
+  it("survives unmount during an in-flight dispatch", async () => {
+    const store = createStore<{ status: string }>({ status: "idle" });
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    store.addCommandHandler(loadDef, async (ctx) => {
+      ctx.setState({ status: "loading" });
+      await gate;
+      ctx.setState({ status: "done" });
     });
     const sealed = sealStore(store);
-    const handler = vi.fn();
+    const spy = spyOnSubscriptions(sealed);
 
-    renderHook(() => useEvent(sealed, userCreated, handler), {
-      wrapper: createWrapper({ user: sealed }),
+    const { result, unmount } = renderHook(() => {
+      useSelector(spy.store, (s) => s.status);
+      return useQueue(spy.store);
     });
 
+    const settled: string[] = [];
     await act(async () => {
-      store.queue(createCommand("createUser", { name: "Alice" }));
-      await store.flush();
-    });
-
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { name: "Alice" } }),
-    );
-  });
-
-  it("unsubscribes on unmount", async () => {
-    const evt = createEvent("ping");
-    const store = createStore({});
-    store.addCommandHandler("fire", (ctx) => {
-      ctx.emit(evt, undefined);
-    });
-    const sealed = sealStore(store);
-    const handler = vi.fn();
-
-    const { unmount } = renderHook(() => useEvent(sealed, evt, handler), {
-      wrapper: createWrapper({ s: sealed }),
+      result.current(loadDef).then((outcome) => {
+        settled.push(outcome.status);
+      });
+      await Promise.resolve();
     });
 
     unmount();
+    expect(spy.activeCount()).toBe(0);
 
     await act(async () => {
-      store.queue(createCommand("fire", undefined));
+      release();
       await store.flush();
     });
 
-    expect(handler).not.toHaveBeenCalled();
+    expect(settled).toEqual(["handled"]);
+    expect(store.state.status).toBe("done");
   });
 });
 
-describe("CommiqProvider", () => {
-  it("provides stores via context", () => {
-    const store = createStore({ value: 42 });
-    const sealed = sealStore(store);
+describe("useFlush", () => {
+  it("awaits full quiescence of the store", async () => {
+    const { store, sealed } = createCounter();
 
-    const { result } = renderHook(() => useSelector(sealed, (s) => s.value), {
-      wrapper: createWrapper({ myStore: sealed }),
+    const { result } = renderHook(() => useFlush(sealed));
+
+    await act(async () => {
+      store.queue(incDef);
+      store.queue(incDef);
+      await result.current();
     });
 
-    expect(result.current).toBe(42);
+    expect(store.state.count).toBe(2);
+  });
+});
+
+describe("shallowEqual", () => {
+  it("compares one level deep", () => {
+    expect(shallowEqual({ a: 1 }, { a: 1 })).toBe(true);
+    expect(shallowEqual({ a: 1 }, { a: 2 })).toBe(false);
+    expect(shallowEqual({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(shallowEqual([1, 2], [1, 2])).toBe(true);
+    expect(shallowEqual([1, 2], { 0: 1, 1: 2 })).toBe(false);
+    expect(shallowEqual({ a: { b: 1 } }, { a: { b: 1 } })).toBe(false);
+    expect(shallowEqual(null, null)).toBe(true);
+    expect(shallowEqual(null, {})).toBe(false);
   });
 });

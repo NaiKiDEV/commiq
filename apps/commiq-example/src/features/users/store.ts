@@ -3,33 +3,22 @@ import { UserEvent } from "./events";
 import type { User } from "./events";
 
 export type UserState = {
-  users: User[];
-  status: "idle" | "loading" | "error";
-  errorMessage: string | null;
+  users: readonly User[];
 };
 
-export const initialState: UserState = {
-  users: [],
-  status: "idle",
-  errorMessage: null,
-};
+export const initialState: UserState = { users: [] };
+
+export const USER_FETCH_COMMAND = "user:fetch";
 
 const _store = createStore<UserState>(initialState);
 
 _store
-  .addCommandHandler("user:fetch", async (ctx) => {
-    ctx.setState({ ...ctx.state, status: "loading", errorMessage: null });
-
+  .addCommandHandler(USER_FETCH_COMMAND, async (ctx) => {
     await new Promise((r) => setTimeout(r, 1200 + Math.random() * 800));
 
     if (Math.random() < 0.2) {
-      ctx.setState({
-        ...ctx.state,
-        status: "error",
-        errorMessage: "Network error — try again",
-      });
       ctx.emit(UserEvent.FetchFailed, { message: "Network error" });
-      return;
+      throw new Error("Network error — try again");
     }
 
     const fakeUsers: User[] = Array.from({ length: 3 }, (_, i) => {
@@ -41,21 +30,16 @@ _store
       };
     });
 
-    ctx.setState({
-      users: [...ctx.state.users, ...fakeUsers],
-      status: "idle",
-      errorMessage: null,
-    });
+    ctx.setState((prev) => ({ users: [...prev.users, ...fakeUsers] }));
     ctx.emit(UserEvent.Fetched, { count: fakeUsers.length });
   })
   .addCommandHandler("user:clear", (ctx) => {
     ctx.setState(initialState);
   })
   .addCommandHandler<{ id: number }>("user:remove", (ctx, cmd) => {
-    ctx.setState({
-      ...ctx.state,
-      users: ctx.state.users.filter((u) => u.id !== cmd.data.id),
-    });
+    ctx.setState((prev) => ({
+      users: prev.users.filter((u) => u.id !== cmd.data.id),
+    }));
   });
 
 export const userStore = sealStore(_store);

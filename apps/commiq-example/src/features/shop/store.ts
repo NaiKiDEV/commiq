@@ -68,7 +68,7 @@ export type ShopCartItem = {
 };
 
 export type ShopCartState = {
-  items: ShopCartItem[];
+  items: readonly ShopCartItem[];
   lastError: string;
 };
 

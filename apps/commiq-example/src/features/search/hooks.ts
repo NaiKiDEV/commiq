@@ -1,15 +1,28 @@
-import { useSelector, useQueue } from "@naikidev/commiq-react";
-import { searchStore } from "./store";
+import {
+  useSelector,
+  useQueue,
+  useCommandStatus,
+  shallowEqual,
+} from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { searchStore, SEARCH_QUERY_COMMAND } from "./store";
+import type { SearchState } from "./store";
 import { SearchCommand } from "./commands";
 
-export function useSearchState() {
+function selectSearch(s: DeepReadonly<SearchState>) {
   return {
-    query: useSelector(searchStore, (s) => s.query),
-    results: useSelector(searchStore, (s) => s.results),
-    loading: useSelector(searchStore, (s) => s.loading),
-    recentSearches: useSelector(searchStore, (s) => s.recentSearches),
-    stats: useSelector(searchStore, (s) => s.stats),
+    query: s.query,
+    results: s.results,
+    recentSearches: s.recentSearches,
+    stats: s.stats,
   };
+}
+
+export function useSearchState() {
+  const slice = useSelector(searchStore, selectSearch, shallowEqual);
+  const { pending } = useCommandStatus(searchStore, SEARCH_QUERY_COMMAND);
+
+  return { ...slice, loading: pending };
 }
 
 export function useSearchActions() {

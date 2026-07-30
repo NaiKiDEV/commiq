@@ -15,11 +15,12 @@ export type SearchResult = {
 
 export type SearchState = {
   query: string;
-  results: SearchResult[];
-  loading: boolean;
-  recentSearches: string[];
+  results: readonly SearchResult[];
+  recentSearches: readonly string[];
   stats: { completed: number; interrupted: number };
 };
+
+export const SEARCH_QUERY_COMMAND = "search:query";
 
 const catalog: SearchResult[] = [
   { id: 1, title: "Getting Started with Commiq", category: "Guide" },
@@ -39,27 +40,26 @@ const catalog: SearchResult[] = [
 const _store = createStore<SearchState>({
   query: "",
   results: [],
-  loading: false,
   recentSearches: [],
   stats: { completed: 0, interrupted: 0 },
 });
 
 _store
   .addCommandHandler<string>(
-    "search:query",
+    SEARCH_QUERY_COMMAND,
     async (ctx, cmd) => {
       const query = cmd.data.trim().toLowerCase();
 
       if (!query) {
-        ctx.setState({ ...ctx.state, query: "", results: [], loading: false });
+        ctx.setState((prev) => ({ ...prev, query: "", results: [] }));
         return;
       }
 
-      ctx.setState({ ...ctx.state, query: cmd.data, loading: true });
+      ctx.setState((prev) => ({ ...prev, query: cmd.data }));
 
       await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
 
-      if (ctx.signal!.aborted) return;
+      if (ctx.signal?.aborted) return;
 
       const results = catalog.filter(
         (item) =>
@@ -67,7 +67,7 @@ _store
           item.category.toLowerCase().includes(query),
       );
 
-      ctx.setState({ ...ctx.state, results, loading: false });
+      ctx.setState((prev) => ({ ...prev, results }));
       ctx.emit(SearchEvent.Completed, {
         query: cmd.data,
         count: results.length,
@@ -76,35 +76,32 @@ _store
     { interruptable: true },
   )
   .addCommandHandler("search:clear", (ctx) => {
-    ctx.setState({
-      ...ctx.state,
-      query: "",
-      results: [],
-      loading: false,
-    });
+    ctx.setState((prev) => ({ ...prev, query: "", results: [] }));
   })
   .addCommandHandler<string>("search:addRecent", (ctx, cmd) => {
-    const recent = [
-      cmd.data,
-      ...ctx.state.recentSearches.filter((s) => s !== cmd.data),
-    ].slice(0, 5);
-    ctx.setState({ ...ctx.state, recentSearches: recent });
+    ctx.setState((prev) => ({
+      ...prev,
+      recentSearches: [
+        cmd.data,
+        ...prev.recentSearches.filter((s) => s !== cmd.data),
+      ].slice(0, 5),
+    }));
   })
   .addCommandHandler<"completed" | "interrupted">(
     "search:incrementStat",
     (ctx, cmd) => {
-      ctx.setState({
-        ...ctx.state,
+      ctx.setState((prev) => ({
+        ...prev,
         stats: {
-          ...ctx.state.stats,
-          [cmd.data]: ctx.state.stats[cmd.data] + 1,
+          ...prev.stats,
+          [cmd.data]: prev.stats[cmd.data] + 1,
         },
-      });
+      }));
     },
   );
 
 _store.addEventHandler(BuiltinEvent.CommandInterrupted, (ctx, event) => {
-  if (event.data.command.name === "search:query") {
+  if (event.data.command.name === SEARCH_QUERY_COMMAND) {
     ctx.queue(createCommand("search:incrementStat", "interrupted" as const));
   }
 });

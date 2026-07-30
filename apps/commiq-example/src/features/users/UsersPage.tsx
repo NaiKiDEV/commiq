@@ -13,7 +13,7 @@ import hooksRaw from "./hooks.ts?raw";
 import pageRaw from "./UsersPage.tsx?raw";
 
 export function UsersPage() {
-  const { users, status, errorMessage } = useUserState();
+  const { users, loading, errorMessage } = useUserState();
   const { fetch, clear, remove } = useUserActions();
   const [log, setLog] = useState<string[]>([]);
 
@@ -28,7 +28,7 @@ export function UsersPage() {
   return (
     <CodeExplorer
       title="Async Commands"
-      description="Command handlers can be async. This example simulates an API fetch with artificial delay and a 20% chance of failure. The store transitions through loading states and emits success/failure events."
+      description="Command handlers can be async. This example simulates an API fetch with artificial delay and a 20% chance of failure. The store keeps no loading or error fields — useCommandStatus derives both from the command lifecycle events."
       files={[
         { name: "events.ts", content: eventsRaw },
         { name: "commands.ts", content: commandsRaw },
@@ -43,7 +43,7 @@ export function UsersPage() {
             <CardHeader
               title="Users"
               badge={
-                status === "loading" ? "loading…" : `${users.length} loaded`
+                loading ? "loading…" : `${users.length} loaded`
               }
             />
             <CardBody className="space-y-3">
@@ -51,9 +51,9 @@ export function UsersPage() {
                 <Button
                   variant="primary"
                   onClick={fetch}
-                  disabled={status === "loading"}
+                  disabled={loading}
                 >
-                  {status === "loading" ? (
+                  {loading ? (
                     <span className="flex items-center gap-1.5">
                       <svg
                         className="animate-spin h-3.5 w-3.5"
@@ -80,18 +80,18 @@ export function UsersPage() {
                     "Fetch Users"
                   )}
                 </Button>
-                <Button onClick={clear} disabled={status === "loading"}>
+                <Button onClick={clear} disabled={loading}>
                   Clear All
                 </Button>
               </div>
 
-              {status === "error" && errorMessage && (
+              {errorMessage && !loading && (
                 <div className="rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 px-3 py-2 text-sm text-red-600 dark:text-red-400">
                   {errorMessage}
                 </div>
               )}
 
-              {users.length === 0 && status === "idle" && (
+              {users.length === 0 && !loading && !errorMessage && (
                 <p className="text-center text-sm text-zinc-400 py-6">
                   No users loaded yet — hit Fetch.
                 </p>

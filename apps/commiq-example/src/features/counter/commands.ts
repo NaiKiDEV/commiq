@@ -1,10 +1,9 @@
-import { createCommand } from "@naikidev/commiq";
+import { createCommandDef } from "@naikidev/commiq";
 
 export const CounterCommand = {
-  increment: () => createCommand("counter:increment", undefined),
-  decrement: () => createCommand("counter:decrement", undefined),
-  incrementBy: (amount: number) =>
-    createCommand("counter:incrementBy", { amount }),
-  reset: () => createCommand("counter:reset", undefined),
-  throwError: () => createCommand("counter:throwError", undefined),
+  increment: createCommandDef("counter:increment"),
+  decrement: createCommandDef("counter:decrement"),
+  incrementBy: createCommandDef<{ amount: number }>("counter:incrementBy"),
+  reset: createCommandDef("counter:reset"),
+  throwError: createCommandDef("counter:throwError"),
 };
