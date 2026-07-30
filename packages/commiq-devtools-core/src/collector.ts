@@ -9,16 +9,21 @@ import type {
 } from "./types";
 import { RingBuffer } from "./ring-buffer";
 import { createSnapshot } from "./snapshot";
+import { createAliasWatcher, type AliasWatcher } from "./alias-watcher";
 import { eventIdFor } from "./event-id";
 import { buildChainIndex, collectChain, type ChainIndex } from "./chain";
 
 export const DEFAULT_MAX_EVENTS = 1000;
 export const DEFAULT_MAX_SNAPSHOTS = 100;
 
+const stateRoot = "state";
+const dataRoot = "data";
+
 export type EventCollectorOptions = {
   maxEvents?: number;
   maxSnapshots?: number;
   snapshotMode?: SnapshotMode;
+  detectAliasedState?: boolean;
   onEntry?: (entry: TimelineEntry) => void;
   onError?: DevtoolsErrorHandler;
 }
@@ -60,6 +65,7 @@ export class EventCollector {
   private readonly _maxSnapshots: number;
   private readonly _snapshotMode: SnapshotMode;
   private readonly _onError: DevtoolsErrorHandler;
+  private readonly _aliasWatcher: AliasWatcher | undefined;
   private _onEntry: ((entry: TimelineEntry) => void) | undefined;
 
   private _timeline: RingBuffer<TimelineEntry>;
@@ -77,6 +83,7 @@ export class EventCollector {
     this._snapshotMode = options.snapshotMode ?? "safe";
     this._onEntry = options.onEntry;
     this._onError = options.onError ?? noop;
+    this._aliasWatcher = this._createAliasWatcher(options.detectAliasedState ?? true);
     this._timeline = new RingBuffer<TimelineEntry>(this._maxEvents);
   }
 
@@ -198,12 +205,12 @@ export class EventCollector {
     };
 
     if (matchEvent(event, BuiltinEvent.StateChanged)) {
-      const stateBefore = this._snapshot(event.data.prev);
-      const stateAfter = this._snapshot(event.data.next);
+      const stateBefore = this._snapshot(event.data.prev, storeName, stateRoot);
+      const stateAfter = this._snapshot(event.data.next, storeName, stateRoot);
       return { ...base, data: { prev: stateBefore, next: stateAfter }, stateBefore, stateAfter };
     }
 
-    return { ...base, data: this._snapshot(event.data) };
+    return { ...base, data: this._snapshot(event.data, storeName, dataRoot) };
   }
 
   private _recordSnapshot(storeName: string, state: unknown, event: StoreEvent): void {
@@ -218,7 +225,18 @@ export class EventCollector {
     this._stateHistory.set(storeName, history);
   }
 
-  private _snapshot(value: unknown): unknown {
-    return createSnapshot(value, this._snapshotMode);
+  private _snapshot(value: unknown, storeName: string, root: string): unknown {
+    return createSnapshot(
+      value,
+      this._snapshotMode,
+      this._aliasWatcher?.reporterFor(storeName, root),
+    );
+  }
+
+  private _createAliasWatcher(enabled: boolean): AliasWatcher | undefined {
+    if (!enabled || this._snapshotMode !== "safe") {
+      return undefined;
+    }
+    return createAliasWatcher(this._onError);
   }
 }

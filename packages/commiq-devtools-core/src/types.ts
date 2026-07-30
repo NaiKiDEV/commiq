@@ -51,6 +51,7 @@ export type DevtoolsOptions = {
   maxEvents?: number;
   maxSnapshots?: number;
   snapshotMode?: SnapshotMode;
+  detectAliasedState?: boolean;
   logToConsole?: boolean;
   onError?: DevtoolsErrorHandler;
 }

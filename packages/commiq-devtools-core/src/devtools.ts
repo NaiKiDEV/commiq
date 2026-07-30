@@ -30,6 +30,7 @@ export function createDevtools(options: DevtoolsOptions = {}): Devtools {
     maxEvents: options.maxEvents,
     maxSnapshots: options.maxSnapshots,
     snapshotMode,
+    detectAliasedState: options.detectAliasedState,
     onError,
     onEntry: (entry) => {
       send({ type: "EVENT", entry });

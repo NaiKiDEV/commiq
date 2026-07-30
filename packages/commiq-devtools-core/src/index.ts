@@ -8,6 +8,8 @@ export type { EventCollectorOptions } from "./collector";
 export { windowMessageTransport, memoryTransport } from "./transport";
 export type { WindowMessageTransportOptions } from "./transport";
 export { safeClone, createSnapshot } from "./snapshot";
+export type { AliasReport, AliasReporter } from "./snapshot";
+export { MAX_ALIAS_WARNINGS } from "./alias-watcher";
 export { toSerializable } from "./serialize";
 export type {
   Devtools,

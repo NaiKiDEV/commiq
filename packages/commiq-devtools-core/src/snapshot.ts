@@ -2,21 +2,43 @@ import type { SnapshotMode } from "./types";
 
 const maxDepth = 12;
 const maxNodes = 10000;
+const unknownPrototypeKind = "value with a custom prototype";
 
-type CloneBudget = { nodes: number };
+export type AliasReport = {
+  path: string;
+  kind: string;
+}
 
-export function createSnapshot(value: unknown, mode: SnapshotMode): unknown {
+export type AliasReporter = (report: AliasReport) => void;
+
+type CloneContext = {
+  nodes: number;
+  seen: Map<object, unknown>;
+  trail: unknown[] | undefined;
+  report: AliasReporter | undefined;
+}
+
+export function createSnapshot(
+  value: unknown,
+  mode: SnapshotMode,
+  report?: AliasReporter,
+): unknown {
   if (mode === "none") {
     return value;
   }
   if (mode === "structured") {
     return structuredSnapshot(value);
   }
-  return safeClone(value);
+  return safeClone(value, report);
 }
 
-export function safeClone(value: unknown): unknown {
-  return cloneValue(value, 0, new Map<object, unknown>(), { nodes: 0 });
+export function safeClone(value: unknown, report?: AliasReporter): unknown {
+  return cloneValue(value, 0, {
+    nodes: 0,
+    seen: new Map<object, unknown>(),
+    trail: report ? [] : undefined,
+    report,
+  });
 }
 
 function structuredSnapshot(value: unknown): unknown {
@@ -30,51 +52,57 @@ function structuredSnapshot(value: unknown): unknown {
   }
 }
 
-function cloneValue(
-  value: unknown,
-  depth: number,
-  seen: Map<object, unknown>,
-  budget: CloneBudget,
-): unknown {
+function cloneValue(value: unknown, depth: number, ctx: CloneContext): unknown {
   if (value === null || typeof value !== "object") {
     return value;
   }
-  if (depth >= maxDepth || budget.nodes >= maxNodes) {
+  if (depth >= maxDepth || ctx.nodes >= maxNodes) {
     return value;
   }
-  if (seen.has(value)) {
-    return seen.get(value);
+  if (ctx.seen.has(value)) {
+    return ctx.seen.get(value);
   }
-  budget.nodes += 1;
+  ctx.nodes += 1;
 
   if (Array.isArray(value)) {
-    return cloneArray(value, depth, seen, budget);
+    return cloneArray(value, depth, ctx);
   }
   if (value instanceof Date) {
     return new Date(value.getTime());
   }
   if (value instanceof Map) {
-    return cloneMap(value, depth, seen, budget);
+    reportAlias(ctx, value);
+    return cloneMap(value, depth, ctx);
   }
   if (value instanceof Set) {
-    return cloneSet(value, depth, seen, budget);
+    reportAlias(ctx, value);
+    return cloneSet(value, depth, ctx);
   }
   if (!isPlainObject(value)) {
+    reportAlias(ctx, value);
     return value;
   }
-  return cloneRecord(value, depth, seen, budget);
+  return cloneRecord(value, depth, ctx);
 }
 
-function cloneArray(
-  value: readonly unknown[],
-  depth: number,
-  seen: Map<object, unknown>,
-  budget: CloneBudget,
-): unknown[] {
+function cloneChild(value: unknown, key: unknown, depth: number, ctx: CloneContext): unknown {
+  const trail = ctx.trail;
+  if (!trail) {
+    return cloneValue(value, depth + 1, ctx);
+  }
+  trail.push(key);
+  const cloned = cloneValue(value, depth + 1, ctx);
+  trail.pop();
+  return cloned;
+}
+
+function cloneArray(value: readonly unknown[], depth: number, ctx: CloneContext): unknown[] {
   const copy: unknown[] = [];
-  seen.set(value, copy);
+  ctx.seen.set(value, copy);
+  let index = 0;
   for (const item of value) {
-    copy.push(cloneValue(item, depth + 1, seen, budget));
+    copy.push(cloneChild(item, index, depth, ctx));
+    index += 1;
   }
   return copy;
 }
@@ -82,43 +110,67 @@ function cloneArray(
 function cloneMap(
   value: Map<unknown, unknown>,
   depth: number,
-  seen: Map<object, unknown>,
-  budget: CloneBudget,
+  ctx: CloneContext,
 ): Map<unknown, unknown> {
   const copy = new Map<unknown, unknown>();
-  seen.set(value, copy);
+  ctx.seen.set(value, copy);
   for (const [key, item] of value) {
-    copy.set(key, cloneValue(item, depth + 1, seen, budget));
+    copy.set(key, cloneChild(item, key, depth, ctx));
   }
   return copy;
 }
 
-function cloneSet(
-  value: Set<unknown>,
-  depth: number,
-  seen: Map<object, unknown>,
-  budget: CloneBudget,
-): Set<unknown> {
+function cloneSet(value: Set<unknown>, depth: number, ctx: CloneContext): Set<unknown> {
   const copy = new Set<unknown>();
-  seen.set(value, copy);
+  ctx.seen.set(value, copy);
+  let index = 0;
   for (const item of value) {
-    copy.add(cloneValue(item, depth + 1, seen, budget));
+    copy.add(cloneChild(item, index, depth, ctx));
+    index += 1;
   }
   return copy;
 }
 
-function cloneRecord(
-  value: object,
-  depth: number,
-  seen: Map<object, unknown>,
-  budget: CloneBudget,
-): Record<string, unknown> {
+function cloneRecord(value: object, depth: number, ctx: CloneContext): Record<string, unknown> {
   const copy: Record<string, unknown> = {};
-  seen.set(value, copy);
+  ctx.seen.set(value, copy);
   for (const [key, item] of safeEntries(value)) {
-    copy[key] = cloneValue(item, depth + 1, seen, budget);
+    copy[key] = cloneChild(item, key, depth, ctx);
   }
   return copy;
+}
+
+function reportAlias(ctx: CloneContext, value: object): void {
+  const report = ctx.report;
+  const trail = ctx.trail;
+  if (!report || !trail) {
+    return;
+  }
+  try {
+    report({ path: trail.map(keyLabel).join("."), kind: kindOf(value) });
+  } catch {
+    ctx.report = undefined;
+  }
+}
+
+function kindOf(value: object): string {
+  try {
+    const name = value.constructor?.name;
+    return name ? name : unknownPrototypeKind;
+  } catch {
+    return unknownPrototypeKind;
+  }
+}
+
+function keyLabel(key: unknown): string {
+  if (typeof key === "string") {
+    return key;
+  }
+  try {
+    return String(key);
+  } catch {
+    return "?";
+  }
 }
 
 function isPlainObject(value: object): boolean {
