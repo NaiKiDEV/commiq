@@ -21,6 +21,7 @@ export function spyOnSubscriptions<S>(
     },
     queue: sealed.queue,
     flush: () => sealed.flush(),
+    suspend: () => sealed.suspend(),
     openStream: (listener: StreamListener): Unsubscribe => {
       opened += 1;
       const unsubscribe = sealed.openStream(listener);

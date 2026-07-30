@@ -59,6 +59,7 @@ function createManualStore(): ManualStore {
     },
     queue: backing.queue,
     flush: () => backing.flush(),
+    suspend: () => backing.suspend(),
     openStream: (listener: StreamListener) => {
       listeners.add(listener);
       return () => {
