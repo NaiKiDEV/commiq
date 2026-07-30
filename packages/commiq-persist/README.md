@@ -1,6 +1,6 @@
 # @naikidev/commiq-persist
 
-State persistence and rehydration for Commiq stores. Automatically saves state to localStorage (or any storage adapter) and restores it on load.
+State persistence and rehydration for Commiq stores. Saves state to `localStorage` (or any storage adapter) with debounced writes, and restores it on load with versioning, migration and validation.
 
 ## Install
 
@@ -20,24 +20,125 @@ store.addCommandHandler("increment", (ctx) => {
   ctx.setState({ count: ctx.state.count + 1 });
 });
 
-const { destroy, hydrated } = persistStore(store, { key: "my-counter" });
+const persisted = persistStore(store, { key: "my-counter" });
 
-// Optional: wait for async storage adapters
-await hydrated;
+// Synchronous adapters (localStorage, sessionStorage, memory) hydrate before
+// `persistStore` returns. Await `hydrated` when the adapter is asynchronous.
+await persisted.hydrated;
 
-// Later, to stop persisting:
-destroy();
+persisted.flush();   // write any pending debounced value now
+persisted.clear();   // remove the stored value (use on logout)
+persisted.destroy(); // flush, unsubscribe, stop persisting
 ```
+
+`persistStore` accepts any object with `state`, `replaceState`, `openStream` and `closeStream` — a `StoreImpl` or your own test double. `PersistResult` satisfies core's `Disposable`, and `destroy()` is idempotent.
+
+### Asynchronous adapters
+
+`hydrated` resolves once the initial read has been applied. With an asynchronous adapter (IndexedDB, network), commands dispatched before that point are overwritten by the restored state, so await `hydrated` before dispatching. Doing it anyway is reported through `onError` with `source: "hydrationRace"` rather than failing silently.
 
 ## Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `key` | `string` | required | Storage key |
-| `storage` | `StorageAdapter` | `localStorage` | Any object with `getItem`/`setItem` |
+| `storage` | `StorageAdapter` | `localStorageAdapter()` | Any object with `getItem`/`setItem` (optionally `removeItem`/`subscribe`) |
 | `debounce` | `number` | `300` | Debounce writes (ms) |
-| `serialize` | `(state) => string` | `JSON.stringify` | Custom serializer |
-| `deserialize` | `(raw) => state` | `JSON.parse` | Custom deserializer |
+| `version` | `number` | `0` | Version stamped into the stored envelope |
+| `migrate` | `(persisted: unknown, from: number) => S` | – | Convert an older persisted value to the current shape |
+| `validate` | `(raw: unknown) => S \| null` | – | Reject an untrusted persisted value by returning `null` |
+| `merge` | `(persisted: unknown, initial: DeepReadonly<S>) => S \| null` | `mergeOverInitial` | Combine the persisted value with the current state |
+| `replacer` | `(key: string, value: unknown) => unknown` | – | `JSON.stringify` replacer |
+| `reviver` | `(key: string, value: unknown) => unknown` | – | `JSON.parse` reviver |
+| `serialize` | `(snapshot: PersistedSnapshot) => string` | JSON envelope | Full control over the stored string |
+| `deserialize` | `(raw: string) => unknown` | `JSON.parse` | Full control over parsing |
+| `clearOnCorrupt` | `boolean` | `true` | Delete the key when it cannot be parsed |
+| `flushOnHide` | `boolean` | `true` | Flush on `pagehide`/`beforeunload` in browsers |
+| `syncTabs` | `boolean` | `false` | Apply changes made by other tabs (needs `subscribe`) |
+| `onError` | `(report: PersistErrorReport) => void` | `console.error` outside production | Error channel |
+
+## Error handling
+
+Nothing throws out of `persistStore`, and neither `hydrated`, `flush()` nor `clear()` ever reject. Every failure is reported to `onError` as `{ error, source, key, raw? }`, mirroring core's `StoreErrorReport`. Sources: `read`, `write`, `remove`, `serialize`, `deserialize`, `migrate`, `validate`, `merge`, `apply`, `hydrationRace`, `unsupported`.
+
+A quota error, an offline adapter or a corrupt key degrades persistence for that operation only — writes keep working afterwards.
+
+## Versioning and migration
+
+Values are stored in an envelope: `{ "$": "commiq/persist", "version": 1, "state": { … } }`. Values written without an envelope (including data written by v1 of this package) are read as version `0`.
+
+```typescript
+persistStore(store, {
+  key: "cart",
+  version: 2,
+  migrate: (persisted, from) => (from === 1 ? upgradeV1(persisted) : emptyCart()),
+  validate: (raw) => cartSchema.safeParse(raw).data ?? null,
+});
+```
+
+When the stored version differs from `version` and no `migrate` is given, hydration is skipped and reported — the store keeps its initial state instead of adopting an unknown shape.
+
+By default the persisted value is shallow-merged **over** the initial state (`mergeOverInitial`), so state keys added in a later release keep their defaults instead of becoming `undefined`. Non-object states (arrays, primitives) are replaced wholesale.
+
+## Storage adapters
+
+```typescript
+import {
+  indexedDbAdapter,
+  localStorageAdapter,
+  memoryStorageAdapter,
+  noopStorageAdapter,
+  sessionStorageAdapter,
+  webStorageAdapter,
+} from "@naikidev/commiq-persist";
+
+persistStore(store, { key: "big", storage: indexedDbAdapter() });
+```
+
+| Adapter | Notes |
+|---|---|
+| `localStorageAdapter()` | Default. Falls back to `noopStorageAdapter()` when unavailable |
+| `sessionStorageAdapter()` | Per-tab storage |
+| `webStorageAdapter(area)` | Wrap any `Storage`, adds cross-tab `subscribe` |
+| `memoryStorageAdapter()` | In-process, useful in tests |
+| `noopStorageAdapter()` | Discards writes, always reads `null` |
+| `indexedDbAdapter(options)` | Asynchronous; accepts `databaseName`, `storeName`, `factory` |
+
+A custom adapter needs `getItem` and `setItem`; add `removeItem` to support `clear()` and `subscribe` to support `syncTabs`.
+
+## Server rendering
+
+The default adapter is resolved lazily and degrades to a no-op when `localStorage` is missing or throws (Next.js/Remix server rendering, Safari private mode), so rendering never crashes. On the server nothing is read or written and `hydrated` resolves immediately; the browser hydrates on mount. Pass `memoryStorageAdapter()` explicitly if you want deterministic behaviour in server tests.
+
+## Cross-tab sync
+
+```typescript
+persistStore(store, { key: "prefs", syncTabs: true });
+```
+
+Changes written by other tabs are applied through `replaceState` (the same migrate/validate/merge pipeline). The store's own writes are not echoed back, and external removals leave the state untouched.
+
+## JSON round-trip limitations
+
+The default codec is `JSON.stringify`/`JSON.parse`, which silently changes some values:
+
+| Value | After reload |
+|---|---|
+| `Date` | ISO string (`.getTime()` throws) |
+| `Map`, `Set` | `{}` |
+| `undefined` property | key removed |
+| `NaN`, `Infinity` | `null` |
+| `BigInt` | throws on write |
+
+Opt into the bundled tagging codec to round-trip them:
+
+```typescript
+import { richReplacer, richReviver } from "@naikidev/commiq-persist";
+
+persistStore(store, { key: "state", replacer: richReplacer, reviver: richReviver });
+```
+
+`Date`, `Map`, `Set`, `NaN`, `±Infinity` and `BigInt` then survive a reload. Properties whose value is `undefined` still come back absent (`JSON.parse` cannot restore them) — `mergeOverInitial` restores their defaults. Class instances and functions are never persisted; keep persisted state to plain data.
 
 ## Documentation
 

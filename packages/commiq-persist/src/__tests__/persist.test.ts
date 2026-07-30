@@ -1,12 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createStore, createCommand } from "@naikidev/commiq";
-import { persistStore } from "../persist";
-import type { StorageAdapter } from "../types";
-
-type TestState = { count: number };
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { BuiltinEvent, createCommand, createStore } from "@naikidev/commiq";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { mergeOverInitial, persistStore } from "../index";
+import type { PersistErrorReport, StorageAdapter } from "../index";
+import {
+  createFakeStore,
+  createSpyStorage,
+  readNumber,
+  readStored,
+  stored,
+} from "./helpers";
+import type { TestState } from "./helpers";
 
 function setup(initial: TestState = { count: 0 }) {
-  const store = createStore<TestState>(initial);
+  const store = createStore<TestState>(initial, { onError: () => {} });
   store.addCommandHandler<number>("increment", (ctx, cmd) => {
     ctx.setState({ count: ctx.state.count + cmd.data });
   });
@@ -16,176 +23,785 @@ function setup(initial: TestState = { count: 0 }) {
 describe("persistStore", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.useFakeTimers();
   });
 
-  it("hydrates from sync storage (localStorage)", async () => {
-    localStorage.setItem("test", JSON.stringify({ count: 42 }));
-    const store = setup();
-
-    const { hydrated } = persistStore(store, { key: "test" });
-    await hydrated;
-
-    expect(store.state).toEqual({ count: 42 });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
-  it("persists state changes to localStorage", async () => {
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      debounce: 0,
+  describe("hydration", () => {
+    it("hydrates synchronously from a sync adapter before hydrated resolves", () => {
+      localStorage.setItem("test", stored({ count: 42 }));
+      const store = setup();
+
+      const persisted = persistStore(store, { key: "test" });
+
+      expect(store.state).toEqual({ count: 42 });
+      persisted.destroy();
     });
-    await hydrated;
 
-    store.queue(createCommand("increment", 5));
-    await store.flush();
+    it("does not discard commands queued before hydration completes", async () => {
+      localStorage.setItem("test", stored({ count: 100 }));
+      const store = setup();
+      const persisted = persistStore(store, { key: "test" });
 
-    // wait for debounce (0ms setTimeout still defers)
-    await new Promise((r) => setTimeout(r, 10));
+      store.queue(createCommand("increment", 7));
+      await store.flush();
 
-    expect(JSON.parse(localStorage.getItem("test")!)).toEqual({ count: 5 });
-    destroy();
+      expect(store.state).toEqual({ count: 107 });
+      persisted.destroy();
+    });
+
+    it("hydrates from an async adapter once hydrated resolves", async () => {
+      const storage = createSpyStorage({ async: true });
+      storage.entries.set("test", stored({ count: 99 }));
+      const store = setup();
+
+      const persisted = persistStore(store, { key: "test", storage });
+      expect(store.state).toEqual({ count: 0 });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 99 });
+      persisted.destroy();
+    });
+
+    it("reports a hydration race when state changes before an async read resolves", async () => {
+      const reports: PersistErrorReport[] = [];
+      let release: (value: string | null) => void = () => {};
+      const storage: StorageAdapter = {
+        getItem: () =>
+          new Promise<string | null>((resolve) => {
+            release = resolve;
+          }),
+        setItem: () => {},
+      };
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        onError: (report) => reports.push(report),
+      });
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      release(stored({ count: 5 }));
+      await persisted.hydrated;
+
+      expect(reports.map((report) => report.source)).toContain("hydrationRace");
+      expect(store.state).toEqual({ count: 5 });
+      persisted.destroy();
+    });
+
+    it("keeps initial state when nothing is stored", async () => {
+      const store = setup({ count: 5 });
+      const persisted = persistStore(store, { key: "test" });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 5 });
+      persisted.destroy();
+    });
+
+    it("hydrates legacy values written without an envelope", async () => {
+      localStorage.setItem("test", JSON.stringify({ count: 12 }));
+      const store = setup();
+      const persisted = persistStore(store, { key: "test" });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 12 });
+      persisted.destroy();
+    });
+
+    it("reports read failures instead of throwing", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => {
+          throw new Error("read denied");
+        },
+        setItem: () => {},
+      };
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("read");
+      expect(store.state).toEqual({ count: 0 });
+      persisted.destroy();
+    });
+
+    it("reports async read rejections instead of leaving an unhandled rejection", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => Promise.reject(new Error("offline")),
+        setItem: () => {},
+      };
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("read");
+      persisted.destroy();
+    });
   });
 
-  it("hydrates from async storage", async () => {
-    const asyncStorage: StorageAdapter = {
-      getItem: async () => JSON.stringify({ count: 99 }),
-      setItem: async () => {},
+  describe("corrupt data", () => {
+    it("reports corrupt JSON and keeps persisting afterwards", async () => {
+      localStorage.setItem("test", "{not json");
+      const reports: PersistErrorReport[] = [];
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        debounce: 0,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("deserialize");
+      expect(reports[0]?.raw).toBe("{not json");
+      expect(store.state).toEqual({ count: 0 });
+
+      store.queue(createCommand("increment", 3));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(readStored(localStorage.getItem("test"))).toEqual({ count: 3 });
+      persisted.destroy();
+    });
+
+    it("clears the corrupt key by default", async () => {
+      localStorage.setItem("test", "{not json");
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(localStorage.getItem("test")).toBeNull();
+      persisted.destroy();
+    });
+
+    it("keeps the corrupt key when clearOnCorrupt is false", async () => {
+      localStorage.setItem("test", "{not json");
+      const store = setup();
+
+      const persisted = persistStore(store, {
+        key: "test",
+        clearOnCorrupt: false,
+        onError: () => {},
+      });
+      await persisted.hydrated;
+
+      expect(localStorage.getItem("test")).toBe("{not json");
+      persisted.destroy();
+    });
+  });
+
+  describe("write failures", () => {
+    it("reports a synchronous setItem failure", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => null,
+        setItem: () => {
+          throw new Error("QuotaExceededError");
+        },
+      };
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        debounce: 0,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(reports[0]?.source).toBe("write");
+      persisted.destroy();
+    });
+
+    it("reports an async setItem rejection", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => null,
+        setItem: () => Promise.reject(new Error("disk full")),
+      };
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        debounce: 0,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+      await persisted.flush();
+
+      expect(reports[0]?.source).toBe("write");
+      persisted.destroy();
+    });
+
+    it("reports a serialize failure", async () => {
+      const reports: PersistErrorReport[] = [];
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        debounce: 0,
+        serialize: () => {
+          throw new Error("circular");
+        },
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(reports[0]?.source).toBe("serialize");
+      expect(localStorage.getItem("test")).toBeNull();
+      persisted.destroy();
+    });
+  });
+
+  describe("writing", () => {
+    it("persists state changes", async () => {
+      const store = setup();
+      const persisted = persistStore(store, { key: "test", debounce: 0 });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 5));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(readStored(localStorage.getItem("test"))).toEqual({ count: 5 });
+      persisted.destroy();
+    });
+
+    it("debounces multiple state changes into one write", async () => {
+      const storage = createSpyStorage();
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        debounce: 50,
+      });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(storage.setItem).toHaveBeenCalledTimes(1);
+      expect(readStored(storage.entries.get("test") ?? null)).toEqual({
+        count: 3,
+      });
+      persisted.destroy();
+    });
+
+    it("does not write while hydrating, even though replaceState reaches event handlers", async () => {
+      const storage = createSpyStorage();
+      storage.entries.set("test", stored({ count: 10 }));
+      const seen: string[] = [];
+      const store = setup();
+      store.addEventHandler(BuiltinEvent.StateChanged, () => {
+        seen.push("stateChanged");
+      });
+      store.addEventHandler(BuiltinEvent.StateReset, () => {
+        seen.push("stateReset");
+      });
+
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        debounce: 0,
+      });
+      await persisted.hydrated;
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(store.state).toEqual({ count: 10 });
+      expect(seen).toContain("stateChanged");
+      expect(seen).toContain("stateReset");
+      expect(storage.setItem).not.toHaveBeenCalled();
+      persisted.destroy();
+    });
+
+    it("uses custom serialize and deserialize", async () => {
+      const serialize = vi.fn((snapshot: { state: unknown }) =>
+        String(readNumber(snapshot.state, "count") ?? 0),
+      );
+      const deserialize = vi.fn((raw: string) => ({ count: Number(raw) }));
+
+      localStorage.setItem("test", "77");
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        serialize,
+        deserialize,
+        debounce: 0,
+      });
+      await persisted.hydrated;
+
+      expect(deserialize).toHaveBeenCalledWith("77");
+      expect(store.state).toEqual({ count: 77 });
+
+      store.queue(createCommand("increment", 3));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(localStorage.getItem("test")).toBe("80");
+      persisted.destroy();
+    });
+  });
+
+  describe("flush and destroy", () => {
+    it("flushes the pending debounced write on destroy", async () => {
+      const store = setup();
+      const persisted = persistStore(store, { key: "test" });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 42));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(50);
+      persisted.destroy();
+
+      expect(readStored(localStorage.getItem("test"))).toEqual({ count: 42 });
+    });
+
+    it("flushes on demand without waiting for the debounce", async () => {
+      const storage = createSpyStorage();
+      const store = setup();
+      const persisted = persistStore(store, { key: "test", storage });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 8));
+      await store.flush();
+      await persisted.flush();
+
+      expect(storage.setItem).toHaveBeenCalledTimes(1);
+      expect(readStored(storage.entries.get("test") ?? null)).toEqual({
+        count: 8,
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(storage.setItem).toHaveBeenCalledTimes(1);
+      persisted.destroy();
+    });
+
+    it("flushes when the page is hidden", async () => {
+      const storage = createSpyStorage();
+      const store = setup();
+      const persisted = persistStore(store, { key: "test", storage });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 4));
+      await store.flush();
+      globalThis.dispatchEvent(new Event("pagehide"));
+
+      expect(readStored(storage.entries.get("test") ?? null)).toEqual({
+        count: 4,
+      });
+      persisted.destroy();
+    });
+
+    it("stops persisting after destroy", async () => {
+      const storage = createSpyStorage();
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        debounce: 0,
+      });
+      await persisted.hydrated;
+      persisted.destroy();
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(storage.setItem).not.toHaveBeenCalled();
+    });
+
+    it("is idempotent when destroy is called twice", async () => {
+      const store = createFakeStore({ count: 0 });
+      const storage = createSpyStorage({ withSubscribe: true });
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+      });
+      await persisted.hydrated;
+
+      expect(store.listenerCount()).toBe(1);
+      persisted.destroy();
+      persisted.destroy();
+
+      expect(store.listenerCount()).toBe(0);
+      expect(storage.subscriberCount()).toBe(0);
+    });
+  });
+
+  describe("clear", () => {
+    it("removes the stored value and cancels pending writes", async () => {
+      const storage = createSpyStorage();
+      const store = setup();
+      const persisted = persistStore(store, { key: "test", storage });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await persisted.clear();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(storage.entries.has("test")).toBe(false);
+      expect(storage.setItem).not.toHaveBeenCalled();
+      persisted.destroy();
+    });
+
+    it("reports adapters without removeItem", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => null,
+        setItem: () => {},
+      };
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+      await persisted.clear();
+
+      expect(reports[0]?.source).toBe("unsupported");
+      persisted.destroy();
+    });
+  });
+
+  describe("versioning", () => {
+    const migrate = (persisted: unknown, from: number): TestState => {
+      if (from === 1) return { count: readNumber(persisted, "value") ?? 0 };
+      return { count: 0 };
     };
-    const store = setup();
 
-    const { hydrated } = persistStore(store, {
-      key: "test",
-      storage: asyncStorage,
+    it("migrates a persisted value from an older version", async () => {
+      localStorage.setItem("test", stored({ value: 5 }, 1));
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        version: 2,
+        migrate,
+      });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 5 });
+      persisted.destroy();
     });
-    await hydrated;
 
-    expect(store.state).toEqual({ count: 99 });
+    it("skips hydration on a version mismatch with no migrate function", async () => {
+      const reports: PersistErrorReport[] = [];
+      localStorage.setItem("test", stored({ value: 5 }, 1));
+      const store = setup({ count: 3 });
+      const persisted = persistStore(store, {
+        key: "test",
+        version: 2,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("migrate");
+      expect(store.state).toEqual({ count: 3 });
+      persisted.destroy();
+    });
+
+    it("reports a throwing migrate function and keeps the initial state", async () => {
+      const reports: PersistErrorReport[] = [];
+      localStorage.setItem("test", stored({ value: 5 }, 1));
+      const store = setup({ count: 3 });
+      const persisted = persistStore(store, {
+        key: "test",
+        version: 2,
+        migrate: () => {
+          throw new Error("bad migration");
+        },
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("migrate");
+      expect(store.state).toEqual({ count: 3 });
+      persisted.destroy();
+    });
+
+    it("writes the configured version into storage", async () => {
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        version: 3,
+        debounce: 0,
+      });
+      await persisted.hydrated;
+
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      const raw: unknown = JSON.parse(localStorage.getItem("test") ?? "null");
+      expect(readNumber(raw, "version")).toBe(3);
+      persisted.destroy();
+    });
   });
 
-  it("persists to async storage", async () => {
-    const setItem = vi.fn<StorageAdapter["setItem"]>(async () => {});
-    const asyncStorage: StorageAdapter = {
-      getItem: async () => null,
-      setItem,
-    };
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      storage: asyncStorage,
-      debounce: 0,
+  describe("validation and merging", () => {
+    it("skips hydration when validate rejects the stored shape", async () => {
+      const reports: PersistErrorReport[] = [];
+      localStorage.setItem("test", stored({ nope: true }));
+      const store = setup({ count: 1 });
+      const persisted = persistStore(store, {
+        key: "test",
+        validate: (raw) => {
+          const count = readNumber(raw, "count");
+          return count === undefined ? null : { count };
+        },
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("validate");
+      expect(store.state).toEqual({ count: 1 });
+      persisted.destroy();
     });
-    await hydrated;
 
-    store.queue(createCommand("increment", 1));
-    await store.flush();
-    await new Promise((r) => setTimeout(r, 10));
+    it("accepts a validated shape", async () => {
+      localStorage.setItem("test", stored({ count: 9 }));
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        validate: (raw) => ({ count: readNumber(raw, "count") ?? 0 }),
+      });
+      await persisted.hydrated;
 
-    expect(setItem).toHaveBeenCalledWith("test", JSON.stringify({ count: 1 }));
-    destroy();
+      expect(store.state).toEqual({ count: 9 });
+      persisted.destroy();
+    });
+
+    it("merges the persisted value over the initial state so new keys keep defaults", async () => {
+      type Wide = { count: number; theme: string };
+      localStorage.setItem("test", stored({ count: 3 }));
+      const store = createStore<Wide>({ count: 0, theme: "light" });
+      const persisted = persistStore(store, { key: "test" });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 3, theme: "light" });
+      persisted.destroy();
+    });
+
+    it("uses a custom merge function", async () => {
+      localStorage.setItem("test", stored({ count: 3 }));
+      const store = setup({ count: 100 });
+      const persisted = persistStore(store, {
+        key: "test",
+        merge: (_persisted, initial) => ({ count: initial.count }),
+      });
+      await persisted.hydrated;
+
+      expect(store.state).toEqual({ count: 100 });
+      persisted.destroy();
+    });
+
+    it("reports a merge rejection", async () => {
+      const reports: PersistErrorReport[] = [];
+      localStorage.setItem("test", stored({ count: 3 }));
+      const store = setup({ count: 1 });
+      const persisted = persistStore(store, {
+        key: "test",
+        merge: () => null,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("merge");
+      expect(store.state).toEqual({ count: 1 });
+      persisted.destroy();
+    });
   });
 
-  it("debounces — only writes last value", async () => {
-    const setItem = vi.fn<StorageAdapter["setItem"]>(async () => {});
-    const storage: StorageAdapter = {
-      getItem: async () => null,
-      setItem,
-    };
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      storage,
-      debounce: 50,
+  describe("cross-tab sync", () => {
+    it("applies external changes when syncTabs is enabled", async () => {
+      const storage = createSpyStorage({ withSubscribe: true });
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+        debounce: 0,
+      });
+      await persisted.hydrated;
+
+      storage.emit(stored({ count: 21 }));
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(store.state).toEqual({ count: 21 });
+      expect(storage.setItem).not.toHaveBeenCalled();
+      persisted.destroy();
     });
-    await hydrated;
 
-    store.queue(createCommand("increment", 1));
-    await store.flush();
-    store.queue(createCommand("increment", 1));
-    await store.flush();
-    store.queue(createCommand("increment", 1));
-    await store.flush();
+    it("ignores the echo of its own write", async () => {
+      const storage = createSpyStorage({ withSubscribe: true });
+      const store = setup();
+      const merge = vi.fn((persisted: unknown, initial: DeepReadonly<TestState>) =>
+        mergeOverInitial<TestState>(persisted, initial),
+      );
+      const result = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+        debounce: 0,
+        merge,
+      });
+      await result.hydrated;
 
-    await new Promise((r) => setTimeout(r, 100));
+      store.queue(createCommand("increment", 5));
+      await store.flush();
+      await result.flush();
+      storage.emit(storage.entries.get("test") ?? "");
 
-    expect(setItem).toHaveBeenCalledTimes(1);
-    expect(setItem).toHaveBeenCalledWith("test", JSON.stringify({ count: 3 }));
-    destroy();
+      expect(merge).not.toHaveBeenCalled();
+
+      storage.emit(stored({ count: 9 }));
+
+      expect(merge).toHaveBeenCalledTimes(1);
+      expect(store.state).toEqual({ count: 9 });
+      result.destroy();
+    });
+
+    it("ignores external removals", async () => {
+      const storage = createSpyStorage({ withSubscribe: true });
+      const store = setup({ count: 7 });
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+      });
+      await persisted.hydrated;
+
+      storage.emit(null);
+
+      expect(store.state).toEqual({ count: 7 });
+      persisted.destroy();
+    });
+
+    it("reports a failing replaceState instead of throwing from the event listener", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage = createSpyStorage({ withSubscribe: true });
+      const base = createFakeStore({ count: 0 });
+      const store = {
+        ...base,
+        get state() {
+          return base.state;
+        },
+        replaceState: () => {
+          throw new Error("store rejected the state");
+        },
+      };
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      storage.emit(stored({ count: 1 }));
+
+      expect(reports[0]?.source).toBe("apply");
+      persisted.destroy();
+    });
+
+    it("reports adapters that cannot subscribe", async () => {
+      const reports: PersistErrorReport[] = [];
+      const storage: StorageAdapter = {
+        getItem: () => null,
+        setItem: () => {},
+      };
+      const store = setup();
+      const persisted = persistStore(store, {
+        key: "test",
+        storage,
+        syncTabs: true,
+        onError: (report) => reports.push(report),
+      });
+      await persisted.hydrated;
+
+      expect(reports[0]?.source).toBe("unsupported");
+      persisted.destroy();
+    });
   });
 
-  it("does not write during hydration (rehydration loop prevention)", async () => {
-    const setItem = vi.fn<StorageAdapter["setItem"]>(() => {});
-    const storage: StorageAdapter = {
-      getItem: () => JSON.stringify({ count: 10 }),
-      setItem,
-    };
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      storage,
-      debounce: 0,
+  describe("server rendering", () => {
+    it("degrades to a no-op when localStorage is unavailable", async () => {
+      vi.stubGlobal("localStorage", undefined);
+      const store = setup({ count: 2 });
+
+      const persisted = persistStore(store, { key: "test", debounce: 0 });
+      await persisted.hydrated;
+      store.queue(createCommand("increment", 1));
+      await store.flush();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(store.state).toEqual({ count: 3 });
+      persisted.destroy();
     });
-    await hydrated;
 
-    // wait for any potential debounce
-    await new Promise((r) => setTimeout(r, 50));
+    it("degrades when reading localStorage throws", async () => {
+      const descriptor = Object.getOwnPropertyDescriptor(
+        globalThis,
+        "localStorage",
+      );
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get: () => {
+          throw new Error("access denied");
+        },
+      });
 
-    expect(setItem).not.toHaveBeenCalled();
-    destroy();
-  });
-
-  it("does not write after destroy", async () => {
-    const setItem = vi.fn<StorageAdapter["setItem"]>(async () => {});
-    const storage: StorageAdapter = {
-      getItem: async () => null,
-      setItem,
-    };
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      storage,
-      debounce: 0,
+      try {
+        const store = setup({ count: 1 });
+        const persisted = persistStore(store, { key: "test" });
+        await persisted.hydrated;
+        expect(store.state).toEqual({ count: 1 });
+        persisted.destroy();
+      } finally {
+        if (descriptor === undefined) {
+          Reflect.deleteProperty(globalThis, "localStorage");
+        } else {
+          Object.defineProperty(globalThis, "localStorage", descriptor);
+        }
+      }
     });
-    await hydrated;
-    destroy();
-
-    store.queue(createCommand("increment", 1));
-    await store.flush();
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(setItem).not.toHaveBeenCalled();
-  });
-
-  it("uses custom serialize/deserialize", async () => {
-    const serialize = vi.fn((s: TestState) => String(s.count));
-    const deserialize = vi.fn((raw: string) => ({ count: Number(raw) }));
-
-    localStorage.setItem("test", "77");
-    const store = setup();
-    const { hydrated, destroy } = persistStore(store, {
-      key: "test",
-      serialize,
-      deserialize,
-      debounce: 0,
-    });
-    await hydrated;
-
-    expect(deserialize).toHaveBeenCalledWith("77");
-    expect(store.state).toEqual({ count: 77 });
-
-    store.queue(createCommand("increment", 3));
-    await store.flush();
-    await new Promise((r) => setTimeout(r, 10));
-
-    expect(serialize).toHaveBeenCalledWith({ count: 80 });
-    destroy();
-  });
-
-  it("resolves hydrated when no stored value exists", async () => {
-    const store = setup({ count: 5 });
-    const { hydrated, destroy } = persistStore(store, { key: "test" });
-    await hydrated;
-
-    expect(store.state).toEqual({ count: 5 });
-    destroy();
   });
 });
