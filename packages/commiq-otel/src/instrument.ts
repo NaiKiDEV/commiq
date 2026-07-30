@@ -14,6 +14,13 @@ let _activeCommandSpan: Span | null = null;
 const _prevActiveSpans = new Map<string, Span | null>();
 const _liveSpans = new Set<Span>();
 
+export function __resetForTests(): void {
+  spanRegistry.clear();
+  _activeCommandSpan = null;
+  _prevActiveSpans.clear();
+  _liveSpans.clear();
+}
+
 export function instrumentStore(
   store: StoreWithStream,
   options: InstrumentOptions,

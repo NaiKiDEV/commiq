@@ -11,12 +11,13 @@ import {
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { trace } from "@opentelemetry/api";
-import { instrumentStore } from "../instrument";
+import { instrumentStore, __resetForTests } from "../instrument";
 
 let provider: BasicTracerProvider;
 let exporter: InMemorySpanExporter;
 
 beforeEach(() => {
+  __resetForTests();
   trace.disable();
   exporter = new InMemorySpanExporter();
   provider = new BasicTracerProvider();

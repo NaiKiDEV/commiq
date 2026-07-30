@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createStore, createCommand, BuiltinEvent, matchEvent } from "../index";
 import type { StoreEvent, Command } from "../types";
+import { createGate, drain } from "./gate";
 
 describe("interruptable commands", () => {
   it("interruptable handler receives a working signal", async () => {
@@ -37,6 +38,7 @@ describe("interruptable commands", () => {
 
   it("re-queuing same command aborts running handler", async () => {
     const store = createStore({ value: "" });
+    const gate = createGate();
     const interrupted: Array<{ command: Command; phase: string }> = [];
 
     store.openStream((event: StoreEvent) => {
@@ -46,7 +48,7 @@ describe("interruptable commands", () => {
     });
 
     store.addCommandHandler("search", async (ctx) => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await gate.wait();
       if (!ctx.signal!.aborted) {
         ctx.setState({ value: ctx.state.value + "x" });
       }
@@ -54,9 +56,9 @@ describe("interruptable commands", () => {
 
     store.queue(createCommand("search", undefined));
     // Queue another while first is running — this triggers abort on first
-    await new Promise((r) => setTimeout(r, 10));
+    await gate.parked();
     store.queue(createCommand("search", undefined));
-    await store.flush();
+    await drain(store, gate);
 
     expect(interrupted.some((e) => e.phase === "running")).toBe(true);
     // Only the second command should complete
@@ -65,6 +67,7 @@ describe("interruptable commands", () => {
 
   it("re-queuing removes queued (not-yet-started) duplicates", async () => {
     const store = createStore({ count: 0 });
+    const gate = createGate();
     const interrupted: Array<{ command: Command; phase: string }> = [];
 
     store.openStream((event: StoreEvent) => {
@@ -73,9 +76,9 @@ describe("interruptable commands", () => {
       }
     });
 
-    // Use a slow blocking handler to ensure queue builds up
+    // Use a gated blocking handler to ensure queue builds up
     store.addCommandHandler("block", async () => {
-      await new Promise((r) => setTimeout(r, 50));
+      await gate.wait();
     });
 
     store.addCommandHandler<number>("update", (ctx, cmd) => {
@@ -89,7 +92,7 @@ describe("interruptable commands", () => {
     // This should remove the queued "update 1" and "update 2"
     store.queue(createCommand("update", 3));
 
-    await store.flush();
+    await drain(store, gate);
 
     const queuedInterrupts = interrupted.filter((e) => e.phase === "queued");
     expect(queuedInterrupts).toHaveLength(2);
@@ -98,6 +101,7 @@ describe("interruptable commands", () => {
 
   it("CommandInterrupted event has correct phase for queued commands", async () => {
     const store = createStore({ value: "" });
+    const gate = createGate();
     const phases: string[] = [];
 
     store.openStream((event: StoreEvent) => {
@@ -107,7 +111,7 @@ describe("interruptable commands", () => {
     });
 
     store.addCommandHandler("block", async () => {
-      await new Promise((r) => setTimeout(r, 30));
+      await gate.wait();
     });
 
     store.addCommandHandler("task", (ctx) => {
@@ -118,17 +122,18 @@ describe("interruptable commands", () => {
     store.queue(createCommand("task", undefined));
     store.queue(createCommand("task", undefined)); // replaces the queued one
 
-    await store.flush();
+    await drain(store, gate);
 
     expect(phases).toContain("queued");
   });
 
   it("multiple rapid re-queues: only last one runs", async () => {
     const store = createStore({ value: "" });
+    const gate = createGate();
     const handled: number[] = [];
 
     store.addCommandHandler("block", async () => {
-      await new Promise((r) => setTimeout(r, 20));
+      await gate.wait();
     });
 
     store.addCommandHandler<number>("rapid", (ctx, cmd) => {
@@ -143,7 +148,7 @@ describe("interruptable commands", () => {
     store.queue(createCommand("rapid", 4));
     store.queue(createCommand("rapid", 5));
 
-    await store.flush();
+    await drain(store, gate);
 
     expect(handled).toEqual([5]);
     expect(store.state.value).toBe("5");
@@ -166,10 +171,11 @@ describe("interruptable commands", () => {
 
   it("rollbackOnInterrupt restores previous state when aborted", async () => {
     const store = createStore({ value: "initial" });
+    const gate = createGate();
 
     store.addCommandHandler("slow", async (ctx) => {
       ctx.setState({ value: "partial" });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await gate.wait();
       if (!ctx.signal!.aborted) {
         ctx.setState({ value: "done" });
       }
@@ -178,15 +184,16 @@ describe("interruptable commands", () => {
     store.addCommandHandler("noop", () => {});
 
     store.queue(createCommand("slow", undefined));
-    await new Promise((r) => setTimeout(r, 10));
+    await gate.parked();
     store.queue(createCommand("slow", undefined));
-    await store.flush();
+    await drain(store, gate);
 
     expect(store.state.value).toBe("done");
   });
 
   it("rollbackOnInterrupt restores state when handler throws after abort", async () => {
     const store = createStore({ value: "initial" });
+    const gate = createGate();
     const states: string[] = [];
 
     store.openStream((event: StoreEvent) => {
@@ -197,16 +204,18 @@ describe("interruptable commands", () => {
 
     store.addCommandHandler<string>("abortable", async (ctx, cmd) => {
       ctx.setState({ value: cmd.data });
-      await new Promise((resolve, reject) => {
-        ctx.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-        setTimeout(resolve, 100);
-      });
+      await Promise.race([
+        gate.wait(),
+        new Promise<never>((_, reject) => {
+          ctx.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        }),
+      ]);
     }, { interruptable: true, rollbackOnInterrupt: true });
 
     store.queue(createCommand("abortable", "first"));
-    await new Promise((r) => setTimeout(r, 10));
+    await gate.parked();
     store.queue(createCommand("abortable", "second"));
-    await store.flush();
+    await drain(store, gate);
 
     expect(states[0]).toBe("initial");
     expect(store.state.value).toBe("second");
@@ -214,25 +223,27 @@ describe("interruptable commands", () => {
 
   it("without rollbackOnInterrupt, partial state persists after interrupt", async () => {
     const store = createStore({ value: "initial" });
+    const gate = createGate();
 
     store.addCommandHandler("slow", async (ctx) => {
       ctx.setState({ value: "partial" });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await gate.wait();
       if (!ctx.signal!.aborted) {
         ctx.setState({ value: "done" });
       }
     }, { interruptable: true });
 
     store.queue(createCommand("slow", undefined));
-    await new Promise((r) => setTimeout(r, 10));
+    await gate.parked();
     store.queue(createCommand("slow", undefined));
-    await store.flush();
+    await drain(store, gate);
 
     expect(store.state.value).toBe("done");
   });
 
   it("handler that throws AbortError when aborted emits CommandInterrupted", async () => {
     const store = createStore({ value: "" });
+    const gate = createGate();
     const events: string[] = [];
 
     store.openStream((event: StoreEvent) => {
@@ -241,17 +252,19 @@ describe("interruptable commands", () => {
     });
 
     store.addCommandHandler("abortable", async (ctx) => {
-      await new Promise((resolve, reject) => {
-        ctx.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-        setTimeout(resolve, 100);
-      });
+      await Promise.race([
+        gate.wait(),
+        new Promise<never>((_, reject) => {
+          ctx.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+        }),
+      ]);
       ctx.setState({ value: "done" });
     }, { interruptable: true });
 
     store.queue(createCommand("abortable", undefined));
-    await new Promise((r) => setTimeout(r, 10));
+    await gate.parked();
     store.queue(createCommand("abortable", undefined));
-    await store.flush();
+    await drain(store, gate);
 
     expect(events).toContain("interrupted");
     expect(events).not.toContain("error");

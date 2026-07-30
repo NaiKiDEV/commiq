@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createStore, createCommand, BuiltinEvent, matchEvent } from "../index";
 import { sealStore } from "../proxy";
+import { createGate, drain } from "./gate";
 
 describe("createStore", () => {
   it("creates a store with initial state", () => {
@@ -31,14 +32,15 @@ describe("createStore", () => {
   it("processes commands sequentially", async () => {
     const order: number[] = [];
     const store = createStore({ value: "" });
+    const gate = createGate();
     store.addCommandHandler<number>("append", async (ctx, cmd) => {
       order.push(cmd.data);
-      await new Promise((r) => setTimeout(r, cmd.data === 1 ? 50 : 10));
+      if (cmd.data === 1) await gate.wait();
       ctx.setState({ value: ctx.state.value + cmd.data });
     });
     store.queue(createCommand("append", 1));
     store.queue(createCommand("append", 2));
-    await store.flush();
+    await drain(store, gate);
     expect(store.state.value).toBe("12");
     expect(order).toEqual([1, 2]);
   });
