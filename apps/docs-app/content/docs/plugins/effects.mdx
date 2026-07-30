@@ -1,12 +1,14 @@
 ---
 title: Effects
+description: Structured side effects for commiq stores — concurrency modes, cancellation, debounce, and an explicit error channel.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Effects API
 
-`@naikidev/commiq-effects` provides structured side effects triggered by store events. Effects run outside the store's command processing loop and support cancellation, restart, and debounce patterns.
+`@naikidev/commiq-effects` runs side effects triggered by store events. Effects live outside the command processing loop, so they can `await` network calls without blocking the queue, and they write back to the store only through `ctx.queue()`.
 
 ## Installation
 
@@ -33,111 +35,238 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
   </Tab>
 </Tabs>
 
-## Basic Usage
+## Basic usage
 
 ```ts
-import { createStore, createEvent, createCommand, sealStore } from "@naikidev/commiq";
+import { createStore, createCommandDef, createEvent, sealStore } from "@naikidev/commiq";
 import { createEffects } from "@naikidev/commiq-effects";
 
-const store = createStore({ results: [] });
+type SearchState = { results: string[] };
+
+const store = createStore<SearchState>({ results: [] });
 const searchRequested = createEvent<string>("searchRequested");
+const setResults = createCommandDef<string[]>("setResults");
 
 store.addCommandHandler("search", (ctx, cmd) => {
   ctx.emit(searchRequested, cmd.data);
 });
 
-store.addCommandHandler("setResults", (ctx, cmd) => {
+store.addCommandHandler(setResults, (ctx, cmd) => {
   ctx.setState({ results: cmd.data });
 });
 
-const sealed = sealStore(store);
-const effects = createEffects(sealed);
+const effects = createEffects(sealStore(store), {
+  onError: (report) => console.error(report.source, report.error),
+});
 
-effects.on(searchRequested, async (query, ctx) => {
-  const res = await fetch(`/api/search?q=${query}`, { signal: ctx.signal });
-  const data = await res.json();
-  ctx.queue(createCommand("setResults", data));
-}, { restartOnNew: true });
+const off = effects.on(
+  searchRequested,
+  async (query, ctx) => {
+    const res = await fetch(`/api/search?q=${query}`, { signal: ctx.signal });
+    const data: string[] = await res.json();
+    ctx.queue(setResults, data);
+  },
+  { debounce: 200 },
+);
 ```
 
-## `createEffects(store)`
+<Callout type="warn">
+Wire `onError` when you create the instance. An effect that throws does not fail the command that emitted the event, does not reject anywhere, and does not surface in the browser console unless you asked for it. Without a reporter, a typo or a failed `fetch` inside an effect is invisible in production.
+</Callout>
 
-Creates an effects manager attached to a sealed store. Returns an `Effects` handle.
+## `createEffects<S>(store, options?)`
+
+Creates an effects instance bound to a `SealedStore<S>`. The generic is inferred from the store, so `EffectContext.state` is typed as `DeepReadonly<S>` without annotation.
 
 ```ts
-const effects = createEffects(sealedStore);
+const effects = createEffects(sealStore(store), { onError: report });
 ```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `onError` | `(report: EffectErrorReport) => void` | Instance-wide error reporter. Per-registration `onError` overrides it |
+
+The returned `Effects<S>` satisfies core's `Disposable`, so it can be torn down by the same generic loop as every other commiq plugin:
+
+```ts
+import type { Disposable } from "@naikidev/commiq";
+
+const plugins: Disposable[] = [effects, devtools, persisted];
+for (const plugin of plugins) plugin.destroy();
+```
+
+`destroy()` aborts every in-flight run, clears pending debounce timers, disconnects the stream listener, and is idempotent.
 
 ## `effects.on(eventDef, handler, options?)`
 
-Registers an effect handler that runs when the given event is emitted.
+Registers a handler and returns an `Unsubscribe`. Calling it removes just that registration — its in-flight runs are aborted and its debounce timer cleared, with no effect on other registrations.
 
 ```ts
-effects.on(myEvent, (data, ctx) => {
-  // data is the event payload
-  // ctx.signal is an AbortSignal for cancellation
-  // ctx.queue() dispatches commands to the store
-}, options);
+const off = effects.on(uploadStarted, handleUpload, { mode: "parallel" });
+off();
 ```
 
-### Effect Context (`EffectContext`)
+Registering after `destroy()` is a no-op: the call returns an inert unsubscribe and reports `destroyedEffects`.
 
-| Property | Type | Description |
+### `EffectHandler<S, D>`
+
+```ts
+type EffectHandler<S, D = unknown> = (
+  data: D,
+  ctx: EffectContext<S>,
+) => void | Promise<void>;
+```
+
+The type parameters are ordered `<S, D>` to match core's `CommandHandler<S, D>`. In v1 they were `<D, S>`; an explicit annotation written for v1 needs its arguments swapped.
+
+### `EffectContext<S>`
+
+| Member | Type | Description |
 | --- | --- | --- |
-| `queue` | `(command: Command) => void` | Queue a command on the store |
-| `signal` | `AbortSignal` | Signals when the effect is cancelled |
+| `state` | `DeepReadonly<S>` | Live store state, read at access time — not a snapshot from when the effect started |
+| `queue` | `QueueFn` | Dispatch a command or command def. Gated — see [Dispatch guards](#dispatch-guards) |
+| `signal` | `AbortSignal` | Aborted on cancellation, restart, or `destroy()` |
 
-### Options
+`ctx.state` reads the current value every time you touch it, which is what makes it useful: a long-running effect can check whether its work is still relevant without closing over the store.
+
+```ts
+effects.on(pollRequested, async (_, ctx) => {
+  while (!ctx.signal.aborted) {
+    if (ctx.state.mode !== "live") return;
+    const tick = await fetchTick({ signal: ctx.signal });
+    ctx.queue(applyTick, tick);
+  }
+});
+```
+
+Because state is `DeepReadonly<S>` and deep-frozen outside production, an effect cannot write to it directly. `ctx.queue()` is the only path back into the store.
+
+### `EffectOptions`
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `restartOnNew` | `boolean` | `false` | Cancel the running effect if the same event fires again |
-| `cancelOn` | `EventDef` | — | Cancel the running effect when this event fires |
-| `debounce` | `number` | — | Delay execution in ms; resets on each new trigger (last-wins) |
+| `mode` | `"parallel" \| "switch" \| "drop" \| "queue"` | `"switch"` | Concurrency policy |
+| `debounce` | `number` | `0` | Delay in ms before running, last-wins. Cleared by `cancelOn` and `destroy()` |
+| `cancelOn` | `EventDef` | — | Aborts every in-flight run of *this* registration and clears its pending debounce |
+| `onError` | `(report: EffectErrorReport) => void` | instance `onError` | Per-registration reporter |
+| `restartOnNew` | `boolean` | — | **Deprecated.** See below |
 
-## `effects.destroy()`
+## Concurrency modes
 
-Aborts all running effects, clears pending debounce timers, and disconnects from the store stream.
+<Callout type="warn">
+`mode` defaults to `"switch"`. In v1 concurrency was undocumented and effectively parallel: ten rapid triggers meant ten live runs writing to the store in completion order. If you relied on that, set `mode: "parallel"` explicitly.
+</Callout>
 
-```ts
-effects.destroy();
-```
+| Mode | Behaviour |
+| --- | --- |
+| `switch` | **Default.** Aborts in-flight runs, then starts the new one. Correct for search-as-you-type, fetch-on-change, and anything where only the latest trigger's result should apply |
+| `parallel` | Every trigger starts another run, all concurrent, last response wins. Opt in for parallel uploads or fan-out requests |
+| `drop` | Ignores the trigger while a non-aborted run is still active |
+| `queue` | Chains runs — each trigger waits for the previous one to settle |
+
+Run state and timers are tracked **per registration**, so two effects listening to the same event never interfere.
+
+### `restartOnNew` is deprecated
+
+`mode` wins whenever both are set.
+
+| v1 | v2 equivalent |
+| --- | --- |
+| `restartOnNew: true` | `mode: "switch"` (already the default) |
+| `restartOnNew: false` | `mode: "parallel"` |
+| omitted | `mode: "switch"` — **behaviour change** |
+
+`restartOnNew: false` maps to `parallel` rather than to the new default, because a v1 caller who wrote it was explicitly asking for concurrent runs.
 
 ## Cancellation
 
-Effects receive an `AbortSignal` via `ctx.signal`. Use it to cancel in-flight work:
+`ctx.signal` aborts on restart (`switch`), on `cancelOn`, and on `destroy()`. Pass it to anything that accepts one, and re-check it after every `await`:
 
 ```ts
 effects.on(fetchRequested, async (url, ctx) => {
   const res = await fetch(url, { signal: ctx.signal });
   const data = await res.json();
-  ctx.queue(createCommand("setData", data));
-}, { restartOnNew: true });
+  if (ctx.signal.aborted) return;
+  ctx.queue(setData, data);
+});
 ```
 
-When an effect is cancelled (via `restartOnNew`, `cancelOn`, or `destroy`), `AbortError` exceptions are silently swallowed.
+The `if (ctx.signal.aborted) return` is belt-and-braces rather than load-bearing — the dispatch below would be blocked anyway — but it avoids doing pointless work after cancellation.
 
-## Cancel on Event
-
-Use `cancelOn` to abort a running effect when a specific event fires:
+### `cancelOn`
 
 ```ts
-const uploadStarted = createEvent("uploadStarted");
+const uploadStarted = createEvent<File>("uploadStarted");
 const uploadCancelled = createEvent("uploadCancelled");
 
-effects.on(uploadStarted, async (file, ctx) => {
-  await uploadFile(file, { signal: ctx.signal });
-  ctx.queue(createCommand("uploadComplete", file.name));
-}, { cancelOn: uploadCancelled });
+effects.on(
+  uploadStarted,
+  async (file, ctx) => {
+    await uploadFile(file, { signal: ctx.signal });
+    ctx.queue(uploadComplete, file.name);
+  },
+  { cancelOn: uploadCancelled, mode: "parallel" },
+);
 ```
 
-## Debounce
+`cancelOn` aborts in-flight runs **and** clears a pending debounce timer, so an explicitly cancelled effect no longer fires once the timer elapses.
 
-Delay effect execution. Each new trigger resets the timer — only the last event's data is used:
+### Dispatch guards
+
+`ctx.queue()` is gated on the run's `signal` and on the instance lifetime. A cancelled or post-`destroy()` run cannot write to the store: the dispatch is **dropped**, reported through `onError` with `source: "abortedDispatch"` (or `"destroyedEffects"`), and the returned `CommandHandle` resolves with `status: "discarded"`.
+
+This is what stops a stale search response overwriting a fresh one. In v1 `ctx.queue` was a bare pass-through, so a cancelled effect resuming from an `await` still dispatched.
+
+## Error handling
+
+Resolution order for a report is registration `onError` → instance `onError` → default. The default logs via `console.error` unless `NODE_ENV === "production"`.
 
 ```ts
-effects.on(inputChanged, async (query, ctx) => {
-  const results = await search(query, { signal: ctx.signal });
-  ctx.queue(createCommand("setResults", results));
-}, { debounce: 300 });
+type EffectErrorReport = {
+  error: unknown;
+  source: "effectHandler" | "abortedDispatch" | "destroyedEffects";
+  event?: StoreEvent;
+  command?: Command;
+};
 ```
+
+| `source` | Raised when |
+| --- | --- |
+| `effectHandler` | The handler threw or rejected with anything other than an `AbortError` |
+| `abortedDispatch` | `ctx.queue()` was called from a run that had already been cancelled |
+| `destroyedEffects` | `ctx.queue()` or `on()` was called after `destroy()` |
+
+The shape mirrors core's `StoreErrorReport`, so one reporter function can serve both channels.
+
+`AbortError` is the only thing still swallowed, because it is the expected outcome of cancellation. Everything else is reported.
+
+<Callout type="warn">
+In v1 the documentation claimed only `AbortError` was swallowed. In practice **every** error was discarded — no rejection, no log, no hook. If you are migrating, expect previously-silent failures to start reporting once you attach `onError`. That is the bug surfacing, not a new one.
+</Callout>
+
+## Effects and `stateChanged`
+
+Core now publishes `stateChanged` on every `ctx.setState()` rather than once per command, so a handler that calls `setState` three times produces three events. An effect registered on `BuiltinEvent.StateChanged` therefore triggers more often in v2 than it did in v1.
+
+Prefer domain events over `stateChanged` for effects. If you do need it, `mode: "switch"` (the default) collapses a burst to one run, and `debounce` collapses it further.
+
+## Testing
+
+`createEffects` needs only a `SealedStore<S>`, and `destroy()` is idempotent, so a test can tear down in `afterEach` unconditionally:
+
+```ts
+import { createCommand, sealStore } from "@naikidev/commiq";
+import { createEffects } from "@naikidev/commiq-effects";
+import type { EffectErrorReport } from "@naikidev/commiq-effects";
+
+const reports: EffectErrorReport[] = [];
+const effects = createEffects(sealStore(store), {
+  onError: (report) => reports.push(report),
+});
+
+effects.on(searchRequested, handler);
+store.queue(createCommand("search", "term"));
+await store.flush();
+```
+
+Collecting reports into an array is the cheapest way to assert that an effect failed the way you expected — and to catch the effects that fail in ways you did not.

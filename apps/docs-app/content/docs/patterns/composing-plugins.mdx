@@ -5,72 +5,101 @@ description: Initialize multiple plugins on a single store with correct ordering
 
 import { Steps, Step } from 'fumadocs-ui/components/steps';
 
-Commiq plugins — devtools, effects, persist — each attach to a sealed store independently. As your application grows, a single store may use two or three plugins simultaneously. Getting the initialization order right and cleaning up correctly prevents subtle bugs.
+Commiq plugins — devtools, effects, persist, OpenTelemetry — each attach to a store independently. As an application grows, a single store may use two or three at once. Getting the order right and disposing of them correctly avoids leaked listeners and silently inert instrumentation.
 
 ## Plugin initialization order
-
-All plugins consume a sealed store. The sequence is always:
 
 <Steps>
 <Step>
 
 ### Create and configure the raw store
 
-Register context extensions first (if any), then command handlers and event handlers on the raw `StoreImpl`:
+Register context extensions first, then command and event handlers on the raw `StoreImpl`:
 
 ```ts
-const _store = createStore<AppState>(initialState)
-  .useExtension(myExtension)       // extensions first
-  .addCommandHandler("app:load", /* ... */)
-  .addEventHandler(AppEvent.Loaded, /* ... */);
+const _store = createStore<AppState>(initialState, { onError: reportError })
+  .useExtension(withGuard<AppState>())
+  .addCommandHandler(AppCommand.load, handleLoad);
+
+_store.addEventHandler(AppEvent.Loaded, handleLoaded);
 ```
 
-Context extensions must be registered before the first command is processed. See [context extensions](/plugins/context) for details.
+`addCommandHandler` and `useExtension` return the store, so they chain. `addEventHandler` returns an `Unsubscribe` and therefore ends a chain — call it as a separate statement.
+
+Extensions must be registered before the first command is processed; `useExtension` throws on an already-active store. See [context extensions](/plugins/context).
 
 </Step>
 <Step>
 
 ### Seal the store
 
-Create the read-only proxy that plugins will consume:
-
 ```ts
 export const appStore = sealStore(_store);
 ```
 
+`sealStore` returns a facade exposing `state`, `queue`, `flush`, `suspend`, `openStream`, and `closeStream`. It narrows the surface consumers see; it does not deep-freeze anything the store has not already frozen.
+
 </Step>
 <Step>
 
-### Attach plugins to the sealed store
+### Attach plugins
 
-Each plugin receives the sealed store and subscribes to its event stream internally:
+Each plugin takes the store and subscribes to its event stream internally:
 
 ```ts
-const devtools = createDevtools({ stores: [{ name: "app", store: appStore }] });
-const effects = createEffects(appStore);
+const devtools = createDevtools({ maxEvents: 500 });
+devtools.connect(_store, "app");
+
+const effects = createEffects(appStore, { onError: reportEffectError });
 ```
 
 </Step>
 </Steps>
 
 <Callout type="info">
-Plugins must be created _after_ `sealStore`. They depend on the sealed store's `openStream` and `queue` methods. Passing a raw `StoreImpl` directly will work at runtime but bypasses the sealed interface, which defeats the purpose of encapsulation.
+Effects, persist, and OpenTelemetry accept the sealed store. Devtools' `connect` takes anything with `state` and `openStream`/`closeStream`, so either the raw or the sealed store works — pass the sealed one unless you have a reason not to.
+</Callout>
+
+## Devtools
+
+`createDevtools(options)` creates the collector. Stores attach afterwards with `connect(store, name)` — there is no `stores` option on the factory.
+
+```ts title="stores/search.ts"
+import { createDevtools } from "@naikidev/commiq-devtools-core";
+import { searchStore } from "./search";
+import { inventoryStore } from "./inventory";
+
+export const devtools = createDevtools({
+  maxEvents: 500,
+  logToConsole: false,
+});
+
+devtools.connect(searchStore, "search");
+devtools.connect(inventoryStore, "inventory");
+```
+
+`DevtoolsOptions` is `{ transport?, maxEvents?, maxSnapshots?, snapshotMode?, detectAliasedState?, logToConsole?, onError? }`. Every store you want in the timeline needs its own `connect` call; the name you pass is the label used by `getTimeline(storeName)`, `getStateHistory(storeName)`, and `disconnect(storeName)`.
+
+<Callout type="warn">
+A store that is never `connect`ed produces no timeline entries and no error. If devtools shows an empty timeline, check that `connect` ran — and that the module containing it was actually imported.
 </Callout>
 
 ## Devtools + Effects
 
-The most common combination. Devtools observes all events (including those triggered by effects), and effects react to events emitted by command handlers:
+The common combination. Devtools observes every event, including those caused by effects; effects react to events emitted by command handlers.
 
 ```ts title="stores/search.ts"
+import { createCommand } from "@naikidev/commiq";
 import { createDevtools } from "@naikidev/commiq-devtools-core";
 import { createEffects } from "@naikidev/commiq-effects";
 import { searchStore, SearchEvent } from "./search";
 
-const devtools = createDevtools({
-  stores: [{ name: "search", store: searchStore }],
-});
+const devtools = createDevtools({ maxEvents: 500 });
+devtools.connect(searchStore, "search");
 
-const effects = createEffects(searchStore);
+const effects = createEffects(searchStore, {
+  onError: (report) => console.error("[effects]", report.source, report.error),
+});
 
 effects.on(
   SearchEvent.Completed,
@@ -81,58 +110,85 @@ effects.on(
 );
 ```
 
-Devtools captures every event in the timeline, including `search:add-recent` commands queued by the effect. This gives full visibility into the cause-and-effect chain. See [effects and cancellation](/patterns/effects-and-cancellation) for the full effects API.
+Commands queued by the effect appear in the timeline with a `causedBy` link back to the event that triggered them, so `getChain(correlationId)` reconstructs the whole cause-and-effect path. See [effects and cancellation](/patterns/effects-and-cancellation).
 
-## Full composition example
+## OpenTelemetry
 
-A store with devtools, effects, and OpenTelemetry:
+The otel package exports `instrumentStore(store, options)`. There is no plugin factory and no `serviceName` option — the service name belongs to the OpenTelemetry `Resource`, which you configure when you set up the tracer provider.
+
+```ts title="telemetry.ts"
+import { createTraceRegistry, instrumentStore } from "@naikidev/commiq-otel";
+import { orderStore } from "./stores/order";
+import { paymentStore } from "./stores/payment";
+
+const registry = createTraceRegistry();
+
+const instrumentations = [
+  instrumentStore(orderStore, { storeName: "order", registry }),
+  instrumentStore(paymentStore, { storeName: "payment", registry }),
+];
+```
+
+`InstrumentOptions` requires `storeName` and optionally takes `tracerName`, `tracerVersion`, `registry`, `maxCommandDurationMs`, `maxPendingCommands`, `recordCorrelationIds`, and `sanitizeError`. Sharing one `registry` across stores is what links a command on one store to the event that caused it on another — without it, each store's spans form an unrelated trace.
+
+## Full composition
 
 ```ts title="stores/order.ts"
+import { createStore, sealStore } from "@naikidev/commiq";
 import { createDevtools } from "@naikidev/commiq-devtools-core";
 import { createEffects } from "@naikidev/commiq-effects";
-import { createOtelPlugin } from "@naikidev/commiq-otel";
+import { instrumentStore, createTraceRegistry } from "@naikidev/commiq-otel";
+import { OrderEvent } from "./events";
 
-// ── Store (handlers registered, then sealed) ──
+const _store = createStore<OrderState>(initialState, {
+  onError: (report) => reportToService(report.error, { source: report.source }),
+});
+// ... handlers ...
 
 export const orderStore = sealStore(_store);
 
-// ── Plugins ──
+const devtools = createDevtools({ maxEvents: 500 });
+devtools.connect(orderStore, "order");
 
-const devtools = createDevtools({
-  stores: [{ name: "order", store: orderStore }],
-  maxEvents: 500,
+const effects = createEffects(orderStore, {
+  onError: (report) => reportToService(report.error, { source: report.source }),
 });
 
-const effects = createEffects(orderStore);
-effects.on(OrderEvent.Placed, async (data, ctx) => {
+effects.on(OrderEvent.Placed, async (data) => {
   await sendConfirmationEmail(data.orderId);
 });
 
-const otel = createOtelPlugin(orderStore, {
-  serviceName: "order-service",
-});
+const registry = createTraceRegistry();
+const otel = instrumentStore(orderStore, { storeName: "order", registry });
 ```
 
-Each plugin operates independently. They share the same event stream but do not interfere with each other.
+Each plugin operates independently. They share the same event stream and do not interfere with each other. Note that the store's `onError` and the effects' `onError` are separate channels: the store reports failures inside command handlers, event handlers, stream listeners, and extensions; effects report failures inside effect handlers.
 
 ## Cleanup
 
-Destroy plugins in reverse initialization order. This matters in tests and during hot-module replacement:
+Every plugin conforms to core's `Disposable` — a `destroy(): void` method. Dispose in reverse initialization order so nothing queues work into a torn-down store:
 
 ```ts
-// Teardown
-effects.destroy();  // Stop effects first — prevents new commands from being queued
-devtools.destroy();  // Then disconnect devtools
+otel.destroy();      // stop spans (also callable directly: otel())
+effects.destroy();   // abort running effects, drop the stream subscription
+devtools.destroy();  // clear the timeline, disconnect every store
+_store.destroy();    // last: clears queue, handlers, listeners, extensions
 ```
 
-In tests, always clean up to prevent event listeners from leaking between test cases:
+`instrumentStore` returns a value that is both callable and has `.destroy()`; the two are equivalent, and `destroy()` is preferred for consistency with the other plugins.
+
+`store.destroy()` settles every outstanding `CommandHandle` as `discarded` and resolves any pending `flush()`, so awaiting a handle across a teardown will not hang.
+
+In tests, dispose in `afterEach` to keep listeners from leaking between cases:
 
 ```ts title="order.test.ts"
-let effects: Effects;
+import { afterEach, beforeEach } from "vitest";
+import type { Effects } from "@naikidev/commiq-effects";
+
+let effects: Effects<OrderState>;
 
 beforeEach(() => {
   effects = createEffects(orderStore);
-  // ... register effects
 });
 
 afterEach(() => {
@@ -140,10 +196,12 @@ afterEach(() => {
 });
 ```
 
+`effects.on()` also returns an `Unsubscribe` if you want to remove one effect without destroying the instance.
+
 ## Writing plugin-friendly stores
 
-Plugins work best when stores follow these conventions:
+**Keep the raw store private.** Export only the sealed store — see [store file structure](/patterns/store-file-structure). Register all handlers before sealing.
 
-**Keep the raw store private.** Export only the sealed store — see [store file structure](/patterns/store-file-structure). Register all handlers before calling `sealStore`.
+**Emit events for meaningful transitions.** Effects and the event bus react to events. A handler that only calls `setState` is invisible to them: the only event produced is `BuiltinEvent.StateChanged`, which carries `prev`/`next` but no domain meaning. Emit an explicit event for any transition other parts of the system should observe.
 
-**Emit events for meaningful transitions.** Plugins like effects react to events. A handler that silently mutates state without emitting events is invisible to effects — only `BuiltinEvent.StateChanged` fires, which carries no domain semantics. Emit explicit events for transitions that other parts of the system need to observe.
+**Install `onError` once, at store creation.** It is the only place that sees failures from every source — command handlers, event handlers, stream listeners, and extension hooks. Outside production the default reporter logs to the console; in production the default is silent, so an explicit reporter is required if you want production visibility.

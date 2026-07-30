@@ -1,14 +1,16 @@
 ---
 title: Context Extensions
+description: Add typed properties to command and event handler contexts — logging, metadata, guards, patching, deferred cleanup, dependency injection, and state history.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Context Extensions
 
-`@naikidev/commiq-context` provides utilities for defining, composing, and using context extensions. It also ships pre-built extensions for logging, command metadata, and state history.
+`@naikidev/commiq-context` ships pre-built context extensions and the error types they throw. Context extensions add properties to `CommandContext` and `EventContext` — the `ctx` object your handlers receive.
 
-Context extensions add custom properties to `CommandContext` and `EventContext` — the objects your command handlers and event handlers receive as `ctx`. Extensions are type-safe: after calling `store.useExtension(ext)`, all handlers see the extra properties on `ctx`.
+Command and event contexts are typed **separately**. An extension declares which handler kinds it applies to, and using a command-only extension inside an event handler is a compile error rather than a runtime `TypeError`.
 
 ## Installation
 
@@ -35,10 +37,10 @@ Context extensions add custom properties to `CommandContext` and `EventContext` 
   </Tab>
 </Tabs>
 
-## Basic Usage
+## Basic usage
 
 ```ts
-import { createStore, createCommand } from "@naikidev/commiq";
+import { createStore } from "@naikidev/commiq";
 import { withLogger, withMeta } from "@naikidev/commiq-context";
 
 type AppState = { count: number };
@@ -55,29 +57,356 @@ const store = createStore<AppState>({ count: 0 })
   });
 ```
 
-## `defineContextExtension(def)`
+`store.useExtension(ext)` returns the same store with its **command** and **event** context types widened separately, so chaining accumulates properties and each `addCommandHandler` / `addEventHandler` sees exactly the properties that apply to it. `store.queue`, `store.flush` and `store.state` are unchanged.
 
-Type-safe factory for creating your own context extensions. Accepts a `ContextExtensionDef<S, T>` and returns it with full type inference.
+Register every extension before the first command is queued.
+
+<Callout type="info">
+Every `withX()` returns a `ContextExtensionDef` directly. There is no wrapping factory call and no `extendStore` host — `store.useExtension(withX())` is the whole API. If you tried an intermediate `extendStore(store).use(...)` build, revert to this shape.
+</Callout>
+
+## Pre-built extensions
+
+| Extension | Adds to `ctx` | Scope | Description |
+| --- | --- | --- | --- |
+| `withPatch<S>()` | `patch(partial)` | commands only | Shallow-merge partial state updates |
+| `withGuard<S>(options?)` | `guard(condition, message)` | commands only | Precondition check — throws `GuardError` |
+| `withAssert<S>(options?)` | `assert(condition, message)` | commands + events | Invariant check — throws `AssertionError` |
+| `withDefer<S>(store)` | `defer(fn)` | commands + events | Cleanup callbacks run after the handler completes |
+| `withInjector<S>()(deps)` | `deps` | commands + events | Typed dependency injection |
+| `withLogger<S>(options?)` | `log(level, message)` | commands + events | Structured logging with a configurable handler |
+| `withMeta<S>()` | `meta` | commands + events | Command/event metadata |
+| `withHistory<S>(store, options?)` | `history` | commands + events | Bounded log of state transitions |
+
+`withDefer` and `withHistory` take the **store as their first argument** — see [target-bound extensions](#target-bound-extensions).
+
+### `withLogger<S>(options?)`
+
+Adds `ctx.log(level, message)` to command and event handlers.
 
 ```ts
-import { defineContextExtension } from "@naikidev/commiq-context";
+import { withLogger } from "@naikidev/commiq-context";
 
-type AppState = { items: string[] };
+const store = createStore<AppState>({ count: 0 })
+  .useExtension(withLogger<AppState>({
+    onLog: (entry) => myLogService.send(entry),
+  }));
 
-const withCounter = defineContextExtension<AppState, { itemCount: () => number }>({
-  command: (ctx) => ({
-    itemCount: () => ctx.state.items.length,
-  }),
+store.addCommandHandler("save", (ctx) => {
+  ctx.log("info", "saving state");
+  ctx.log("debug", `current count: ${ctx.state.count}`);
 });
 ```
 
-The `command` builder receives the base `CommandContext<S>` and the `Command`. The `event` builder receives the base `EventContext<S>` and the `StoreEvent`. Both are optional — omit `event` if the extension only applies to command handlers.
+| `LoggerOptions` | Type | Description |
+| --- | --- | --- |
+| `onLog` | `(entry: LogEntry) => void` | Called for each `ctx.log()`. Without it, `ctx.log()` is a no-op |
 
-Extensions can also define `afterCommand` and `afterEvent` lifecycle hooks — functions that run after each handler completes (including on error). These hooks run in a `finally` block and their errors are swallowed, making them ideal for cleanup logic. See `withDefer` for an example.
+| `LogEntry` | Type | Description |
+| --- | --- | --- |
+| `level` | `LogLevel` — `"debug" \| "info" \| "warn" \| "error"` | Log level |
+| `message` | `string` | Log message |
+| `timestamp` | `number` | `Date.now()` when the entry was created |
+
+`LogLevel` and `LoggerOptions` are exported for annotating your own sink:
+
+```ts
+import type { LogEntry, LoggerOptions, LogLevel } from "@naikidev/commiq-context";
+
+const levels: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+const options: LoggerOptions = { onLog: (e: LogEntry) => levels[e.level] >= 2 && report(e) };
+```
+
+### `withMeta<S>()`
+
+Adds `ctx.meta` to command and event handlers.
+
+```ts
+store.addCommandHandler("save", (ctx) => {
+  ctx.meta.commandName;   // "save"
+  ctx.meta.correlationId; // unique id for this command
+  ctx.meta.causedBy;      // parent correlation id, or null
+  ctx.meta.timestamp;
+});
+```
+
+| `CommandMeta` | Type | Description |
+| --- | --- | --- |
+| `commandName` | `string` | Name of the command, or of the event in an event handler |
+| `correlationId` | `string` | Unique identifier for this command or event |
+| `causedBy` | `string \| null` | Correlation id of the immediate cause |
+| `timestamp` | `number` | `Date.now()` for commands; the event's own timestamp for events |
+
+### `withPatch<S>()`
+
+Adds `ctx.patch(partial)` for shallow-merging partial state updates. **Commands only.** `S` must extend `Record<string, unknown>`.
+
+```ts
+import { withPatch } from "@naikidev/commiq-context";
+
+type AppState = { name: string; count: number; active: boolean };
+
+const store = createStore<AppState>({ name: "", count: 0, active: false })
+  .useExtension(withPatch<AppState>());
+
+store.addCommandHandler("activate", (ctx) => {
+  ctx.patch({ active: true, count: ctx.state.count + 1 });
+});
+```
+
+`patch` goes through `setState` with an updater function, so it reads live state at apply time rather than the value captured when the context was built.
+
+<Callout type="warn">
+Each `ctx.patch()` is a separate `setState`, and core publishes `stateChanged` on **every** `setState`. Two `patch` calls in one handler produce two events, two devtools timeline entries and two `withHistory` records. Batch into one call when you mean one transition.
+</Callout>
+
+### `withGuard<S>(options?)`
+
+Adds `ctx.guard(condition, message)` for precondition checks. **Commands only.**
+
+```ts
+import { withGuard } from "@naikidev/commiq-context";
+
+const store = createStore<CartState>(initialCart)
+  .useExtension(withGuard<CartState>());
+
+store.addCommandHandler<string>("cart:removeItem", (ctx, cmd) => {
+  ctx.guard(ctx.state.items.length > 0, "cannot remove from empty cart");
+  ctx.guard(ctx.state.items.includes(cmd.data), `item "${cmd.data}" not in cart`);
+  ctx.setState({
+    ...ctx.state,
+    items: ctx.state.items.filter((i) => i !== cmd.data),
+  });
+});
+```
+
+A failed guard throws `GuardError`, which aborts the handler. Core catches it, emits `commandHandlingError`, and reports it on the error channel. Multiple guards chain — if one fails, nothing after it runs.
+
+### `withAssert<S>(options?)`
+
+Adds `ctx.assert(condition, message)` for invariant checks that should never fail in correct code. **Commands and events.**
+
+```ts
+import { withAssert } from "@naikidev/commiq-context";
+
+const store = createStore<AppState>(initialState)
+  .useExtension(withAssert<AppState>({ enabled: import.meta.env.DEV }));
+
+store.addCommandHandler("process", (ctx) => {
+  ctx.assert(ctx.state.items !== undefined, "items should be initialized");
+  ctx.setState({ ...ctx.state, processed: true });
+});
+```
+
+A failed assertion throws `AssertionError` with the message prefixed by `Assertion failed: `. With `{ enabled: false }`, `ctx.assert` is a no-op.
+
+| `CheckOptions` | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `true` | When `false`, checks become no-ops |
+
+`CheckOptions` applies to both `withGuard` and `withAssert`.
+
+### Error types
+
+```ts
+import { AssertionError, ContextCheckError, GuardError } from "@naikidev/commiq-context";
+```
+
+`GuardError` and `AssertionError` both extend `ContextCheckError`, which extends `Error` and sets a distinguishing `name`. That lets an error reporter separate a deliberate precondition rejection from an unexpected failure:
+
+```ts
+const store = createStore<AppState>(initialState, {
+  onError: ({ error, source }) => {
+    if (error instanceof ContextCheckError) return; // expected rejection
+    reportToSentry(error, source);
+  },
+});
+```
+
+In v1 both threw bare `Error`, so a rejected precondition was indistinguishable from a null dereference in an error dashboard.
+
+### `withInjector<S>()(deps)`
+
+Adds `ctx.deps` for typed dependency injection. **Commands and events.**
+
+```ts
+import { withInjector } from "@naikidev/commiq-context";
+
+const store = createStore<AppState>(initialState)
+  .useExtension(withInjector<AppState>()({
+    api: new ApiClient({ baseUrl: "/api" }),
+    config: { maxRetries: 3 },
+  }));
+
+store.addCommandHandler("user:load", async (ctx, cmd) => {
+  const user = await ctx.deps.api.fetchUser(cmd.data);
+  ctx.setState({ ...ctx.state, user });
+});
+```
+
+The curried call lets TypeScript infer the dependency types from `deps` while you supply `S` explicitly. For tests, build the store with mocks in the same shape. See [dependency injection](/patterns/dependency-injection).
+
+## Target-bound extensions
+
+`withDefer` and `withHistory` retain per-store state — pending callbacks and recorded snapshots — so both take the store they belong to as their first argument, typed as `ExtensionTarget<S>` (anything exposing `state` and `openStream`, so a `StoreImpl` or a `SealedStore`).
+
+```ts
+storeA.useExtension(withDefer<State>(storeA)).useExtension(withHistory<State>(storeA));
+storeB.useExtension(withDefer<State>(storeB)).useExtension(withHistory<State>(storeB));
+```
+
+<Callout type="warn">
+`withHistory<S>(options?)` and `withDefer<S>()` were the v1 signatures. Both now take the target first: `withHistory<S>(store, options?)` and `withDefer<S>(store)`.
+</Callout>
+
+Binding is what makes the state correct rather than merely likely. Stores process commands sequentially but *independently*, so two stores sharing one extension instance interleave their invocations — and core's `afterCommand` / `afterEvent` hooks receive no argument identifying which store is closing. One extension per store removes the ambiguity.
+
+Reusing a bound extension on a second store is a mistake, and `withDefer` reports it rather than silently crossing queues: the offending store's context gets an inert `defer` that drops callbacks, and the error surfaces on that store's error channel with `source: "contextExtension"`.
+
+All stateless extensions — `withPatch`, `withGuard`, `withAssert`, `withInjector`, `withLogger`, `withMeta` — hold no per-store state and are safe to share across any number of stores.
+
+### `withDefer<S>(store)`
+
+Adds `ctx.defer(fn)`, registering cleanup callbacks that run after the handler completes, like Go's `defer`. **Commands and events.**
+
+```ts
+import { withDefer } from "@naikidev/commiq-context";
+
+const store = createStore<AppState>(initialState);
+store.useExtension(withDefer<AppState>(store));
+
+store.addCommandHandler("processFile", async (ctx, cmd) => {
+  const handle = await openFile(cmd.data.path);
+  ctx.defer(() => handle.close());
+
+  const data = await handle.read();
+  ctx.setState({ ...ctx.state, name: data.name });
+});
+```
+
+Deferred callbacks run in registration order after the handler finishes, run even if the handler threw, support `async` functions, and do not leak between invocations. Command and event phases keep separate queues.
+
+A callback that throws does not stop the remaining callbacks; the first error is rethrown from the `afterCommand` hook and reaches the store's error channel as `contextExtension` rather than being swallowed.
+
+### `withHistory<S>(store, options?)`
+
+Adds `ctx.history`, a live view over the store's state transitions. **Commands and events.**
+
+```ts
+import { withHistory } from "@naikidev/commiq-context";
+
+const store = createStore<AppState>({ count: 0 });
+store.useExtension(withHistory<AppState>(store, { maxEntries: 5 }));
+
+store.addCommandHandler("increment", (ctx) => {
+  const prev = ctx.history.previous;
+  ctx.setState({ count: ctx.state.count + 1 });
+});
+```
+
+`withHistory` records **one entry per `setState`**, not one per command, because it subscribes to `stateChanged` — which core publishes on every `setState`. It records only real transitions: a command that never calls `setState` records nothing, and a `setState` that produces the same state object is ignored.
+
+<Callout type="info">
+In v1, history pushed the current state on every command and every event context build, *before* the handler ran. Ten read-only commands evicted the genuine previous state entirely, so any undo or diff built on `previous` returned the current state. If you built an undo feature against v1 behaviour, re-check it.
+</Callout>
+
+| `StateHistory<S>` | Type | Description |
+| --- | --- | --- |
+| `entries` | `ReadonlyArray<DeepReadonly<S>>` | Current state plus up to `maxEntries - 1` preceding states, oldest first |
+| `previous` | `DeepReadonly<S> \| undefined` | Last distinct state before the current one |
+| `clear()` | `() => void` | Drops recorded transitions, keeping only the current state |
+
+| `HistoryOptions` | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxEntries` | `number` | `10` | Retained states, minimum `1` |
+
+Two commands in one causal chain both see the same buffer — it is the store's history, not the command's.
+
+## Cleanup
+
+Every stateful extension implements core's optional `destroy?()` hook. Core runs it on `store.destroy()` and on explicit detach:
+
+```ts
+const history = withHistory<AppState>(store);
+store.useExtension(history);
+
+store.removeExtension(history); // → true, runs history.destroy()
+```
+
+`removeExtension(ext)` detaches by identity and returns `false` when the extension was not registered. It unsubscribes `withHistory`'s stream listener and releases its retained snapshots, and drops `withDefer`'s pending callbacks.
+
+Detaching removes the runtime hooks, so the properties stop appearing on new contexts — but it cannot narrow the already-widened context types. `store.destroy()` detaches and destroys every registered extension; a throwing `destroy` hook is reported without aborting the rest of teardown.
+
+## Writing custom extensions
+
+Use core's `ContextExtensionDef<S, TCommand, TEvent>` directly.
+
+<Callout type="warn">
+`defineContextExtension` has been removed. It only existed to work around a single shared context generic, which core no longer has. Annotate the return type instead — there is nothing left for a helper to infer.
+</Callout>
+
+```ts
+import type { ContextExtensionDef } from "@naikidev/commiq";
+
+const withTimestamp = <S>(): ContextExtensionDef<S, { now: () => number }> => ({
+  command: () => ({ now: () => Date.now() }),
+});
+```
+
+The two optional generics are separate on purpose:
+
+| Shape | Scope |
+| --- | --- |
+| `ContextExtensionDef<S, TCommand>` | Command handlers only — declare `command` |
+| `ContextExtensionDef<S, {}, TEvent>` | Event handlers only — declare `event` |
+| `ContextExtensionDef<S, T, T>` | Both — declare `command` and `event` |
+
+Reaching for a command-only property inside `addEventHandler` is now a **compile error**. In v1 one generic was shared by both handler kinds, so `ctx.guard(...)` in an event handler compiled cleanly and threw at runtime.
+
+### Builders and hooks
+
+| Member | Receives | Notes |
+| --- | --- | --- |
+| `command` | `(ctx: CommandContext<S>, command: Command)` | Returns the properties merged into a command `ctx` |
+| `event` | `(ctx: EventContext<S>, event: StoreEvent)` | Returns the properties merged into an event `ctx` |
+| `afterCommand` | no arguments | Runs after the command handler settles |
+| `afterEvent` | no arguments | Runs after the event handler settles |
+| `destroy` | no arguments | Runs on `removeExtension` and `store.destroy()` |
+
+`afterCommand` and `afterEvent` receive **no arguments** — not the store, not the command. An extension that needs to know which store's invocation is closing must be bound to that store explicitly. That is exactly why `withDefer` and `withHistory` take a target.
+
+Errors thrown from `afterCommand` / `afterEvent` are reported on the store's error channel as `contextExtension`. They are no longer swallowed.
+
+### Stateful custom extensions
+
+Anything retaining state or subscriptions should take its target explicitly and expose `destroy?()`, so one call yields one store's worth of state:
+
+```ts
+import type { ContextExtensionDef } from "@naikidev/commiq";
+import type { ExtensionTarget } from "@naikidev/commiq-context";
+
+const withCounter = <S>(
+  target: ExtensionTarget<S>,
+): ContextExtensionDef<S, { count: () => number }> => {
+  let calls = 0;
+  return {
+    command: (ctx) => ({ count: () => (ctx.state === target.state ? ++calls : 0) }),
+    destroy: () => { calls = 0; },
+  };
+};
+```
+
+### Rules for custom extensions
+
+- Extension keys must not collide with built-in context properties — `state`, `setState`, `emit`, `signal` for commands; `state`, `queue` for events.
+- Extension keys must not collide with keys from other registered extensions.
+- Extensions receive the base context only, never another extension's output.
+- Register all extensions before queuing commands.
+- State reads are `DeepReadonly<S>` and deep-frozen outside production. An extension cannot mutate `ctx.state`; it must go through `ctx.setState`.
 
 ## Extension presets
 
-When several extensions are always used together, extract a function that applies them as a group. This keeps store setup concise while preserving full type safety through `.useExtension()` chaining.
+When several extensions are always used together, extract a function that applies them as a group. Type safety survives the indirection because each `useExtension` call returns the widened store.
 
 ```ts title="extensions/core.ts"
 import { withLogger, withMeta, withGuard } from "@naikidev/commiq-context";
@@ -107,260 +436,4 @@ const _store = applyCoreExtensions(createStore<CounterState>({ count: 0 }))
 export const counterStore = sealStore(_store);
 ```
 
-Name preset functions `apply{Domain}Extensions` so the intent is clear at the call site. Each `.useExtension()` call accumulates types, so handlers see all extension properties with full autocomplete.
-
-## Pre-built Extensions
-
-### `withLogger<S>(options?)`
-
-Adds `ctx.log(level, message)` to both command and event handlers.
-
-```ts
-import { withLogger } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>({ count: 0 })
-  .useExtension(withLogger<AppState>({
-    onLog: (entry) => {
-      // entry: { level, message, timestamp }
-      myLogService.send(entry);
-    },
-  }));
-
-store.addCommandHandler("save", (ctx) => {
-  ctx.log("info", "saving state");
-  ctx.log("debug", `current count: ${ctx.state.count}`);
-});
-```
-
-#### Options
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `onLog` | `(entry: LogEntry) => void` | Called for each `ctx.log()` invocation |
-
-#### `LogEntry`
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `level` | `"debug" \| "info" \| "warn" \| "error"` | Log level |
-| `message` | `string` | Log message |
-| `timestamp` | `number` | `Date.now()` when the log was created |
-
-### `withMeta<S>()`
-
-Adds `ctx.meta` with command/event metadata to both command and event handlers.
-
-```ts
-import { withMeta } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>({ count: 0 })
-  .useExtension(withMeta<AppState>());
-
-store.addCommandHandler("save", (ctx) => {
-  console.log(ctx.meta.commandName);    // "save"
-  console.log(ctx.meta.correlationId);  // unique ID
-  console.log(ctx.meta.causedBy);       // parent correlation ID or null
-  console.log(ctx.meta.timestamp);      // Date.now()
-});
-```
-
-#### `CommandMeta`
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `commandName` | `string` | Name of the command or event |
-| `correlationId` | `string` | Unique identifier for this command/event |
-| `causedBy` | `string \| null` | Correlation ID of the parent command/event |
-| `timestamp` | `number` | Timestamp of the command/event |
-
-### `withHistory<S>(options?)`
-
-Adds `ctx.history` with a ring buffer of previous states to command and event handlers.
-
-```ts
-import { withHistory } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>({ count: 0 })
-  .useExtension(withHistory<AppState>({ maxEntries: 5 }));
-
-store.addCommandHandler("increment", (ctx) => {
-  const prev = ctx.history.previous; // previous state or undefined
-  const all = ctx.history.entries;   // array of past states
-  ctx.setState({ count: ctx.state.count + 1 });
-});
-```
-
-#### Options
-
-| Property | Type | Default | Description |
-| --- | --- | --- | --- |
-| `maxEntries` | `number` | `10` | Maximum number of states to retain |
-
-#### `ctx.history`
-
-| Property | Type | Description |
-| --- | --- | --- |
-| `entries` | `ReadonlyArray<S>` | Ring buffer of past states (oldest first) |
-| `previous` | `S \| undefined` | The state before the current command, or `undefined` on first execution |
-
-### `withPatch<S>()`
-
-Adds `ctx.patch(partial)` for shallow-merging partial state updates. Only available in command handlers.
-
-```ts
-import { withPatch } from "@naikidev/commiq-context";
-
-type AppState = { name: string; count: number; active: boolean };
-
-const store = createStore<AppState>({ name: "", count: 0, active: false })
-  .useExtension(withPatch<AppState>());
-
-store.addCommandHandler("activate", (ctx) => {
-  ctx.patch({ active: true, count: ctx.state.count + 1 });
-  // name is preserved unchanged
-});
-```
-
-### `withDefer<S>()`
-
-Adds `ctx.defer(fn)` to register cleanup callbacks that run after the handler completes — regardless of whether the handler succeeded or threw. Similar to Go's `defer`.
-
-```ts
-import { withDefer } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>({ name: "", count: 0, active: false })
-  .useExtension(withDefer<AppState>());
-
-store.addCommandHandler("processFile", async (ctx, cmd) => {
-  const handle = await openFile(cmd.data.path);
-  ctx.defer(() => handle.close());
-
-  const data = await handle.read();
-  ctx.setState({ ...ctx.state, name: data.name });
-});
-```
-
-Deferred callbacks:
-- Run in registration order after the handler finishes
-- Run even if the handler throws (like a `finally` block)
-- Errors in deferred callbacks are swallowed — they never propagate
-- Do not leak between commands — each command gets a clean slate
-- Support async functions
-
-### `withGuard<S>()`
-
-Adds `ctx.guard(condition, message)` for precondition checks. When the condition is false, the guard throws an error that stops the handler. The store emits `commandHandlingError` with the guard message. Only available in command handlers.
-
-```ts
-import { withGuard } from "@naikidev/commiq-context";
-
-const store = createStore<CartState>(initialCart)
-  .useExtension(withGuard<CartState>());
-
-store.addCommandHandler<string>("cart:removeItem", (ctx, cmd) => {
-  ctx.guard(ctx.state.items.length > 0, "cannot remove from empty cart");
-  ctx.guard(
-    ctx.state.items.includes(cmd.data),
-    `item "${cmd.data}" not in cart`,
-  );
-  ctx.setState({
-    ...ctx.state,
-    items: ctx.state.items.filter((i) => i !== cmd.data),
-  });
-});
-```
-
-Multiple guards can be chained — each acts as a gate. If any fails, subsequent code does not execute.
-
-### `withAssert<S>(options?)`
-
-Adds `ctx.assert(condition, message)` for developer-time invariant checks. Similar to `withGuard`, but intended for conditions that should never be false in correct code. Can be disabled in production.
-
-```ts
-import { withAssert } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>(initialState)
-  .useExtension(withAssert<AppState>({ enabled: import.meta.env.DEV }));
-
-store.addCommandHandler("process", (ctx) => {
-  ctx.assert(ctx.state.items !== undefined, "items should be initialized");
-  ctx.setState({ ...ctx.state, processed: true });
-});
-```
-
-When an assertion fails, it throws `Error` with the message prefixed by `"Assertion failed: "`. When `enabled` is `false`, `ctx.assert` is a no-op.
-
-#### Options
-
-| Property | Type | Default | Description |
-| --- | --- | --- | --- |
-| `enabled` | `boolean` | `true` | When false, all assertions become no-ops |
-
-### `withInjector<S>()(deps)`
-
-Adds `ctx.deps` for typed dependency injection. Dependencies are provided at store creation time and available in all handlers via property access. Uses a curried call to support type inference.
-
-```ts
-import { withInjector } from "@naikidev/commiq-context";
-
-const store = createStore<AppState>(initialState)
-  .useExtension(withInjector<AppState>()({
-    api: new ApiClient({ baseUrl: "/api" }),
-    config: { maxRetries: 3 },
-    analytics: analyticsService,
-  }));
-
-store.addCommandHandler("user:load", async (ctx, cmd) => {
-  const user = await ctx.deps.api.fetchUser(cmd.data);
-  ctx.setState({ ...ctx.state, user });
-});
-```
-
-The curried call `withInjector<S>()(deps)` is needed so TypeScript can infer the dependency types from the `deps` object while you provide the state type `S` explicitly. `ctx.deps` is fully typed — autocomplete and compile-time checks work on all dependency keys.
-
-For testing, create a store with mock dependencies:
-
-```ts
-const testStore = createStore<AppState>(initialState)
-  .useExtension(withInjector<AppState>()({
-    api: mockApiClient,
-    config: { maxRetries: 0 },
-    analytics: noopAnalytics,
-  }));
-```
-
-See [dependency injection](/patterns/dependency-injection) for a full real-world example.
-
-## Writing Custom Extensions
-
-A context extension is an object with optional `command` and `event` builder functions. Each builder receives the base context and returns an object whose keys are merged into `ctx`.
-
-```ts
-import { defineContextExtension } from "@naikidev/commiq-context";
-
-type AppState = { items: string[]; lastAction: string };
-
-const withAudit = defineContextExtension<AppState, {
-  audit: (action: string) => void;
-}>({
-  command: (ctx) => ({
-    audit: (action: string) => ctx.setState({ ...ctx.state, lastAction: action }),
-  }),
-});
-
-const store = createStore<AppState>({ items: [], lastAction: "" })
-  .useExtension(withAudit)
-  .addCommandHandler("addItem", (ctx, cmd) => {
-    ctx.audit("addItem");
-    ctx.setState({ ...ctx.state, items: [...ctx.state.items, cmd.data] });
-  });
-```
-
-Extensions can wrap any base context capability — `setState`, `emit`, `queue` — to build higher-level utilities.
-
-### Rules for custom extensions
-
-- Extension keys must not collide with built-in context properties (`state`, `setState`, `emit`, `signal` for commands; `state`, `queue` for events).
-- Extension keys must not collide with keys from other registered extensions.
-- Extensions are independent — they receive the base context only, not other extensions' output.
-- Register all extensions before queuing commands. `useExtension` throws after the store starts processing.
+Only stateless extensions belong in a generic preset. A preset cannot bind `withDefer` or `withHistory` for you without also receiving the store — pass the store through and bind inside, or apply them at the call site.

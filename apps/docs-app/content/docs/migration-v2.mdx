@@ -1,0 +1,378 @@
+---
+title: Migrating to v2
+description: What changed between commiq 1.x and 2.0, why it changed, and the edits you need to make.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+
+# Migrating to 2.0
+
+All eight packages move to `2.0.0` together and are only tested against each other. Upgrade them in one step.
+
+<Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
+  <Tab value="pnpm">
+    ```bash
+    pnpm up '@naikidev/commiq*@^2.0.0'
+    ```
+  </Tab>
+  <Tab value="npm">
+    ```bash
+    npm install @naikidev/commiq@^2 @naikidev/commiq-react@^2
+    ```
+  </Tab>
+  <Tab value="Yarn">
+    ```bash
+    yarn up '@naikidev/commiq*'
+    ```
+  </Tab>
+  <Tab value="Bun">
+    ```bash
+    bun update @naikidev/commiq @naikidev/commiq-react
+    ```
+  </Tab>
+</Tabs>
+
+The 1.x documentation is preserved at [v1 (legacy)](/v1) and is no longer maintained.
+
+## Why 2.0
+
+Three problems, none of which could be fixed without breaking the API.
+
+**The library went silent on failure.** A command handler that threw published an event and then stopped — nothing was returned to the caller, nothing was logged, and `queue()` gave you no way to find out. An effect that failed a `fetch` discarded the error entirely. There was no error channel, so a production bug in a handler was invisible. 2.0 adds `StoreOptions.onError`, a `CommandResult` from every `queue()` call, and error reporting in effects, persist and otel.
+
+**State was not actually sealed.** `sealStore` returned an object whose `state` getter handed back the live state object by reference. `sealed.state.count = 999` mutated the store, emitted no event, produced no devtools entry, and raised no type error. The invariant the whole library is built on — commands are the only way to change state — was one assignment away from bypass. State reads are now `DeepReadonly<S>` and deep-frozen outside production.
+
+**Several documented features never worked.** `handledEvent()` could not match a `notify: true` command. An event-only context extension was silently skipped. Connecting a store to an event bus twice and disconnecting once left the bus deaf. These are listed in [Things that never worked in v1](#things-that-never-worked-in-v1) because you may have code built on them.
+
+## Breaking changes at a glance
+
+### Core (`@naikidev/commiq`)
+
+| Before | After | Why |
+| --- | --- | --- |
+| `store.state` is `S` | `store.state` is `DeepReadonly<S>`, deep-frozen outside production | Types alone did not stop plain-JS callers from mutating state out of band |
+| `stateChanged` published once per command | published once per `ctx.setState()` | Intermediate states (a loading flag set before an `await`) were never observable |
+| `ctx.state` was a snapshot taken at handler entry | live getter | A handler that read `ctx.state` after an `await` saw stale data |
+| `ctx.setState(next)` only | `ctx.setState(next)` or `ctx.setState(prev => next)` | Functional updates without re-reading `ctx.state` |
+| `queue()` returned `void` | returns a `CommandHandle` (a `Promise<CommandResult>`) | Callers had no way to learn a command failed |
+| `addEventHandler` returned `this` | returns `Unsubscribe` | There was no way to remove an event handler |
+| `openStream` returned `void` | returns `Unsubscribe` | Same |
+| `flush()` inside a handler hung forever | throws synchronously | A deadlock is worse than an error |
+| `queue(cmd)` mutated the object you passed | queues a clone | Reusing a command object across two `queue()` calls corrupted the first one's `correlationId` |
+| ambient `correlationId` overrode an explicit `causedBy` | explicit `causedBy` wins | You could not stitch a causal chain manually |
+| no error channel | `StoreOptions.onError`, `StoreErrorReport`, `eventHandlingError`, `unhandledError` | Failures in stream listeners and extension hooks were discarded |
+| a throwing event handler had no error channel and could disrupt the command lifecycle | `eventHandlingError` is published, `commandHandled` still fires, and handlers are isolated from each other | One bad subscriber affected every other subscriber |
+| `ContextExtensionDef<S, T>` | `ContextExtensionDef<S, TCommand, TEvent>` | One generic for both contexts meant an event-only extension type-checked and then did nothing |
+| `StoreImpl<S, Ctx>` | `StoreImpl<S, CmdCtx, EvtCtx>` | Same |
+| `SealedStore` had no `suspend` | `suspend` is required | Plugins need to hold the queue across async hydration |
+| `EventBus.connect` was not counted | refcounted; `connect` returns `Unsubscribe`; adds `off()`, `destroy()` | Two connects and one disconnect silenced the bus |
+| `EventDef` accepted any `EventDef<D>` | `EventDef<D>` is branded — use `EventDef<never>` for "any event" positions | An `EventDef` parameter accepted a def whose payload it could not actually handle |
+
+New in core, nothing to migrate: `createCommandDef`, `store.suspend()`, `store.isSuspended`, `store.destroy()`, `store.removeCommandHandler`, `store.removeEventHandler`, `store.removeExtension`, `Disposable`, `StoreOptions.suspendWarningMs`.
+
+### React (`@naikidev/commiq-react`)
+
+| Before | After | Why |
+| --- | --- | --- |
+| `CommiqProvider` was inert — it rendered a context nothing read | hooks resolve a store name through it | It was documented as the DI/testing/SSR mechanism while doing nothing |
+| hooks took a store only | every hook takes a store **or** a name (`StoreSource<S>`) | Per-request stores on a Node server, without a module singleton |
+| `useSelector(store, selector)` | `useSelector(store, selector, isEqual?)` plus exported `shallowEqual` | A selector building an object re-rendered on every event |
+| `useQueue` returned a void dispatcher | returns the store's `QueueFn`, so `await dispatch(cmd)` yields a `CommandResult` | Awaiting a dispatch was impossible |
+| — | `useStore`, `useFlush`, `useStream`, `useCommandStatus`, `useNamedStore`, `useStoreRegistry` | Loading and error state had to be hand-rolled into every store |
+
+### Plugins
+
+| Package | Change |
+| --- | --- |
+| `commiq-effects` | `EffectOptions.mode` defaults to `"switch"` (was parallel). `restartOnNew` is deprecated: `true` maps to `"switch"`, `false` to `"parallel"`. `Effects` is generic in `S`. `EffectHandler<S, D>` reorders its type parameters to match core's `CommandHandler<S, D>`. `on()` returns `Unsubscribe`. Effect errors are reported through `onError` instead of discarded. |
+| `commiq-persist` | Persisted data is a versioned envelope; bare 1.x values still read. `serialize` receives a `PersistedSnapshot`, `deserialize` returns `unknown`. `storage` defaults to `localStorageAdapter()` rather than the `localStorage` global, so importing the module on a server no longer throws. |
+| `commiq-context` | `defineContextExtension` is removed. `withHistory(store, options?)` and `withDefer(store)` now take the store as their first argument so their state is per store. `guard`/`assert` failures throw `GuardError`/`AssertionError` instead of bare `Error`. `store.useExtension(withX())` still chains. |
+| `commiq-devtools-core` | `getTimeline`/`getChain`/`getStateHistory` return readonly arrays. `TimelineEntry` gains required `seq` and `eventId`. `EventCollector` takes an options object. `windowMessageTransport` accepts `targetOrigin`. |
+| `commiq-otel` | Correlation IDs move from span attributes to a `commiq.correlation` span event. Span status and exceptions carry the error *type*, not its message. Cross-store span parenting is opt-in via `createTraceRegistry()`. Adds `maxCommandDurationMs` so a never-settling command's span still exports. |
+| `commiq-devtools-core`, `commiq-otel` | `@naikidev/commiq` is now a `peerDependency`, not a dependency. If your lockfile pinned a different core range, npm/pnpm silently installed a second copy of core and the plugin instrumented a different store. Re-install after upgrading. |
+
+## Things that never worked in v1
+
+These were documented as working features. If your codebase uses them, it has dead paths that produced no error.
+
+### `handledEvent()` with `notify: true`
+
+`createEvent()` mints a fresh `Symbol` on every call, and event handlers are keyed by that symbol. `handledEvent("increment")` called from your subscription produced a different symbol than the one the `notify: true` path minted internally, so the handler could never be reached.
+
+```ts
+// v1: registered successfully, never invoked. No error, no warning.
+store.addCommandHandler("increment", handler, { notify: true });
+store.addEventHandler(handledEvent("increment"), (ctx) => {
+  // dead code
+});
+```
+
+`handledEvent(name)` symbols are now interned by name, so the same code works in 2.0. **Audit every `handledEvent` call site**: the handler body has never run, so it may be stale, or it may double up with the workaround you wrote when it did not fire.
+
+`createEvent()` is still un-interned by design — two `createEvent("x")` calls are still two distinct events.
+
+### `sealStore` as a mutation barrier
+
+```ts
+// v1: mutated the real store. No event, no devtools entry, no type error.
+const sealed = sealStore(store);
+sealed.state.count = 999;
+```
+
+In 2.0 that line is a type error, and outside production it also throws a `TypeError` at runtime. If you added defensive copies around a sealed store to compensate, you can remove them — but read [what sealing does and does not cover](/api/commands-events#sealstorestore) first, because the freeze does not reach `Map`, `Set` or class instances.
+
+### Event-only context extensions
+
+An extension that defined only `event` was accepted by `useExtension` and then silently skipped when event handlers ran, because a single `T` generic widened both contexts. With `ContextExtensionDef<S, TCommand, TEvent>` the mismatch is a compile error.
+
+### Connecting a store to an event bus more than once
+
+`bus.connect(store)` installed a listener each time but stored one entry, so a single `bus.disconnect(store)` removed the only tracked subscription and the bus went deaf while your code believed one connection remained. Connections are refcounted now, and `connect` returns an `Unsubscribe` you should prefer over `disconnect`.
+
+### Reusing a command object
+
+```ts
+const cmd = createCommand("increment", undefined);
+store.queue(cmd);
+store.queue(cmd); // v1: the second call overwrote the first command's correlationId
+```
+
+`queue()` clones now. The object you pass is never modified.
+
+## Mechanical changes
+
+Ordered roughly by how many lines each one touches.
+
+### 1. `DeepReadonly` selectors and spreads
+
+Every state-reading surface is `DeepReadonly<S>`: `store.state`, `sealed.state`, `ctx.state` in both contexts, `StateUpdater`'s `prev`, and `StateChangedData`. `setState` still accepts a mutable `S`, so handlers keep returning fresh objects.
+
+Two patterns break. In-place mutation:
+
+```ts
+// before
+ctx.state.items.push(item);
+// after
+ctx.setState({ ...ctx.state, items: [...ctx.state.items, item] });
+```
+
+And passing state into a function that wants a mutable value:
+
+```ts
+// before: renderRows(rows: Item[])
+// after: widen the parameter, do not cast the argument
+function renderRows(rows: ReadonlyArray<DeepReadonly<Item>>) { /* ... */ }
+```
+
+Widen the consumer. A cast back to `S` re-opens exactly the hole 2.0 closed, and in development the object is frozen, so a write through the cast throws instead of being ignored.
+
+There is a third, subtler case, and it is the edit you are most likely to hit: spreading state whose type declares mutable fields.
+
+```ts
+type State = { count: number; items: string[] };
+
+// error: items arrives as readonly string[]
+ctx.setState({ ...ctx.state, count: ctx.state.count + 1 });
+```
+
+The spread keeps `DeepReadonly` on every field you do not overwrite, so `readonly string[]` meets `string[]` and fails — even though `items` is untouched. Declare the state type readonly instead:
+
+```ts
+type State = { readonly count: number; readonly items: readonly string[] };
+```
+
+The spread now round-trips, and the type finally says what was already true: state is replaced, never edited in place. Primitive-only state types need no change. Expect to do this to most state types that hold arrays or nested objects.
+
+<Callout type="warn">
+The dev-mode freeze covers plain objects and arrays only. `Map`, `Set`, class instances and functions in state are left alone — they are typed readonly but not frozen, so a plain-JS caller can still mutate them, in development and production alike.
+</Callout>
+
+### 2. `addEventHandler` and `openStream` no longer chain
+
+Both return an `Unsubscribe`. Chaining off them is now a type error, and a chain that mixed them with `addCommandHandler` will not compile.
+
+```ts
+// before
+store
+  .addCommandHandler("increment", incHandler)
+  .addEventHandler(userCreated, onUserCreated)
+  .addCommandHandler("decrement", decHandler);
+
+// after
+store
+  .addCommandHandler("increment", incHandler)
+  .addCommandHandler("decrement", decHandler);
+
+const offUserCreated = store.addEventHandler(userCreated, onUserCreated);
+```
+
+`addCommandHandler` and `useExtension` still return the store, so command-handler chains are unchanged. `removeEventHandler(eventDef, handler)` and `closeStream(listener)` remain if you prefer the explicit form.
+
+### 3. `queue()` returns a `CommandHandle`
+
+Ignoring the return value is safe — a `CommandHandle` **never rejects**, so an unawaited handle cannot become an unhandled rejection. Every existing `store.queue(cmd)` call keeps working unchanged.
+
+Where you previously polled a store field or raced a timer to know when a command finished:
+
+```ts
+const result = await store.queue(addTodo, { text: "Buy milk" });
+if (result.status !== "handled") {
+  showError(result.error);
+}
+```
+
+`status` is `"handled" | "failed" | "interrupted" | "invalid" | "discarded"`.
+
+<Callout type="info">
+A handle settles when *that command* settles. Events it emitted are delivered to event handlers afterwards, and any commands those handlers queue run later still. `await queue(...)` is not full quiescence — use `await store.flush()` for that.
+</Callout>
+
+### 4. Context extensions take three type arguments
+
+```ts
+// before
+const logger: ContextExtensionDef<AppState, { log: Log }> = {
+  command: () => ({ log }),
+  event: () => ({ log }),
+};
+
+// after — the second argument widens command contexts, the third widens event contexts
+const logger: ContextExtensionDef<AppState, { log: Log }, { log: Log }> = {
+  command: () => ({ log }),
+  event: () => ({ log }),
+};
+```
+
+An extension that only defines `command` keeps two arguments; the third defaults to `{}`. `useExtension` still returns the store and still accumulates types across chained calls, so nothing else in the call site changes.
+
+### 5. `StoreImpl` type arguments
+
+`StoreImpl<S, Ctx>` becomes `StoreImpl<S, CmdCtx, EvtCtx>`. Only code that annotates a store's type explicitly is affected:
+
+```ts
+// before
+function attach(store: StoreImpl<AppState, { log: Log }>) {}
+// after
+function attach(store: StoreImpl<AppState, { log: Log }, { log: Log }>) {}
+```
+
+Both extra parameters default to `{}`, so `StoreImpl<AppState>` and `createStore<AppState>(...)` need no change. Prefer typing plugin parameters as `SealedStore<S>` where you only need to read, dispatch and observe.
+
+### 6. `flush()` from inside a handler
+
+`flush()` now throws synchronously when called from within a command or event handler, instead of hanging forever. Inside a handler that throw becomes the ordinary handler-error path, so it reaches `onError` and `commandHandlingError` rather than crashing the queue.
+
+```ts
+// before: deadlock — the queue cannot drain while this handler is unresolved
+store.addCommandHandler("save", async (ctx) => {
+  await persistToServer(ctx.state);
+  await store.flush();
+});
+
+// after: emit, and let an event handler queue the follow-up
+store.addCommandHandler("save", async (ctx) => {
+  await persistToServer(ctx.state);
+  ctx.emit(saved, undefined);
+});
+
+store.addEventHandler(saved, (ctx) => {
+  ctx.queue(refresh);
+});
+```
+
+<Callout type="warn">
+The guard is synchronous. A handler that `await`s something first and *then* calls `flush()` is no longer inside the tracked handler depth, so it still deadlocks — the queue cannot drain while that handler is unresolved. Never call `flush()` from handler code, awaited or not.
+</Callout>
+
+### 7. `EventDef` in "any event" positions
+
+`EventDef<D>` is branded by its payload, so a bare `EventDef` (payload `unknown`) no longer accepts a specific `EventDef<D>`. Make the position generic, or use `EventDef<never>`:
+
+```ts
+// before
+function watch(def: EventDef) {}
+// after
+function watch<D>(def: EventDef<D>) {}
+// or, when the payload is irrelevant
+function watch(def: EventDef<never>) {}
+```
+
+### 8. Optional: adopt `createCommandDef`
+
+Raw string names and `createCommand` still work, so this is not required. But in v1 `queue()` accepted the wrong payload type — or an entirely unregistered command name — with no error until runtime. A `CommandDef` carries the name and the payload type together:
+
+```ts
+export const addTodo = createCommandDef<{ text: string }>("addTodo");
+
+store.addCommandHandler(addTodo, (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, todos: [...ctx.state.todos, cmd.data.text] });
+});
+
+store.queue(addTodo, { text: "Buy milk" });
+store.queue(addTodo, { txt: "typo" }); // compile error
+```
+
+See [Commands and events](/api/commands-events#createcommanddefdname).
+
+## Behaviour changes that need thought
+
+These compile fine and then behave differently.
+
+### `stateChanged` volume
+
+`stateChanged` used to publish once per command. It now publishes once per `ctx.setState()`. A handler that sets a loading flag, awaits a fetch, then sets the result publishes three events where it used to publish one.
+
+That is the point — the intermediate loading state was previously unobservable, which is why React could not render a spinner from store state. But it changes the cost of anything that runs per event:
+
+- **Stream listeners** run on every published event, synchronously. A listener doing expensive work per `stateChanged` will now do it more often.
+- **Devtools and otel** capture more entries per command. Otel's span-per-event alias leak is fixed in 2.0, which mattered specifically because of this change.
+- **React** is unaffected in render count: `useSelector` compares the selected value with `isEqual`, so extra events that do not change the selection do not re-render.
+
+If a handler was batching several updates into one `setState` for performance, keep doing that. If it was doing so to avoid emitting intermediate states, you can now split it.
+
+### Errors now surface
+
+Handler failures were previously published as a `commandHandlingError` event and nothing else. If you had no stream listener, they vanished. In 2.0 they additionally go to `StoreOptions.onError`, which **defaults to `console.error` outside production**. Expect your development console to show failures your app has been having all along.
+
+```ts
+const store = createStore<AppState>(initial, {
+  onError: (report) => {
+    Sentry.captureException(report.error, { extra: { source: report.source } });
+  },
+});
+```
+
+<Callout type="warn">
+A throwing command handler still does not propagate out of `queue()` or `flush()`. Neither rejects. Wrapping `await store.flush()` in `try`/`catch` catches nothing. To observe a failure, check the `CommandHandle` result, supply `onError`, or subscribe to `commandHandlingError`.
+</Callout>
+
+### Effects default to `switch`
+
+`EffectOptions.mode` now defaults to `"switch"`: a new trigger aborts the in-flight run. Previously effects ran in parallel with last-response-wins, which is the wrong default for search-as-you-type and fetch-on-change.
+
+If an effect must run to completion for every trigger — recording analytics, appending to a log — set `mode: "parallel"` explicitly. `restartOnNew: false` maps to `"parallel"` but is deprecated.
+
+Effect errors are also reported now rather than swallowed, via `onError` on either the `createEffects` instance or an individual registration.
+
+### Persist writes a versioned envelope
+
+New writes are `{ version, state }`. Bare 1.x values are still read, so an existing user's stored state is not lost on upgrade. Two things follow:
+
+- A custom `serialize` receives a `PersistedSnapshot`, not raw state, and a custom `deserialize` returns `unknown`. Update both together.
+- Rolling *back* to 1.x after 2.0 has written once will not parse the envelope. Treat the upgrade as one-way for persisted data.
+
+### Plugin peer dependencies
+
+`commiq-devtools-core` and `commiq-otel` declare `@naikidev/commiq` as a peer dependency. Delete your lockfile entries for these packages and re-install; a duplicated core copy is why otel spans stopped appearing for some setups in 1.x.
+
+## Upgrade checklist
+
+1. Bump all `@naikidev/commiq*` packages to `^2.0.0` and re-install so peer dependencies resolve to one core copy.
+2. Run `tsc --noEmit`. Most of the work is `DeepReadonly` and broken `addEventHandler` chains — both are compile errors, not runtime surprises.
+3. Grep for `handledEvent(` and verify each handler body is still correct. It has never run.
+4. Grep for `flush()` inside handler bodies and remove them.
+5. Add `StoreOptions.onError` and wire it to your error reporter.
+6. Run the app in development and read the console. The freeze and the error channel will surface pre-existing bugs.
+7. Set `mode: "parallel"` on any effect that must not be cancelled by a newer trigger.
+8. If you use `CommiqProvider`, it is now load-bearing — decide whether to keep passing stores directly to hooks or move to name resolution.

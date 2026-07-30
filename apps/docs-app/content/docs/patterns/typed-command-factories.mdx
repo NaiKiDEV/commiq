@@ -1,130 +1,146 @@
 ---
-title: Typed Command Factories
-description: Replace magic strings with typed factory functions for type-safe, discoverable command dispatch.
+title: Typed Command Definitions
+description: Use createCommandDef so a command's name and payload type travel together, and know when a hand-rolled factory is still better.
 ---
 
-# Typed Command Factories
+# Typed Command Definitions
 
-Every command is dispatched with `createCommand(name, data)`. Writing command names as string literals scattered across components is fragile — a typo fails silently, and there is no autocompletion or type checking on the data shape.
+A command name written as a string literal at every dispatch site is fragile: a typo produces an `invalidCommand` at runtime rather than a compile error, and nothing checks the payload shape against the handler that will receive it.
 
-The solution is to define typed factory functions alongside the store and use them everywhere commands are dispatched.
+`createCommandDef<D>(name)` fixes both. It creates a single object that carries the name *and* the payload type, and that object is used in two places: registering the handler and dispatching the command. Those two are then checked against each other.
 
 ## The problem
 
 ```tsx
-// Scattered across components — no type checking, no autocomplete
-queue(createCommand("increment", { amount: 1 }));
-queue(createCommand("increment", { amunt: 1 }));   // typo in data key — no error
-queue(createCommand("incriment", { amount: 1 }));  // wrong name — fails silently
+// Nothing ties these three together
+_store.addCommandHandler<{ amount: number }>("counter:increment", handler);
+
+queue(createCommand("counter:increment", { amunt: 1 }));   // typo in the key
+queue(createCommand("counter:incriment", { amount: 1 }));  // typo in the name
 ```
 
-There is also no central place to discover what commands a store accepts.
+Both dispatches compile. The first passes `{ amunt: 1 }` to a handler that reads `cmd.data.amount` and gets `undefined`. The second reaches no handler at all — it emits `invalidCommand` and its handle settles as `invalid`, which you only see if you are looking.
 
 ## The pattern
 
-Define a factory function for each command in the store file:
+Declare the definitions in one place:
 
-```ts title="stores/counter.ts"
-import { createCommand } from "@naikidev/commiq";
+```ts title="stores/counter/commands.ts"
+import { createCommandDef } from "@naikidev/commiq";
 
 export const CounterCommand = {
-  increment: (amount: number) => createCommand("counter:increment", { amount }),
-  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
-  reset: () => createCommand("counter:reset", undefined),
+  increment: createCommandDef("counter:increment"),
+  decrement: createCommandDef("counter:decrement"),
+  incrementBy: createCommandDef<{ amount: number }>("counter:incrementBy"),
+  reset: createCommandDef("counter:reset"),
 };
 ```
 
-The store registers handlers using the same names:
+Note these are values, not functions — `createCommandDef` is called once at module load, not per dispatch.
 
-```ts
+Register handlers with the definition. The handler's `cmd.data` is inferred, with no type argument on `addCommandHandler`:
+
+```ts title="stores/counter/store.ts"
+import { createStore, sealStore } from "@naikidev/commiq";
+import { CounterCommand } from "./commands";
+import { CounterEvent } from "./events";
+
+type CounterState = { readonly count: number };
+
+const initialState: CounterState = { count: 0 };
+
+const _store = createStore<CounterState>(initialState);
+
 _store
-  .addCommandHandler<{ amount: number }>("counter:increment", (ctx, cmd) => {
-    ctx.setState({ count: ctx.state.count + cmd.data.amount });
+  .addCommandHandler(CounterCommand.increment, (ctx) => {
+    ctx.setState((prev) => ({ count: prev.count + 1 }));
   })
-  .addCommandHandler<{ amount: number }>("counter:decrement", (ctx, cmd) => {
-    ctx.setState({ count: ctx.state.count - cmd.data.amount });
+  .addCommandHandler(CounterCommand.incrementBy, (ctx, cmd) => {
+    // cmd.data is { amount: number } — inferred from the definition
+    ctx.setState((prev) => ({ count: prev.count + cmd.data.amount }));
   })
-  .addCommandHandler("counter:reset", (ctx) => {
-    ctx.setState({ count: 0 });
+  .addCommandHandler(CounterCommand.reset, (ctx) => {
+    ctx.setState(initialState);
+    ctx.emit(CounterEvent.Reset, undefined);
   });
+
+export const counterStore = sealStore(_store);
 ```
 
-Dispatch from anywhere using the factory:
+Dispatch with the definition and its payload as a second argument:
 
 ```tsx
 import { CounterCommand } from "./stores/counter";
 
-queue(CounterCommand.increment(1));
-queue(CounterCommand.decrement(2));
-queue(CounterCommand.reset());
+const queue = useQueue(counterStore);
+
+queue(CounterCommand.increment);                 // no payload
+queue(CounterCommand.incrementBy, { amount: 5 }); // payload required
 ```
 
-## Benefits
-
-- **Type safety.** TypeScript infers the data type at the call site. Passing the wrong shape is a compile error.
-- **Discoverability.** Autocomplete on `CounterCommand.` lists all available commands for that store.
-- **Single definition.** The command name string exists in one place. Rename it once and the whole codebase updates.
-- **Readable call sites.** `CounterCommand.increment(1)` reads clearly. `createCommand("counter:increment", { amount: 1 })` does not.
-
-## Typing command data
-
-When the factory function accepts parameters, the `data` type is inferred automatically. You do not need to annotate `createCommand`:
+A definition created with no payload type takes no second argument. One created with a payload requires it. Both are compile errors the other way round:
 
 ```ts
-// The return type of increment() is Command<"counter:increment", { amount: number }>
-increment: (amount: number) => createCommand("counter:increment", { amount }),
+queue(CounterCommand.increment, { amount: 5 });  // error: expected 1 argument
+queue(CounterCommand.incrementBy);               // error: expected 2 arguments
+queue(CounterCommand.incrementBy, { amunt: 5 }); // error: unknown property
 ```
 
-For commands with no data, pass `undefined` explicitly to signal intent:
+`removeCommandHandler(def)` and `useCommandStatus(store, def)` accept the same definition, so the name stays in exactly one place.
 
-```ts
-reset: () => createCommand("counter:reset", undefined),
-```
+## What this does and does not buy you
 
-For commands with complex data, define a type:
+**It does** catch payload-shape mismatches and give you autocomplete on `CounterCommand.`.
 
-```ts
-type AddItemData = {
-  productId: string;
-  quantity: number;
-  price: number;
-};
+**It does not** make dispatching a wrong-but-valid command impossible: `queue` still has an overload accepting a raw `Command`, because commands arriving from a transport or a serialized log have to be dispatchable. Nor does it check that a handler exists for the definition — registering the handler is a separate statement, and a definition with no handler still produces `invalidCommand` at runtime.
 
+A payload type of `void` and a payload type of `undefined` behave the same at the call site. `createCommandDef("x")` defaults to `void`.
+
+## When a hand-rolled factory is still better
+
+`createCommandDef` binds a name to a payload type. A factory function *builds* the payload. Use one when there is real work between the caller's arguments and the command's data:
+
+```ts title="stores/cart/commands.ts"
+import { createCommand, createCommandDef } from "@naikidev/commiq";
+
+// Definition: used to register the handler and to read status
 export const CartCommand = {
-  addItem: (data: AddItemData) => createCommand("cart:add-item", data),
-  removeItem: (productId: string) => createCommand("cart:remove-item", { productId }),
-  clear: () => createCommand("cart:clear", undefined),
-};
-```
-
-## Where to place factories
-
-Place the command factory object in the same file as the store. It is part of the store's public API, alongside the sealed store and event definitions.
-
-```ts title="stores/counter.ts"
-// Types
-type CounterState = { count: number };
-
-// Events
-export const CounterEvent = { ... };
-
-// Commands
-export const CounterCommand = {
-  increment: (amount: number) => createCommand("counter:increment", { amount }),
-  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
-  reset: () => createCommand("counter:reset", undefined),
+  addItem: createCommandDef<{ productId: string; quantity: number }>("cart:addItem"),
 };
 
-// Store (private)
-const _store = createStore<CounterState>({ count: 0 });
-// ... handlers ...
-
-// Public interface
-export const counterStore = sealStore(_store);
+// Factory: the call site should not have to spell out quantity: 1
+export const addOne = (productId: string) =>
+  createCommand("cart:addItem", { productId, quantity: 1 });
 ```
 
-When using a [domain folder structure](/patterns/store-file-structure), place the factory in `commands.ts` and re-export it from `index.ts`.
+Cases where a factory earns its keep:
 
-<Callout type="info">
-You can still use `createCommand` directly in tests or one-off wiring code where discoverability is less important. Factories are primarily a call-site concern for application code.
-</Callout>
+- **A default the caller should not repeat** — `quantity: 1`, `attempt: 1`, `source: "ui"`
+- **Positional arguments that read better than an object** — `updateQty(productId, qty)` rather than `queue(def, { productId, qty })`
+- **Normalization at the boundary** — trimming a query string, coercing a numeric input, generating a client-side id
+
+The cost is that the factory's return type is a plain `Command`, so the link back to the handler's registration is broken — `createCommand("cart:addItem", ...)` repeats the name as a string and nothing checks it against the definition. Keep the definition as the single source of the name and have the factory reference it:
+
+```ts
+export const addOne = (productId: string) =>
+  createCommand(CartCommand.addItem.name, { productId, quantity: 1 });
+```
+
+That is a fair trade for two or three commands with awkward call sites. For the rest, use the definition directly.
+
+## Where to place definitions
+
+Definitions are part of a store's public API. In a single-file store, keep them next to the events and the sealed export. In a [domain folder](/patterns/store-file-structure), put them in `commands.ts` and re-export from `index.ts`:
+
+```ts title="stores/counter/index.ts"
+export { CounterCommand } from "./commands";
+export { CounterEvent } from "./events";
+export { counterStore } from "./store";
+export type { CounterState } from "./store";
+```
+
+Components should generally not import command definitions at all — a [domain hook](/patterns/domain-hooks) is a better boundary. `useCounter()` returning `{ count, increment, incrementBy }` keeps the component from knowing that commands exist.
+
+## Namespacing
+
+Prefix every name with its domain — `"counter:increment"`, not `"increment"`. Command handlers are keyed by name on each store, so two stores can each register `"reset"` without conflicting, but the names appear in devtools, in error reports, and in `useCommandStatus`, and an unqualified `"reset"` is unreadable in all three. Registering the same name twice on one store replaces the handler and reports `source: "duplicateHandler"` through `onError`.

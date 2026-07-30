@@ -1,22 +1,24 @@
 ---
 title: Devtools
+description: Framework-agnostic instrumentation for commiq stores — timeline, causality chains, bounded state history, snapshot modes, and pluggable transports.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
 
-# Devtools
+# Devtools Core
 
-Commiq includes built-in instrumentation and a devtools package for debugging, event inspection, and state tracking.
+`@naikidev/commiq-devtools-core` collects a timeline of commands and events from any number of stores, indexes them by causality, and keeps a bounded history of state snapshots. It has no UI and no React dependency — for the panel, see [Devtools Panel](/plugins/devtools-react).
 
 ## Instrumentation
 
-Every event and command in Commiq carries instrumentation metadata automatically:
+Every event and command carries instrumentation metadata automatically:
 
-- **`timestamp`** — `Date.now()` when the event was emitted
-- **`correlationId`** — unique identifier for each event/command
-- **`causedBy`** — links to the parent command or event that triggered this one (`null` for user-initiated commands)
+- **`timestamp`** — `Date.now()` when it was created
+- **`correlationId`** — unique identifier
+- **`causedBy`** — the immediate cause's correlation id, or `null` for user-initiated commands
 
-This enables full causality tracking: you can trace any event back through the chain of commands and events that caused it.
+`causedBy` records the immediate cause only. Devtools reconstructs full chains by walking those links.
 
 ## Installation
 
@@ -43,125 +45,281 @@ This enables full causality tracking: you can trace any event back through the c
   </Tab>
 </Tabs>
 
-## Basic Usage
+`@naikidev/commiq` is a **peer dependency**. Installing a plugin whose core range differs from the app's used to nest a second copy of core, so the plugin instrumented a different store instance than the one your app was using.
 
-```typescript
-import { createStore, createCommand } from "@naikidev/commiq";
+## Basic usage
+
+```ts
+import { createStore, createCommandDef } from "@naikidev/commiq";
 import { createDevtools } from "@naikidev/commiq-devtools-core";
 
+const increment = createCommandDef("increment");
 const store = createStore({ count: 0 });
-store.addCommandHandler("increment", (ctx) => {
+store.addCommandHandler(increment, (ctx) => {
   ctx.setState({ count: ctx.state.count + 1 });
 });
 
-// Connect devtools
 const devtools = createDevtools();
 devtools.connect(store, "counter");
 
-// Events are now tracked
-store.queue(createCommand("increment", undefined));
+store.queue(increment);
 ```
 
-## Query API
+`connect` takes any object with `state`, `openStream` and `closeStream`, so a `StoreImpl` or a `SealedStore` both work. Store names must be unique — connecting a second store under an existing name replaces the first.
 
-Query collected events programmatically at any time:
+<Callout type="info">
+`createDevtools` takes no `stores` option. Create the instance, then `connect` each store by name.
+</Callout>
 
-```typescript
-// Get full event timeline
-const timeline = devtools.getTimeline();
+## `createDevtools(options?)`
 
-// Filter by store
-const counterEvents = devtools.getTimeline("counter");
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `transport` | `Transport` | `windowMessageTransport()` | Where messages are sent |
+| `maxEvents` | `number` | `1000` | Timeline ring buffer size |
+| `maxSnapshots` | `number` | `100` | State history ring buffer size, **per store** |
+| `snapshotMode` | `SnapshotMode` | `"safe"` | `"safe"`, `"structured"` or `"none"` |
+| `detectAliasedState` | `boolean` | `true` | Warn when `"safe"` mode captures a value by reference |
+| `logToConsole` | `boolean` | `false` | Log every timeline entry |
+| `onError` | `(error: unknown) => void` | `console.warn` | Transport failures, serialization failures, aliasing warnings |
 
-// Get causality chain for an event
-const chain = devtools.getChain(someCorrelationId);
+`DEFAULT_MAX_EVENTS` and `DEFAULT_MAX_SNAPSHOTS` are exported if you want to derive from them.
 
-// Get state change history
-const history = devtools.getStateHistory("counter");
+<Callout type="warn">
+State history is bounded by `maxSnapshots` per store. In v1 only the timeline respected `maxEvents` while state history grew without bound, so a long-lived tab retained hundreds of thousands of full state snapshots.
+</Callout>
+
+## `Devtools`
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `connect(store, storeName)` | `void` | Start collecting from a store |
+| `disconnect(storeName)` | `void` | Stop collecting. No-op if not connected |
+| `getTimeline(storeName?)` | `readonly TimelineEntry[]` | All entries, or one store's |
+| `getChain(correlationId)` | `readonly TimelineEntry[]` | Full causality chain |
+| `getStateHistory(storeName)` | `readonly StateSnapshot[]` | Bounded snapshot history |
+| `getConnectedStores()` | `readonly string[]` | Currently connected store names |
+| `getVersion()` | `number` | Monotonic counter, bumped on every recorded change |
+| `clear()` | `void` | Empty timeline and history, broadcast `CLEARED` |
+| `destroy()` | `void` | Disconnect every store and tear down the transport |
+
+The three query methods return **`readonly`** arrays. Sort or filter with a copy (`[...timeline].sort(…)`) rather than in place — mutating a returned array in v1 corrupted the collector's own buffers.
+
+### `getVersion()` and caching
+
+`getVersion()` increments whenever anything is recorded. Query results are internally cached per version, so calling `getTimeline()` repeatedly at the same version is cheap, and a consumer can skip re-rendering by comparing versions:
+
+```ts
+let seen = -1;
+function refresh() {
+  const version = devtools.getVersion();
+  if (version === seen) return;
+  seen = version;
+  render(devtools.getTimeline());
+}
 ```
 
-## Console Logging
+## `TimelineEntry`
 
-Enable structured console output for quick debugging:
+```ts
+type TimelineEntry = {
+  seq: number;
+  storeName: string;
+  type: "command" | "event";
+  name: string;
+  eventId: string;
+  data: unknown;
+  correlationId: string;
+  causedBy: string | null;
+  timestamp: number;
+  stateBefore?: unknown;
+  stateAfter?: unknown;
+};
+```
 
-```typescript
+`seq` is a monotonic insertion counter — use it, not `timestamp`, to order entries, since many entries within one tick share a millisecond. `eventId` is a stable identity for the event definition, which lets a consumer group entries by definition rather than by display name.
+
+Both are **required**. Code that constructed a `TimelineEntry` literal in v1 needs to supply them.
+
+### Entry type
+
+`type` has exactly two values:
+
+| `type` | Covers |
+| --- | --- |
+| `"command"` | `commandStarted`, `commandHandled`, `commandHandlingError`, `commandInterrupted`, `invalidCommand` |
+| `"event"` | Everything else — `stateChanged`, `stateReset`, `eventHandlingError`, `unhandledError`, and your domain events |
+
+<Callout type="warn">
+There is no error, interrupted or state-change classification on the entry itself. v1's docs advertised five classifications; only these two exist. To distinguish an error from a successful command, match on `name` against `BuiltinEventName` — which is what the React panel does to build its error list.
+</Callout>
+
+An interrupted interruptable command appears as a `commandInterrupted` entry whose `data` carries a `phase` of `"queued"` or `"running"`.
+
+### `stateChanged` volume
+
+Core publishes `stateChanged` on **every** `ctx.setState()`, not once per command. A handler that calls `setState` three times produces three timeline entries and three state snapshots. This is deliberate — React needs the intermediate states — but it means a `maxEvents` of `1000` covers less wall-clock time than the same number did in v1. Raise it, or filter by store.
+
+## Causality chains
+
+```ts
+const chain = devtools.getChain(correlationId);
+```
+
+`getChain` returns the whole chain reachable from that correlation id — an indexed breadth-first walk with a cycle guard, covering commands queued from event handlers and their descendants in turn.
+
+<Callout type="info">
+In v1 `getChain` matched a single hop, so everything downstream of the first link was silently missing. A chain that looked complete was not.
+</Callout>
+
+## Snapshot modes
+
+| Mode | Behaviour |
+| --- | --- |
+| `"safe"` | **Default.** Bounded structural clone of plain objects, arrays, `Date`, `Map` and `Set` |
+| `"structured"` | `structuredClone`, falling back to `"safe"` when the value is not cloneable |
+| `"none"` | No copying — state history aliases live state |
+
+<Callout type="warn">
+**`"safe"` mode is not fully defensive.** Class instances, typed arrays and `ArrayBuffer` are captured **by reference**, and `Map`/`Set` *keys* are kept by reference too. Mutating one of those fields after capture retroactively rewrites recorded history, so the scrubber shows the same value at every index. Core's dev-mode freeze does not cover those types either, so nothing else catches it.
+</Callout>
+
+Cloning them was rejected deliberately: it costs CPU on every snapshot and cannot faithfully reconstruct an arbitrary class instance. Instead, the gap is **reported**.
+
+### Aliased state warnings
+
+With `detectAliasedState: true` (the default), the snapshot walk reports the store name, the property path and the offending type through `onError`, once per store and path, up to `MAX_ALIAS_WARNINGS` (`10`) reports:
+
+```
+store "cart": state.items.0.cache holds a Map that snapshotMode "safe" captures by reference, …
+```
+
+Two fixes, in order of preference:
+
+1. Keep state plain — plain objects and arrays only. This also keeps [persistence](/plugins/persist#json-round-trip-limitations) honest, since `JSON.stringify` cannot represent those types either.
+2. Set `snapshotMode: "structured"`, which clones them properly at some CPU cost.
+
+Set `detectAliasedState: false` to silence the warnings. That also removes the detection overhead entirely — it folds into the existing walk, measured at 1.7%, and once the report cap is reached the reporter is dropped and detection costs nothing.
+
+```ts
+import { MAX_ALIAS_WARNINGS, type AliasReport } from "@naikidev/commiq-devtools-core";
+```
+
+`safeClone`, `createSnapshot` and `toSerializable` are exported if you need the same semantics elsewhere.
+
+## Console logging
+
+```ts
 const devtools = createDevtools({ logToConsole: true });
 devtools.connect(store, "counter");
 
-// Console output:
 // [12:34:56.789] counter | commandStarted a3K9mX7p
 // [12:34:56.789] counter | stateChanged b7yP2nX1 (caused by a3K9mX7p)
 // [12:34:56.790] counter | commandHandled c1zR4qW8 (caused by a3K9mX7p)
-// [12:34:57.001] counter | commandInterrupted d2xT5mQ9 (caused by a3K9mX7p)
 ```
 
-## Event Classification
+## Transports
 
-Timeline entries are classified by type for filtering and color-coding:
+### `windowMessageTransport(options?)`
 
-| Classification | Events | Color |
+The default. Posts through `window.postMessage` as an integration point for external tools.
+
+| Option | Type | Default |
 | --- | --- | --- |
-| Command | `commandStarted`, `commandHandled` | Indigo |
-| Error | `commandHandlingError`, `invalidCommand` | Red |
-| Interrupted | `commandInterrupted` | Orange |
-| State change | `stateChanged` | Amber |
-| Event | Custom events, `stateReset` | Green |
+| `targetOrigin` | `string` | `window.location.origin` |
 
-Interruptable commands that are cancelled (either while queued or running) appear as `commandInterrupted` entries with a `phase` field (`"queued"` or `"running"`).
+<Callout type="warn">
+**Security fix.** v1 posted with `targetOrigin: "*"` and validated nothing on receive, so any third-party script on the page could read your full application state or drive the devtools protocol inward. The transport now pins the origin and requires the message to originate from the same `window`.
+</Callout>
 
-## Custom Transports
+On a page with an **opaque origin** — a `data:`/`blob:` document, a sandboxed iframe without `allow-same-origin` — `window.location.origin` is `"null"` and the transport declines to send rather than broadcasting. Pass `targetOrigin` explicitly if you need it there, and understand you are widening who can read state.
 
-The default transport uses `window.postMessage`, which serves as an integration point for external tools. You can provide custom transports for other environments:
+```ts
+import { windowMessageTransport } from "@naikidev/commiq-devtools-core";
 
-```typescript
+createDevtools({ transport: windowMessageTransport({ targetOrigin: "https://app.example.com" }) });
+```
+
+### `memoryTransport()`
+
+In-process, with a `messages` array for assertions. The right choice for tests and for Node.
+
+```ts
 import { createDevtools, memoryTransport } from "@naikidev/commiq-devtools-core";
 
-// In-memory transport for testing
 const transport = memoryTransport();
 const devtools = createDevtools({ transport });
 devtools.connect(store, "counter");
 
-// Inspect captured messages
+store.queue(increment);
+await store.flush();
+
 console.log(transport.messages);
 ```
 
-### Implementing a Custom Transport
+### Custom transports
 
-```typescript
-import type { Transport, DevtoolsMessage } from "@naikidev/commiq-devtools-core";
+```ts
+import type { DevtoolsMessage, Transport } from "@naikidev/commiq-devtools-core";
 
 const customTransport: Transport = {
-  send(message: DevtoolsMessage) {
-    // Send to your backend, WebSocket, etc.
-  },
+  send(message: DevtoolsMessage) { socket.emit("commiq", message); },
   onMessage(handler) {
-    // Listen for incoming messages
-    return () => {
-      /* cleanup */
-    };
+    socket.on("commiq", handler);
+    return () => socket.off("commiq", handler);
   },
-  destroy() {
-    // Clean up resources
-  },
+  destroy() { socket.close(); },
 };
-
-const devtools = createDevtools({ transport: customTransport });
 ```
 
-## Options
+A `send` that throws is caught and reported through `onError`; it never propagates into the store's stream dispatch. Values that cannot be serialized are replaced rather than crashing the send.
 
-| Option         | Type        | Default                    | Description           |
-| -------------- | ----------- | -------------------------- | --------------------- |
-| `transport`    | `Transport` | `windowMessageTransport()` | Message transport     |
-| `maxEvents`    | `number`    | `1000`                     | Ring buffer size      |
-| `logToConsole` | `boolean`   | `false`                    | Log events to console |
+`DevtoolsMessage` is a discriminated union of `STORE_CONNECTED`, `EVENT`, `STATE_SNAPSHOT`, `STORE_DISCONNECTED`, `CLEARED`, `REQUEST_STATE` and `TIME_TRAVEL`.
+
+## `EventCollector`
+
+`EventCollector` is exported for consumers that want the collection and indexing engine without the transport layer.
+
+```ts
+import { EventCollector } from "@naikidev/commiq-devtools-core";
+import type { EventCollectorOptions } from "@naikidev/commiq-devtools-core";
+
+const options: EventCollectorOptions = { maxEvents: 5000, snapshotMode: "structured" };
+const collector = new EventCollector(options);
+collector.connect(store, "counter");
+```
+
+The constructor takes a **single options object** — `EventCollectorOptions`, which is `DevtoolsOptions` minus `transport` and `logToConsole`, plus an `onEntry` callback. v1 took positional arguments.
 
 ## Cleanup
 
-```typescript
-// Disconnect a single store
+```ts
 devtools.disconnect("counter");
-
-// Disconnect all stores and clean up
+devtools.clear();
 devtools.destroy();
+```
+
+`clear()` empties the timeline and history and broadcasts `CLEARED` so a connected panel resets too. `destroy()` disconnects every store, announces each disconnection, and tears down the transport.
+
+`Devtools` exposes `destroy()`, so it fits the same `Disposable`-shaped teardown loop as the other plugins:
+
+```ts
+import type { Disposable } from "@naikidev/commiq";
+
+const plugins: Disposable[] = [devtools, effects, persisted];
+for (const plugin of plugins) plugin.destroy();
+```
+
+## Exported types
+
+`Devtools`, `DevtoolsOptions`, `DevtoolsMessage`, `DevtoolsStore`, `DevtoolsErrorHandler`, `SnapshotMode`, `StateSnapshot`, `TimelineEntry`, `Transport`, `WindowMessageTransportOptions`, `EventCollectorOptions`, `AliasReport` and `AliasReporter`.
+
+```ts
+import type { DevtoolsOptions } from "@naikidev/commiq-devtools-core";
+
+const devtoolsConfig: DevtoolsOptions = {
+  maxEvents: 5000,
+  snapshotMode: "structured",
+  onError: (error) => reportToSentry(error),
+};
 ```

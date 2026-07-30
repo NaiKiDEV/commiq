@@ -5,33 +5,47 @@ description: Integrate WebSockets, Socket.IO, and Server-Sent Events with Commiq
 
 # Real-Time Transports
 
-Commiq's command queue and event stream map directly onto real-time transports:
+Commiq's command queue and event stream map onto real-time transports in both directions:
 
 - **Inbound messages** from the transport become commands queued into the store
-- **Outbound messages** are sent in response to store events
+- **Outbound messages** are sent from a stream listener when the store emits a matching event
 
-No adapter package is required. The connection lifecycle is managed by the transport library of your choice — the bridge is a small amount of code in both directions.
+No adapter package is required. The connection lifecycle stays with the transport library of your choice — the bridge is a small amount of code on each side.
 
 ## The pattern
 
 ```
-Transport → message → store.queue({ name, data })
-Store event → event.name match → transport.send(data)
+Transport → message → store.queue(CommandDef, payload)
+Store event → openStream listener → transport.send(data)
 ```
 
-The store remains unaware of the transport. The transport setup subscribes to the store's event stream and filters for relevant events.
+The store never learns about the transport. The transport module subscribes to the store's event stream and filters for the events it cares about.
+
+<Callout type="warn">
+`queue()` accepts either a `CommandDef` plus its payload, or a fully-formed `Command`. It does **not** accept a bare `{ name, data }` object literal — `Command` also requires `correlationId` and `causedBy`, which the store assigns. Build commands with `createCommandDef` (preferred) or `createCommand`.
+</Callout>
 
 ## Native WebSocket
 
-Define events and command handlers in the store:
+Define the command definitions, events, and handlers in the store. Declaring state fields `readonly` lets handlers spread `ctx.state` freely — `ctx.state` is typed `DeepReadonly<S>`, so a mutable `Message[]` field would not survive the round trip.
 
 ```ts title="stores/chat.ts"
-import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+import {
+  createStore,
+  createCommandDef,
+  createEvent,
+  sealStore,
+} from "@naikidev/commiq";
 
-type Message = { id: string; author: string; text: string };
+export type Message = { id: string; author: string; text: string };
 
 type ChatState = {
-  messages: Message[];
+  readonly messages: readonly Message[];
+};
+
+export const ChatCommand = {
+  receive: createCommandDef<Message>("chat:message"),
+  send: createCommandDef<{ text: string }>("chat:send"),
 };
 
 export const ChatEvent = {
@@ -41,63 +55,93 @@ export const ChatEvent = {
 
 const _store = createStore<ChatState>({ messages: [] });
 
-// Inbound: server pushed a message
-_store.addCommandHandler<Message>("chat:message", (ctx, cmd) => {
-  ctx.setState({ messages: [...ctx.state.messages, cmd.data] });
-  ctx.emit(ChatEvent.MessageReceived, cmd.data);
-});
-
-// Outbound: user wants to send — emit an event for the transport to act on
-_store.addCommandHandler<{ text: string }>("chat:send", (ctx, cmd) => {
-  ctx.emit(ChatEvent.MessageSent, cmd.data);
-});
+_store
+  // Inbound: the server pushed a message
+  .addCommandHandler(ChatCommand.receive, (ctx, cmd) => {
+    ctx.setState((prev) => ({ messages: [...prev.messages, cmd.data] }));
+    ctx.emit(ChatEvent.MessageReceived, cmd.data);
+  })
+  // Outbound: the user wants to send — emit an event for the transport to act on
+  .addCommandHandler(ChatCommand.send, (ctx, cmd) => {
+    ctx.emit(ChatEvent.MessageSent, cmd.data);
+  });
 
 export const chatStore = sealStore(_store);
 ```
 
-Set up the WebSocket bridge during application startup:
+Set up the bridge in a dedicated module. `openStream(listener)` returns an `Unsubscribe` — keep it so the bridge can be torn down.
 
 ```ts title="transport/chat-ws.ts"
-import { chatStore, ChatEvent } from "../stores/chat";
+import { matchEvent } from "@naikidev/commiq";
+import { chatStore, ChatCommand, ChatEvent } from "../stores/chat";
+import type { Message } from "../stores/chat";
 
-const ws = new WebSocket("wss://example.com/chat");
+export function connectChat(url: string) {
+  const ws = new WebSocket(url);
 
-// Inbound: translate server messages into commands
-ws.addEventListener("message", (event) => {
-  const message = JSON.parse(event.data) as Message;
-  chatStore.queue({ name: "chat:message", data: message });
-});
+  // Inbound: translate server messages into commands
+  const handleMessage = (event: MessageEvent<string>) => {
+    const message = JSON.parse(event.data) as Message;
+    chatStore.queue(ChatCommand.receive, message);
+  };
+  ws.addEventListener("message", handleMessage);
 
-// Outbound: send when the store emits the send event
-chatStore.stream.subscribe((event) => {
-  if (event.name === ChatEvent.MessageSent.name && ws.readyState === WebSocket.OPEN) {
+  // Outbound: send when the store emits the send event
+  const unsubscribe = chatStore.openStream((event) => {
+    if (!matchEvent(event, ChatEvent.MessageSent)) return;
+    if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify(event.data));
-  }
-});
+  });
+
+  return () => {
+    unsubscribe();
+    ws.removeEventListener("message", handleMessage);
+    ws.close();
+  };
+}
 ```
+
+`matchEvent(event, EventDef)` narrows `event.data` to the definition's payload type, so `event.data` is typed `{ text: string }` inside the branch. Comparing `event.name` strings works too but leaves `event.data` as `unknown`.
 
 Dispatching from a component is no different from any other command:
 
 ```tsx
 const queue = useQueue(chatStore);
-queue({ name: "chat:send", data: { text: inputValue } });
+
+const handleSend = () => {
+  queue(ChatCommand.send, { text: inputValue });
+};
 ```
+
+<Callout type="info">
+Stream listeners are called **synchronously** from inside `_publish`, before the queue moves on. Keep them short. A listener that throws is isolated — it is reported through `StoreOptions.onError` with `source: "streamListener"` and also published as `unhandledError` — but it will not stop the other listeners or the queue.
+</Callout>
 
 ## Connection state
 
-Model the WebSocket lifecycle as store state to make connection status reactive:
+Model the socket lifecycle as store state to make connection status reactive:
 
 ```ts title="stores/connection.ts"
-import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+import {
+  createStore,
+  createCommandDef,
+  createEvent,
+  sealStore,
+} from "@naikidev/commiq";
 
 type ConnectionState = {
-  status: "connecting" | "connected" | "disconnected" | "error";
-  error: string | null;
+  readonly status: "connecting" | "connected" | "disconnected";
+  readonly error: string | null;
+};
+
+export const ConnectionCommand = {
+  connected: createCommandDef("connection:connected"),
+  disconnected: createCommandDef<{ reason: string }>("connection:disconnected"),
 };
 
 export const ConnectionEvent = {
   Connected: createEvent("connection:connected"),
-  Disconnected: createEvent("connection:disconnected"),
+  Disconnected: createEvent<{ reason: string }>("connection:disconnected"),
 };
 
 const _store = createStore<ConnectionState>({
@@ -105,35 +149,34 @@ const _store = createStore<ConnectionState>({
   error: null,
 });
 
-_store.addCommandHandler("connection:connected", (ctx) => {
-  ctx.setState({ status: "connected", error: null });
-  ctx.emit(ConnectionEvent.Connected, undefined);
-});
-
-_store.addCommandHandler<{ reason: string }>("connection:disconnected", (ctx, cmd) => {
-  ctx.setState({ status: "disconnected", error: cmd.data.reason });
-  ctx.emit(ConnectionEvent.Disconnected, undefined);
-});
+_store
+  .addCommandHandler(ConnectionCommand.connected, (ctx) => {
+    ctx.setState({ status: "connected", error: null });
+    ctx.emit(ConnectionEvent.Connected, undefined);
+  })
+  .addCommandHandler(ConnectionCommand.disconnected, (ctx, cmd) => {
+    ctx.setState({ status: "disconnected", error: cmd.data.reason });
+    ctx.emit(ConnectionEvent.Disconnected, cmd.data);
+  });
 
 export const connectionStore = sealStore(_store);
 ```
 
-Drive it from WebSocket lifecycle events:
+A command definition created with no payload type — `createCommandDef("connection:connected")` — is called as `queue(def)` with no second argument. One created with a payload requires it.
 
 ```ts title="transport/chat-ws.ts"
 ws.addEventListener("open", () => {
-  connectionStore.queue({ name: "connection:connected" });
+  connectionStore.queue(ConnectionCommand.connected);
 });
 
 ws.addEventListener("close", (event) => {
-  connectionStore.queue({
-    name: "connection:disconnected",
-    data: { reason: event.reason },
+  connectionStore.queue(ConnectionCommand.disconnected, {
+    reason: event.reason || "closed",
   });
 });
 ```
 
-The connection status is now available via `useSelector` like any other state. Components rendering a connection indicator or disabling the send button react automatically.
+The connection status is now readable through `useSelector` like any other state, so a status indicator or a disabled send button reacts automatically.
 
 ## Socket.IO
 
@@ -141,59 +184,120 @@ The pattern is identical — only the transport API differs:
 
 ```ts title="transport/chat-socketio.ts"
 import { io } from "socket.io-client";
-import { chatStore, ChatEvent } from "../stores/chat";
+import { matchEvent } from "@naikidev/commiq";
+import { chatStore, ChatCommand, ChatEvent } from "../stores/chat";
+import type { Message } from "../stores/chat";
 
-const socket = io("https://example.com");
+export function connectChatSocket(url: string) {
+  const socket = io(url);
 
-// Inbound
-socket.on("chat:message", (message: Message) => {
-  chatStore.queue({ name: "chat:message", data: message });
-});
+  socket.on("chat:message", (message: Message) => {
+    chatStore.queue(ChatCommand.receive, message);
+  });
 
-// Outbound
-chatStore.stream.subscribe((event) => {
-  if (event.name === ChatEvent.MessageSent.name) {
-    socket.emit("chat:message", event.data);
+  const unsubscribe = chatStore.openStream((event) => {
+    if (matchEvent(event, ChatEvent.MessageSent)) {
+      socket.emit("chat:message", event.data);
+    }
+  });
+
+  return () => {
+    unsubscribe();
+    socket.disconnect();
+  };
+}
+```
+
+Socket.IO's reconnection, rooms, and namespaces are untouched. Commiq does not interfere with the transport layer.
+
+## Server-Sent Events
+
+SSE is one-directional — the server pushes, the client never sends. Only the inbound half is needed:
+
+```ts title="transport/notifications-sse.ts"
+import { notificationStore, NotificationCommand } from "../stores/notifications";
+
+export function connectNotifications(url: string) {
+  const sse = new EventSource(url);
+
+  sse.addEventListener("notification", (event) => {
+    const data = JSON.parse(event.data) as { id: string; text: string };
+    notificationStore.queue(NotificationCommand.received, data);
+  });
+
+  sse.addEventListener("error", () => {
+    notificationStore.queue(NotificationCommand.connectionError, {
+      reason: sse.readyState === EventSource.CLOSED ? "closed" : "transient",
+    });
+  });
+
+  return () => sse.close();
+}
+```
+
+Every command definition used here carries its payload type, so the handler reading `cmd.data.reason` is guaranteed a value. A command definition declared without a payload cannot be queued with one, and vice versa — the mismatch is a compile error rather than a `cmd.data` of `undefined` at runtime.
+
+## Buffering while the store is busy
+
+If messages arrive faster than handlers can process them, they queue up and run in order. When you need to hold the queue deliberately — for example while replaying a backlog after reconnect — use `suspend()`:
+
+```ts title="transport/chat-ws.ts"
+ws.addEventListener("message", (event) => {
+  const batch = JSON.parse(event.data) as Message[];
+
+  const release = chatStore.suspend();
+  try {
+    for (const message of batch) {
+      chatStore.queue(ChatCommand.receive, message);
+    }
+  } finally {
+    release();
   }
 });
 ```
 
-Socket.IO's built-in reconnection, rooms, and namespaces are preserved. Commiq does not interfere with the transport layer.
-
-## Server-Sent Events
-
-SSE is one-directional — the server pushes events, the client never sends. Only the inbound side is needed:
-
-```ts title="transport/notifications-sse.ts"
-import { notificationStore } from "../stores/notifications";
-
-const sse = new EventSource("/api/notifications");
-
-sse.addEventListener("notification", (event) => {
-  const data = JSON.parse(event.data);
-  notificationStore.queue({ name: "notification:received", data });
-});
-
-sse.addEventListener("error", () => {
-  notificationStore.queue({ name: "notification:connection-error" });
-});
-```
+`suspend()` pauses **command execution only** and returns a release function. Events, stream listeners, and `queue()` itself keep working, so nothing is dropped — the commands simply run once the gate opens. The gate is counted: every suspender must release before processing resumes. Always release in a `finally`. A gate held longer than `StoreOptions.suspendWarningMs` (default 5000ms, `0` disables) reports once through `onError` with `source: "suspendedQueue"`.
 
 ## Where to initialize the transport
 
-Initialize transports in a single application-level module, not inside components or stores. A React entry point or a dedicated bootstrap file works well:
+Export a connect function and call it once at application startup rather than running the socket as a module side effect. That keeps the teardown path available for tests and hot-module replacement.
 
 ```ts title="main.ts"
-import "./transport/chat-ws";
-import "./transport/notifications-sse";
 import { createRoot } from "react-dom/client";
+import { connectChat } from "./transport/chat-ws";
+import { connectNotifications } from "./transport/notifications-sse";
 import { App } from "./App";
+
+const disconnectChat = connectChat("wss://example.com/chat");
+const disconnectNotifications = connectNotifications("/api/notifications");
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    disconnectChat();
+    disconnectNotifications();
+  });
+}
 
 createRoot(document.getElementById("root")!).render(<App />);
 ```
 
-Importing the transport module once causes it to execute and establish the connection. Keeping transport setup in dedicated files makes it straightforward to swap implementations and avoids re-establishing connections on component re-renders.
+Do not initialize transports inside components. A component that opens a socket on mount will open a second one on the next mount, and both will queue commands into the same store.
 
-<Callout type="info">
-Commiq processes commands sequentially. If messages arrive faster than handlers can process them, they are queued and processed in order. No messages are dropped as long as the application is running.
-</Callout>
+## Handling transport errors
+
+A malformed payload will throw inside the inbound listener, which is your code, not the store's — the store never sees it. Validate at the boundary and route failures into the store as a command so the UI can react:
+
+```ts
+ws.addEventListener("message", (event) => {
+  try {
+    const message = parseMessage(event.data);
+    chatStore.queue(ChatCommand.receive, message);
+  } catch (error) {
+    connectionStore.queue(ConnectionCommand.disconnected, {
+      reason: "malformed message from server",
+    });
+  }
+});
+```
+
+Failures *inside* a command handler are a different channel: they never propagate out of `queue()` or `flush()`. Await the handle to observe them, or install `StoreOptions.onError`. See [error handling](/patterns/error-handling).

@@ -1,173 +1,254 @@
 ---
 title: Effects and Cancellation
-description: Structured side effects with lifecycle control using the effects plugin and interruptable commands.
+description: Structured side effects with concurrency modes, cancellation, and error reporting using the effects plugin.
 ---
 
 # Effects and Cancellation
 
-The effects plugin (`@naikidev/commiq-effects`) manages side effects that run outside the store — API calls, queuing follow-up commands, background work — with built-in cancellation, debouncing, and restart control. Combined with interruptable commands, it covers the full spectrum of cancelable async work.
+The effects plugin (`@naikidev/commiq-effects`) manages side effects that run outside the store — API calls, queuing follow-up commands, background work — with cancellation, debouncing, and concurrency control. Combined with interruptable commands it covers most cancelable async work.
 
-## useEvent vs. effects plugin
+`createEffects(sealedStore, options?)` takes a **sealed** store. Effects are consumers: they observe via the event stream and dispatch via `queue()`. They cannot register handlers or mutate state directly.
 
-Both react to store events. The distinction is where the reaction belongs:
+<Callout type="warn">
+**`mode` defaults to `"switch"`, not parallel.** If the same event fires again while an effect run is still in flight, the in-flight run is **aborted** and a new one starts. If you need overlapping runs, pass `mode: "parallel"` explicitly. This is the opposite of the v1 default.
+</Callout>
+
+## `useEvent` vs. the effects plugin
+
+Both react to store events. The question is where the reaction belongs:
 
 | Concern | Tool | Why |
 |---|---|---|
 | Show a toast notification | `useEvent` | UI concern, tied to component lifecycle |
-| Navigate to another page | `useEvent` | Router is a UI dependency |
-| Log to analytics | `useEvent` | Side effect owned by a layout component |
+| Navigate to another page | `useEvent` | The router is a UI dependency |
+| Log to analytics from a layout | `useEvent` | Side effect owned by a mounted component |
 | Queue a follow-up command | Effects plugin | Domain logic, not tied to any component |
-| Call an external API in response to an event | Effects plugin | Async work with cancellation needs |
-| Track recent searches after completion | Effects plugin | Background bookkeeping independent of UI |
+| Call an external API in response to an event | Effects plugin | Async work that needs cancellation |
+| Track recent searches after completion | Effects plugin | Bookkeeping independent of the UI |
 
-**Rule of thumb:** if the side effect would still need to run even with no UI mounted, use the effects plugin. If it only makes sense while a specific component is on screen, use `useEvent`.
+**Rule of thumb:** if the side effect must still run with no UI mounted, use the effects plugin. If it only makes sense while a specific component is on screen, use `useEvent`.
 
 ## Basic effect
 
-Register an effect on a sealed store. When the matching event fires, the handler runs:
-
 ```ts title="stores/order.ts"
+import { createCommand } from "@naikidev/commiq";
 import { createEffects } from "@naikidev/commiq-effects";
 import { orderStore, OrderEvent } from "./order";
 
-const effects = createEffects(orderStore);
+const effects = createEffects(orderStore, {
+  onError: (report) => {
+    errorReportingService.capture(report.error, {
+      source: report.source,
+      event: report.event?.name,
+    });
+  },
+});
 
-effects.on(OrderEvent.Placed, (data, ctx) => {
-  ctx.queue(createCommand("analytics:track", { event: "order_placed", orderId: data.orderId }));
+const stopTracking = effects.on(OrderEvent.Placed, (data, ctx) => {
+  ctx.queue(createCommand("analytics:track", { name: "order_placed", id: data.orderId }));
 });
 ```
 
-The handler receives the event data and an `EffectContext` with `queue()` (to dispatch commands) and `signal` (an `AbortSignal` for cancellation).
+The handler receives the event's payload and an `EffectContext` with `state` (read-only), `queue()`, and `signal` (an `AbortSignal`). `effects.on()` returns an `Unsubscribe` for removing that one effect.
 
-## Debounced effects
+## Error handling is not automatic
 
-Use `{ debounce: ms }` to delay execution. If the same event fires again within the debounce window, the previous timer is discarded and a new one starts:
+An effect handler that throws does **not** fail the command that emitted the event, and does not reach the store's `onError`. Effects have their own reporter, and if you do not install one the failure is reported to the console outside production and is invisible in production.
 
-```ts title="stores/search.ts"
-import { createEffects } from "@naikidev/commiq-effects";
-import { searchStore, SearchEvent } from "./search";
-
-const effects = createEffects(searchStore);
-
-effects.on(
-  SearchEvent.Completed,
-  (data, ctx) => {
-    ctx.queue(createCommand("search:add-recent", data.query));
-  },
-  { debounce: 300 },
-);
+```ts
+const effects = createEffects(store, {
+  onError: (report) => reportToService(report.error, { source: report.source }),
+});
 ```
 
-This is useful for bookkeeping that should only happen after activity settles — tracking recent searches, saving draft state, or syncing with a remote service.
+`EffectErrorReport` is `{ error, source, event?, command? }` where `source` is:
 
-## Restart on new
+| Source | Fires when |
+| --- | --- |
+| `effectHandler` | The effect handler threw |
+| `abortedDispatch` | The handler called `ctx.queue()` after its run was aborted — the command is **dropped** |
+| `destroyedEffects` | `on()` or a dispatch happened after `destroy()` |
 
-`{ restartOnNew: true }` aborts the currently running effect and starts a new one when the same event fires again. This is the right choice when only the latest result matters:
+`abortedDispatch` is the one to know about: a cancelled run that reaches a `ctx.queue()` call has its command discarded rather than written to the store. That is what makes `switch` mode safe — a superseded run cannot land stale data. It also means work after an `await` may silently not happen, which is correct but worth being explicit about:
+
+```ts
+effects.on(SearchEvent.Completed, async (data, ctx) => {
+  const enriched = await enrich(data.query, { signal: ctx.signal });
+  if (ctx.signal.aborted) return; // do not bother dispatching
+  ctx.queue(createCommand("search:setEnriched", enriched));
+});
+```
+
+A per-effect `onError` overrides the instance-level one:
+
+```ts
+effects.on(UploadEvent.Started, uploadHandler, {
+  onError: (report) => showToast("Upload failed", { type: "error" }),
+});
+```
+
+## Concurrency modes
+
+`mode` controls what happens when the event fires while a run is active:
+
+| Mode | Behavior |
+|---|---|
+| `"switch"` (**default**) | Abort the running effect and start a new one — last one wins |
+| `"parallel"` | Let runs overlap; all of them complete |
+| `"drop"` | Ignore the new event while a run is active — first one wins |
+| `"queue"` | Run them one after another in arrival order |
 
 ```ts title="stores/autocomplete.ts"
-const effects = createEffects(autocompleteStore);
-
 effects.on(
   AutocompleteEvent.QueryChanged,
   async (data, ctx) => {
-    const suggestions = await fetchSuggestions(data.query, { signal: ctx.signal });
-    ctx.queue(createCommand("autocomplete:set-suggestions", suggestions));
+    try {
+      const suggestions = await fetchSuggestions(data.query, { signal: ctx.signal });
+      ctx.queue(createCommand("autocomplete:setSuggestions", suggestions));
+    } catch (error) {
+      if (ctx.signal.aborted) return; // superseded — not a real failure
+      throw error;                     // real failure — let onError see it
+    }
   },
-  { restartOnNew: true },
+  { mode: "switch" },
 );
 ```
 
-When the user types a new character before the previous fetch completes, the in-flight request is aborted via the signal and a new one begins. Pass `ctx.signal` to `fetch` or any API that accepts an `AbortSignal` so the underlying request is canceled as well.
+Two things this snippet does that are easy to skip and expensive to skip:
 
-## Cancel on event
+- **Passing `ctx.signal` to `fetch`.** Without it the effect run is abandoned but the HTTP request keeps going. `switch` mode aborts the *run*, not any I/O you did not wire to the signal.
+- **Re-throwing.** An aborted `fetch` rejects with an `AbortError`. Swallowing everything hides genuine 500s and offline failures; swallowing nothing turns every keystroke into a reported error. Check `ctx.signal.aborted` and re-throw the rest.
 
-`{ cancelOn: eventDef }` aborts the running effect when a specific event fires. Use this for effects that should stop when the user navigates away or resets:
+<Callout type="info">
+`restartOnNew` still works and is deprecated: `true` maps to `"switch"`, `false` maps to `"parallel"`. `mode` wins if both are given. Prefer `mode` — it names all four behaviors instead of two.
+</Callout>
 
-```ts title="stores/upload.ts"
-const UploadEvent = {
-  Started: createEvent<{ fileId: string }>("upload:started"),
-  Canceled: createEvent("upload:canceled"),
-};
+## Debounced effects
 
-const effects = createEffects(uploadStore);
-
-effects.on(
-  UploadEvent.Started,
-  async (data, ctx) => {
-    await uploadFile(data.fileId, { signal: ctx.signal });
-    ctx.queue(createCommand("upload:complete", { fileId: data.fileId }));
-  },
-  { cancelOn: UploadEvent.Canceled },
-);
-```
-
-When the user cancels the upload, the store emits `UploadEvent.Canceled`, and the in-flight effect is aborted. The `ctx.signal` transitions to aborted, and the `uploadFile` call can clean up.
-
-## Combining with interruptable commands
-
-Interruptable commands and effects serve different purposes and work well together:
-
-- **Interruptable commands** cancel previous executions of the _same command_ when a new instance is queued. The store manages the `AbortSignal` internally.
-- **Effects** cancel based on _event triggers_, with explicit control over debounce, restart, and cancelOn.
-
-A common pattern pairs an interruptable search command with an effect that reacts to its completion:
+`{ debounce: ms }` delays the run. If the event fires again inside the window, the pending timer is discarded and restarted:
 
 ```ts title="stores/search.ts"
-// The command is interruptable — typing a new query cancels the previous search
-_store.addCommandHandler<string>(
-  "search:query",
-  async (ctx, cmd) => {
-    ctx.setState({ ...ctx.state, query: cmd.data, loading: true });
-    if (ctx.signal!.aborted) return;
-
-    const results = await searchApi(cmd.data);
-    ctx.setState({ ...ctx.state, results, loading: false });
-    ctx.emit(SearchEvent.Completed, { query: cmd.data, count: results.length });
-  },
-  { interruptable: true },
-);
-
-// The effect tracks completed searches — debounced to avoid noise from rapid queries
 effects.on(
   SearchEvent.Completed,
   (data, ctx) => {
-    ctx.queue(createCommand("search:add-recent", data.query));
+    ctx.queue(createCommand("search:addRecent", data.query));
   },
   { debounce: 200 },
 );
 ```
 
-The interruptable command ensures only the latest search runs. The debounced effect ensures recent-search tracking only fires after the user stops typing.
+Useful for bookkeeping that should only happen once activity settles. `debounce` composes with `mode` — debouncing decides *when* a run starts, `mode` decides what happens to a run already in progress.
+
+## Cancel on event
+
+`{ cancelOn: eventDef }` aborts the running effect when a specific event fires:
+
+```ts title="stores/upload.ts"
+import { createEvent, createCommand } from "@naikidev/commiq";
+
+export const UploadEvent = {
+  Started: createEvent<{ fileId: string }>("upload:started"),
+  Canceled: createEvent("upload:canceled"),
+};
+
+effects.on(
+  UploadEvent.Started,
+  async (data, ctx) => {
+    try {
+      await uploadFile(data.fileId, { signal: ctx.signal });
+      ctx.queue(createCommand("upload:complete", { fileId: data.fileId }));
+    } catch (error) {
+      if (ctx.signal.aborted) {
+        ctx.queue(createCommand("upload:markCanceled", { fileId: data.fileId }));
+        return;
+      }
+      throw error;
+    }
+  },
+  { cancelOn: UploadEvent.Canceled },
+);
+```
+
+The `ctx.queue` in the aborted branch is dropped and reported as `abortedDispatch` — a cancelled run cannot write to the store. If cancellation needs to be recorded in state, queue that command from the handler that emitted `UploadEvent.Canceled`, not from the aborted effect.
+
+## Combining with interruptable commands
+
+Interruptable commands and effects cancel on different axes:
+
+- **Interruptable commands** cancel a previous execution of the *same command* when a new one is queued. The store owns the `AbortSignal`, exposed as `ctx.signal` in the handler, and settles the superseded handle as `interrupted`.
+- **Effects** cancel based on *event triggers*, with `mode`, `debounce`, and `cancelOn`.
+
+```ts title="stores/search.ts"
+_store.addCommandHandler(
+  SearchCommand.query,
+  async (ctx, cmd) => {
+    ctx.setState((prev) => ({ ...prev, query: cmd.data }));
+
+    const results = await searchApi(cmd.data, { signal: ctx.signal });
+    if (ctx.signal?.aborted) return;
+
+    ctx.setState((prev) => ({ ...prev, results }));
+    ctx.emit(SearchEvent.Completed, { query: cmd.data, count: results.length });
+  },
+  { interruptable: true },
+);
+
+effects.on(
+  SearchEvent.Completed,
+  (data, ctx) => {
+    ctx.queue(createCommand("search:addRecent", data.query));
+  },
+  { debounce: 200 },
+);
+```
+
+`ctx.signal` on a command context is optional (`AbortSignal | undefined`) — it is only present when the handler was registered `interruptable`. Guard with `ctx.signal?.aborted`.
+
+`{ rollbackOnInterrupt: true }` makes the store restore the state from before an interrupted command, published as its own `stateChanged`. Use it when a partially applied optimistic update should not survive being superseded — see [optimistic updates](/patterns/optimistic-updates).
+
+There is no loading flag in the state above. `useCommandStatus(store, SearchCommand.query)` reports `pending` from the event stream — see [async loading states](/patterns/async-loading-states).
 
 ## Cleanup
 
-Call `effects.destroy()` to abort all running effects and remove the stream subscription:
+`Effects` conforms to `Disposable`. `destroy()` aborts every running effect and drops the stream subscription:
 
 ```ts
 effects.destroy();
 ```
 
-In a React application, destroy effects when the module is no longer needed. For global stores with effects initialized at startup, destruction typically happens only during application teardown or hot-module replacement.
+After `destroy()`, `on()` and any dispatch from an in-flight run are ignored and reported with `source: "destroyedEffects"`. The instance cannot be revived — create a new one.
 
-<Callout type="info">
-After `destroy()` is called, no new effects will fire even if the store continues to emit events. Create a new `createEffects()` instance if you need to reattach.
-</Callout>
+To remove a single effect, call the `Unsubscribe` that `on()` returned:
 
-For effects scoped to a component's lifetime, initialize and destroy within a `useEffect`:
+```ts
+const stop = effects.on(OrderEvent.Placed, handler);
+stop();
+```
+
+For effects scoped to a component's lifetime, create and destroy inside a `useEffect`:
 
 ```tsx
 import { useEffect } from "react";
+import { createCommand } from "@naikidev/commiq";
 import { createEffects } from "@naikidev/commiq-effects";
 
 function SearchPage() {
   useEffect(() => {
-    const effects = createEffects(searchStore);
-    effects.on(SearchEvent.Completed, (data, ctx) => {
-      ctx.queue(createCommand("search:add-recent", data.query));
+    const effects = createEffects(searchStore, {
+      onError: (report) => console.error(report.error),
     });
+
+    effects.on(SearchEvent.Completed, (data, ctx) => {
+      ctx.queue(createCommand("search:addRecent", data.query));
+    });
+
     return () => effects.destroy();
   }, []);
 
   return <SearchForm />;
 }
 ```
+
+<Callout type="warn">
+Under React strict mode this runs twice in development. That is fine here because the cleanup destroys the first instance — but it is the reason to prefer module-level effects for domain logic. A component-scoped effect stops working the moment the component unmounts, which is rarely what domain bookkeeping wants.
+</Callout>

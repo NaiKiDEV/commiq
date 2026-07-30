@@ -1,126 +1,166 @@
 ---
 title: Testing Stores and Hooks
-description: How to unit test command handlers, event flows, React hooks, and effects.
+description: How to unit test command handlers, event flows, failures, React hooks, and effects.
 ---
 
 # Testing Stores and Hooks
 
-Commiq stores are plain TypeScript objects. Testing them is straightforward: import your store, queue a command, await `flush()`, and assert state. No mocking framework is required for store-level tests.
+Commiq stores are plain TypeScript objects. No mocking framework is needed for store-level tests: create a store, dispatch a command, await the result, assert.
+
+There are two ways to wait, and the choice matters:
+
+| | Waits for | Use when |
+| --- | --- | --- |
+| `await store.queue(...)` | That one command settles | Asserting the outcome of a single dispatch |
+| `await store.flush()` | Full quiescence — queue and pending events empty | Event handlers queue follow-up commands |
+
+`queue()` returns a `CommandHandle` — a `Promise<CommandResult>` that **never rejects**. `flush()` never rejects either. A test that expects a thrown error from either will always fail.
 
 ## Testing commands
 
-Import the sealed store and its command factories. Queue commands and assert the resulting state:
-
-```ts title="stores/counter/store.test.ts"
+```ts title="features/counter/store.test.ts"
+import { expect, test } from "vitest";
 import { CounterCommand } from "./commands";
-import { counterStore } from "./store";
+import { createCounterStore } from "./store";
 
 test("increment adds one to the count", async () => {
-  counterStore.queue(CounterCommand.increment());
-  await counterStore.flush();
+  const store = createCounterStore();
 
-  expect(counterStore.state.count).toBe(1);
+  const result = await store.queue(CounterCommand.increment);
+
+  expect(result.status).toBe("handled");
+  expect(store.state.count).toBe(1);
 });
 
-test("incrementBy adds the specified amount", async () => {
-  counterStore.queue(CounterCommand.incrementBy(5));
-  await counterStore.flush();
+test("incrementBy adds the given amount", async () => {
+  const store = createCounterStore();
 
-  expect(counterStore.state.count).toBe(6);
-});
+  await store.queue(CounterCommand.incrementBy, { amount: 5 });
 
-test("reset restores initial state after mutations", async () => {
-  counterStore.queue(CounterCommand.reset());
-  await counterStore.flush();
-
-  expect(counterStore.state.count).toBe(0);
+  expect(store.state.count).toBe(5);
 });
 ```
 
-<Callout type="info">
-Always call `await store.flush()` before asserting state — even for synchronous handlers. Commands are processed through an async queue, so state is not updated synchronously after `queue()`.
+Asserting `result.status` as well as the state is worth the extra line: a command that never reached a handler leaves state untouched too, so a state-only assertion passes for the wrong reason when a name is misspelled.
+
+<Callout type="warn">
+Never assert state immediately after `queue()` without awaiting. The queue drains on a microtask, so state is unchanged on the line after `queue()` returns — even for a synchronous handler.
 </Callout>
 
-## Testing async commands
+## Testing failures
 
-The pattern is identical. `flush()` resolves after all queued commands — including async ones — have completed:
+A handler that throws does not reject the handle. It settles as `failed` with the error attached:
 
-```ts title="stores/user/store.test.ts"
-import { UserCommand } from "./commands";
-import { userStore } from "./store";
+```ts title="features/user/store.test.ts"
+import { expect, test, vi } from "vitest";
+import { createStore } from "@naikidev/commiq";
 
-test("fetch transitions through loading to idle", async () => {
-  userStore.queue(UserCommand.fetch());
-  await userStore.flush();
+test("a failing fetch settles as failed and reports through onError", async () => {
+  const onError = vi.fn();
+  const store = createStore<UserState>(initialState, { onError });
+  store.addCommandHandler(UserCommand.fetch, () => {
+    throw new Error("network down");
+  });
 
-  expect(userStore.state.status).toBe("idle");
-  expect(userStore.state.users.length).toBeGreaterThan(0);
+  const result = await store.queue(UserCommand.fetch, { id: "1" });
+
+  expect(result.status).toBe("failed");
+  expect(result.error).toEqual(new Error("network down"));
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ source: "commandHandler", error: expect.any(Error) }),
+  );
 });
 ```
 
-If the handler calls external APIs, mock the dependency at the module level so the store under test uses the mock without any extra wiring.
+Passing an `onError` spy does double duty: it is the assertion, and it replaces the default reporter, which would otherwise log the expected error to the test output. Outside production that default logs to the console; in production it is silent.
+
+`onError` is also the only channel that reports failures from stream listeners, extension hooks, and disposed contexts:
+
+```ts
+test("a throwing stream listener does not break the queue", async () => {
+  const onError = vi.fn();
+  const store = createStore<CounterState>(initialState, { onError });
+  store.addCommandHandler(CounterCommand.increment, (ctx) => {
+    ctx.setState((prev) => ({ count: prev.count + 1 }));
+  });
+  store.openStream(() => {
+    throw new Error("listener boom");
+  });
+
+  await store.queue(CounterCommand.increment);
+
+  expect(store.state.count).toBe(1);
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ source: "streamListener" }),
+  );
+});
+```
+
+Other statuses worth testing: `invalid` (no handler registered), `interrupted` (an interruptable command superseded), `discarded` (the store was destroyed first).
 
 ## Asserting emitted events
 
-Use `openStream` to collect events, then assert after `flush()`:
+Collect from the stream, then assert after awaiting. `openStream` returns an `Unsubscribe`:
 
-```ts title="stores/counter/store.test.ts"
-import { type StoreEvent } from "@naikidev/commiq";
+```ts title="features/counter/store.test.ts"
+import { expect, test } from "vitest";
+import { matchEvent } from "@naikidev/commiq";
+import type { StoreEvent } from "@naikidev/commiq";
 import { CounterCommand } from "./commands";
 import { CounterEvent } from "./events";
-import { counterStore } from "./store";
+import { createCounterStore } from "./store";
 
 test("reset emits a Reset event", async () => {
+  const store = createCounterStore();
   const events: StoreEvent[] = [];
-  counterStore.openStream((event) => {
-    events.push(event);
-  });
+  const unsubscribe = store.openStream((event) => events.push(event));
 
-  counterStore.queue(CounterCommand.reset());
-  await counterStore.flush();
+  await store.queue(CounterCommand.reset);
+  unsubscribe();
 
-  const reset = events.find((e) => e.id === CounterEvent.Reset.id);
-  expect(reset).toBeDefined();
+  expect(events.some((event) => matchEvent(event, CounterEvent.Reset))).toBe(true);
 });
 ```
 
-Clean up the listener after the test if the store persists across tests:
+<Callout type="warn">
+**`stateChanged` fires once per `setState`, not once per command.** A handler calling `setState` three times publishes three `stateChanged` events. Counting them to count commands will over-count; filter on `commandHandled` instead.
+</Callout>
+
+Because `matchEvent` narrows the payload type, asserting on data needs no cast:
 
 ```ts
-const listener = (event: StoreEvent) => { events.push(event); };
-counterStore.openStream(listener);
-
-afterEach(() => {
-  counterStore.closeStream(listener);
-});
+const incremented = events.find((event) =>
+  matchEvent(event, CounterEvent.Incremented),
+);
+expect(incremented?.data.amount).toBe(5);
 ```
 
 ## Testing event handlers
 
-Event handlers react to events and queue commands. Test them by triggering the command that emits the source event, then asserting the downstream state:
+Event handlers react to events and queue commands. Trigger the command that emits the source event, then wait for the whole cascade — this is where `flush()` is required, because the handle from `queue()` settles before event handlers have run their follow-ups.
 
-```ts title="stores/order/store.test.ts"
-import { OrderCommand } from "./commands";
-import { orderStore } from "./store";
+```ts title="features/order/store.test.ts"
+test("placing an order moves it to processing", async () => {
+  const store = createOrderStore();
 
-test("placing an order transitions status to processing", async () => {
-  orderStore.queue(OrderCommand.place({ items: [{ id: "1", price: 29.99 }] }));
-  await orderStore.flush();
+  store.queue(OrderCommand.place, { items: [{ id: "1", price: 29.99 }] });
+  await store.flush();
 
-  expect(orderStore.state.status).toBe("processing");
+  expect(store.state.status).toBe("processing");
 });
 ```
 
-When event handlers queue commands on a _different_ store, test the integration by importing both stores and the bus:
+<Callout type="warn">
+`flush()` **throws synchronously** if called from inside a command or event handler, rather than deadlocking as it used to. Inside a handler, await the handle returned by `queue()` instead. If a test helper calls `flush()`, make sure it is not reachable from a handler.
+</Callout>
 
-```ts title="stores/pipeline.test.ts"
-import { orderStore } from "./order/store";
-import { invoiceStore } from "./invoice/store";
-import { OrderCommand } from "./order/commands";
-import "./bus"; // Ensures event bus is connected
+For handlers that queue onto a *different* store, await both:
+
+```ts title="features/pipeline/pipeline.test.ts"
+import "./bus"; // connects the stores to the event bus
 
 test("placing an order triggers invoice generation", async () => {
-  orderStore.queue(OrderCommand.place({ items: [{ id: "1", price: 29.99 }] }));
+  orderStore.queue(OrderCommand.place, { items: [{ id: "1", price: 29.99 }] });
   await orderStore.flush();
   await invoiceStore.flush();
 
@@ -128,159 +168,213 @@ test("placing an order triggers invoice generation", async () => {
 });
 ```
 
+Order matters: `orderStore.flush()` has to resolve first so the bus has routed the event and queued the downstream command before `invoiceStore.flush()` decides it is quiescent.
+
 ## Testing interruptable commands
 
-Queue the same command twice to trigger interruption. The first execution should be aborted, and only the second should complete:
+```ts title="features/search/store.test.ts"
+import { expect, test } from "vitest";
 
-```ts title="stores/search/store.test.ts"
-import { BuiltinEvent, type StoreEvent } from "@naikidev/commiq";
-import { SearchCommand } from "./commands";
-import { searchStore } from "./store";
+test("a second search interrupts the first", async () => {
+  const store = createSearchStore();
 
-test("second search interrupts the first", async () => {
-  const interrupted: StoreEvent[] = [];
+  const first = store.queue(SearchCommand.query, "first");
+  await Promise.resolve();                 // let the first handler start
+  const second = store.queue(SearchCommand.query, "second");
 
-  searchStore.openStream((event) => {
-    if (event.id === BuiltinEvent.CommandInterrupted.id) {
-      interrupted.push(event);
-    }
-  });
-
-  searchStore.queue(SearchCommand.search("first"));
-  await new Promise((r) => setTimeout(r, 10)); // Let first handler start
-  searchStore.queue(SearchCommand.search("second"));
-  await searchStore.flush();
-
-  expect(searchStore.state.results).toBeDefined();
-  expect(interrupted.length).toBeGreaterThan(0);
+  expect((await first).status).toBe("interrupted");
+  expect((await second).status).toBe("handled");
+  expect(store.state.query).toBe("second");
 });
 ```
 
-<Callout type="warn">
-Interruptable command tests rely on timing. Use short timeouts (10-50ms) and keep the test deterministic by checking the final state rather than intermediate transitions.
+Awaiting the handles is what makes this deterministic — no timer and no polling. The superseded command settles as `interrupted` the moment it is aborted.
+
+<Callout type="info">
+A command is only interrupted if it was already running. Two commands queued in the same tick may both settle as `handled`, because the second arrives before the first has started. `await Promise.resolve()` gives the queue a microtask to pick up the first; if the handler awaits real I/O you may need to await your stubbed promise instead.
 </Callout>
+
+Test `{ rollbackOnInterrupt: true }` by asserting that state returned to its pre-command value, which the store publishes as its own `stateChanged`.
+
+## Testing suspension
+
+`suspend()` returns a release and pauses command execution only. It is a clean way to assert on queue ordering:
+
+```ts
+test("commands queued while suspended run in order on release", async () => {
+  const store = createCounterStore();
+
+  const release = store.suspend();
+  store.queue(CounterCommand.increment);
+  store.queue(CounterCommand.incrementBy, { amount: 5 });
+
+  expect(store.state.count).toBe(0); // nothing has run
+
+  release();
+  await store.flush();
+
+  expect(store.state.count).toBe(6);
+});
+```
+
+The gate is counted, so every suspender must release. A gate held past `suspendWarningMs` (default 5000) reports once through `onError` with `source: "suspendedQueue"` — set `suspendWarningMs: 0` to disable that in tests that hold a gate deliberately.
 
 ## Testing React hooks
 
-React hooks are tested with `renderHook` from `@testing-library/react`. Use `act` to wrap store mutations so React processes the updates:
+Use `renderHook` from `@testing-library/react`, and wrap dispatches in `act`:
 
-```tsx title="stores/counter/hooks.test.tsx"
-import { renderHook, act } from "@testing-library/react";
+```tsx title="features/counter/hooks.test.tsx"
+import { act, renderHook } from "@testing-library/react";
+import { expect, test } from "vitest";
 import { useSelector } from "@naikidev/commiq-react";
 import { CounterCommand } from "./commands";
-import { counterStore } from "./store";
+import { createCounterStore } from "./store";
 
-test("useSelector reflects state after command", async () => {
-  const { result } = renderHook(() => useSelector(counterStore, (s) => s.count));
+test("useSelector reflects state after a command", async () => {
+  const store = createCounterStore();
+  const { result } = renderHook(() => useSelector(store, (s) => s.count));
+
   expect(result.current).toBe(0);
 
   await act(async () => {
-    counterStore.queue(CounterCommand.increment());
-    await counterStore.flush();
+    await store.queue(CounterCommand.increment);
   });
 
   expect(result.current).toBe(1);
 });
 ```
 
-<Callout type="info">
-If using Jest instead of Vitest, set `testEnvironment: "jsdom"` in your jest config. The test code is otherwise identical.
-</Callout>
+`useCommandStatus` is tested the same way. It starts idle and only reflects commands dispatched after it subscribed:
 
-Testing `useEvent` requires triggering an event and asserting the callback was invoked:
+```tsx
+test("useCommandStatus reports pending then the error", async () => {
+  const store = createFailingStore();
+  const { result } = renderHook(() =>
+    useCommandStatus(store, UserCommand.fetch),
+  );
 
-```tsx title="stores/counter/hooks.test.tsx"
-import { renderHook, act } from "@testing-library/react";
-import { useEvent } from "@naikidev/commiq-react";
-import { CounterCommand } from "./commands";
-import { CounterEvent } from "./events";
-import { counterStore } from "./store";
-
-test("useEvent fires callback when Reset event is emitted", async () => {
-  const handler = vi.fn();
-  renderHook(() => useEvent(counterStore, CounterEvent.Reset, handler));
+  expect(result.current.pending).toBe(false);
 
   await act(async () => {
-    counterStore.queue(CounterCommand.reset());
-    await counterStore.flush();
+    await store.queue(UserCommand.fetch, { id: "1" });
+  });
+
+  expect(result.current.pending).toBe(false);
+  expect(result.current.error).toEqual(new Error("network down"));
+  expect(result.current.lastCompletedAt).toBeTypeOf("number");
+});
+```
+
+Testing `useEvent`:
+
+```tsx
+test("useEvent fires when the Reset event is emitted", async () => {
+  const store = createCounterStore();
+  const handler = vi.fn();
+  renderHook(() => useEvent(store, CounterEvent.Reset, handler));
+
+  await act(async () => {
+    await store.queue(CounterCommand.reset);
   });
 
   expect(handler).toHaveBeenCalledTimes(1);
 });
 ```
 
-## Testing effects
+For hooks that take a store **name** rather than an instance, render inside `CommiqProvider` and pass the test store in the registry:
 
-Import the store and set up effects in the test. Trigger the event by queuing a command, then assert the effect's result:
+```tsx
+import { CommiqProvider } from "@naikidev/commiq-react";
 
-```ts title="stores/search/effects.test.ts"
-import { createEffects } from "@naikidev/commiq-effects";
-import { SearchCommand } from "./commands";
-import { SearchEvent } from "./events";
-import { searchStore } from "./store";
+const store = createCounterStore();
 
-test("completed search is added to recent searches", async () => {
-  const effects = createEffects(searchStore);
-
-  effects.on(SearchEvent.Completed, (data, ctx) => {
-    ctx.queue(SearchCommand.addRecent(data.query));
-  });
-
-  searchStore.queue(SearchCommand.search("commiq"));
-  await searchStore.flush();
-
-  expect(searchStore.state.recentSearches).toContain("commiq");
-
-  effects.destroy();
+const { result } = renderHook(() => useCounter(), {
+  wrapper: ({ children }) => (
+    <CommiqProvider stores={{ counter: store }}>{children}</CommiqProvider>
+  ),
 });
 ```
 
-<Callout>
-Always call `effects.destroy()` at the end of the test (or in `afterEach`) to clean up stream subscriptions and prevent leaks between tests.
+This only works if the hook resolves its store by name. A hook that imports the module-level store directly ignores the provider — see [domain hooks](/patterns/domain-hooks).
+
+<Callout type="info">
+With Jest instead of Vitest, set `testEnvironment: "jsdom"`. The test code is otherwise identical.
 </Callout>
 
-## Isolating tests with store factories
+## Testing effects
 
-When tests mutate shared state and interfere with each other, extract the store setup into a factory function. Each test gets a fresh instance:
+Effects are a separate error channel from the store, so give them an `onError` spy too:
 
-```ts title="stores/counter/store.ts"
-import { createStore, sealStore } from "@naikidev/commiq";
-import { CounterEvent } from "./events";
+```ts title="features/search/effects.test.ts"
+import { afterEach, expect, test, vi } from "vitest";
+import { createEffects } from "@naikidev/commiq-effects";
+import type { Effects } from "@naikidev/commiq-effects";
 
-export type CounterState = { count: number };
-export const initialState: CounterState = { count: 0 };
+let effects: Effects<SearchState>;
 
-export function createCounterStore() {
-  const store = createStore<CounterState>(initialState);
+afterEach(() => {
+  effects.destroy();
+});
 
-  store
-    .addCommandHandler("counter:increment", (ctx) => {
-      ctx.setState({ count: ctx.state.count + 1 });
-    })
-    .addCommandHandler("counter:reset", (ctx) => {
-      ctx.setState(initialState);
-      ctx.emit(CounterEvent.Reset, undefined);
-    });
+test("a completed search is recorded in recent searches", async () => {
+  const store = createSearchStore();
+  effects = createEffects(store, { onError: vi.fn() });
 
-  return sealStore(store);
+  effects.on(SearchEvent.Completed, (data, ctx) => {
+    ctx.queue(SearchCommand.addRecent, data.query);
+  });
+
+  store.queue(SearchCommand.query, "commiq");
+  await store.flush();
+
+  expect(store.state.recentSearches).toContain("commiq");
+});
+```
+
+`flush()` resolves on store quiescence, which is not the same as effect completion — an effect that awaits I/O may still be running. If the effect is `debounce`d, `flush()` will resolve long before the debounce window elapses. Use fake timers, or await a promise the effect resolves, rather than sleeping:
+
+```ts
+vi.useFakeTimers();
+store.queue(SearchCommand.query, "commiq");
+await store.flush();
+await vi.advanceTimersByTimeAsync(200); // the debounce window
+await store.flush();                    // let the queued command run
+```
+
+Remember `mode` defaults to `"switch"`. A test that fires the same event twice and expects two runs needs `mode: "parallel"`.
+
+<Callout type="warn">
+Always `destroy()` effects in `afterEach`. An effects instance left attached to a module-level store keeps a stream subscription and will react to events from later tests.
+</Callout>
+
+## Isolating tests with factories
+
+Shared module-level stores accumulate state across tests. Export a factory:
+
+```ts title="features/counter/store.ts"
+export function createCounterStore(options?: StoreOptions) {
+  const _store = createStore<CounterState>(initialState, options);
+
+  _store.addCommandHandler(CounterCommand.increment, (ctx) => {
+    ctx.setState((prev) => ({ count: prev.count + 1 }));
+  });
+
+  return sealStore(_store);
 }
 
-// Application singleton
 export const counterStore = createCounterStore();
 ```
 
-```ts title="stores/counter/store.test.ts"
-import { CounterCommand } from "./commands";
-import { createCounterStore } from "./store";
+Accepting `StoreOptions` is what lets each test supply its own `onError`. Every example on this page uses the factory for that reason.
 
-test("increment adds one to the count", async () => {
-  const store = createCounterStore();
+`destroy()` lives on the raw `StoreImpl`, not on the sealed facade, so a factory returning `sealStore(_store)` gives tests no teardown hook. When a test needs one — to assert that in-flight handles settle as `discarded`, or to tear down extensions — return both:
 
-  store.queue(CounterCommand.increment());
-  await store.flush();
-
-  expect(store.state.count).toBe(1);
-});
+```ts
+export function createCounterStoreForTest(options?: StoreOptions) {
+  const _store = createStore<CounterState>(initialState, options);
+  _store.addCommandHandler(CounterCommand.increment, handleIncrement);
+  return { store: sealStore(_store), destroy: () => _store.destroy() };
+}
 ```
 
-This is optional — many stores can be tested against the singleton by resetting state between tests. Use factories when test isolation matters.
+`destroy()` clears the queue, handlers, listeners, and extensions, settles every outstanding handle as `discarded`, and resolves pending `flush()` calls — so a teardown cannot leave an awaited promise hanging.

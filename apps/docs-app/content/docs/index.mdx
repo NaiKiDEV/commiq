@@ -1,43 +1,66 @@
 ---
 title: Introduction
+description: Commiq is a command and event driven state management library for TypeScript, with optional React bindings.
 ---
+
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Introduction
 
-**Commiq** is a lightweight, command & event driven state management library for TypeScript. The core library has no framework dependencies — React bindings are available separately via `@naikidev/commiq-react`.
+**Commiq** is a command and event driven state management library for TypeScript. The core has no framework dependency; React bindings ship separately as `@naikidev/commiq-react`.
 
-Instead of directly mutating state, you describe _what should happen_ via **commands**, and the store's handlers decide _how_ the state changes. Handlers can emit **events** to notify other parts of your application — enabling clean, decoupled architectures.
+Instead of writing to state directly, you dispatch a **command** describing what should happen. One handler processes it, produces the next state, and may emit **events** that other parts of the application react to. Every command and event carries a `correlationId` and a `causedBy` link, so the causal chain behind any state change is recoverable.
 
-## Key Concepts
+The cost of that structure is indirection: a state change is a command definition, a handler and a dispatch rather than a setter. In exchange, state transitions are named, auditable, cancellable, and observable from outside the code that caused them.
 
-| Concept          | Description                                                   |
-| ---------------- | ------------------------------------------------------------- |
-| **Command**      | A request to do something — dispatched via `queue()`          |
-| **Handler**      | A function that processes a command and updates state         |
-| **Event**        | A notification that something happened — emitted by handlers  |
-| **Store**        | Holds state, routes commands to handlers, broadcasts events   |
-| **Sealed Store** | A read-only proxy exposing only `state`, `queue`, and streams |
-| **Event Bus**    | Routes events between multiple stores                         |
+<Callout type="info">
+Upgrading from 1.x? The [migration guide](/migration-v2) lists every breaking change — and the features that silently never worked in v1.
+</Callout>
+
+## Key concepts
+
+| Concept | Description |
+| --- | --- |
+| **Command** | A request to do something, dispatched via `queue()`. Exactly one handler per name |
+| **Handler** | Processes a command and produces the next state via `ctx.setState()` |
+| **Event** | A notification that something happened. Zero or many handlers, which may only queue commands |
+| **Store** | Holds one state object, routes commands sequentially, publishes events |
+| **Sealed store** | A facade exposing only `state`, `queue`, `flush`, `suspend` and stream control — no registration |
+| **Event bus** | Routes events between multiple stores without coupling them |
 
 ## Packages
 
-- **`@naikidev/commiq`** — Core library (framework-agnostic)
-- **`@naikidev/commiq-react`** — React bindings (`useSelector`, `useQueue`, `useEvent`, `CommiqProvider`)
-- **`@naikidev/commiq-devtools-core`** — Instrumentation, event timeline, and causality tracking
-- **`@naikidev/commiq-devtools`** — Embedded devtools panel for React applications
-- **`@naikidev/commiq-otel`** — OpenTelemetry tracing integration
+All packages share one version and are released together.
 
-## Quick Example
+| Package | Purpose |
+| --- | --- |
+| [`@naikidev/commiq`](/api/store) | Core library, framework-agnostic |
+| [`@naikidev/commiq-react`](/react/hooks) | React bindings — `useSelector`, `useQueue`, `useEvent` and more |
+| [`@naikidev/commiq-effects`](/plugins/effects) | Structured side effects with cancellation and concurrency modes |
+| [`@naikidev/commiq-persist`](/plugins/persist) | State persistence and rehydration across localStorage, sessionStorage and IndexedDB |
+| [`@naikidev/commiq-context`](/plugins/context) | Prebuilt context extensions — logging, metadata, history, guards, dependency injection |
+| [`@naikidev/commiq-devtools-core`](/plugins/devtools) | Instrumentation engine: event timeline, causality chains, state history |
+| [`@naikidev/commiq-devtools`](/plugins/devtools-react) | Embedded devtools panel for React applications |
+| [`@naikidev/commiq-otel`](/plugins/opentelemetry) | OpenTelemetry tracing |
+
+## Quick example
 
 ```ts
-import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { createStore, createCommandDef, sealStore } from "@naikidev/commiq";
 
+const increment = createCommandDef("increment");
 const store = createStore({ count: 0 });
 
-store.addCommandHandler("increment", (ctx) => {
+store.addCommandHandler(increment, (ctx) => {
   ctx.setState({ count: ctx.state.count + 1 });
 });
 
-const sealed = sealStore(store);
-sealed.queue(createCommand("increment", undefined));
+const counter = sealStore(store);
+
+await counter.queue(increment);
+counter.state.count; // 1
 ```
+
+Commands are processed asynchronously, so `counter.state` reflects the change once the handle resolves — or after `await counter.flush()` when several commands are in flight.
+
+Start with [Getting Started](/getting-started).

@@ -7,172 +7,265 @@ import { File, Folder, Files } from 'fumadocs-ui/components/files';
 
 # Domain Hooks
 
-Using `useSelector`, `useQueue`, and command factories directly in every component that interacts with a store leads to repetition and couples the UI to implementation details. A domain hook wraps this into a single, reusable function.
+Calling `useSelector`, `useQueue`, and `useCommandStatus` directly in every component that touches a store repeats plumbing and couples the UI to the store's shape. A domain hook wraps it into one function per feature.
 
 ## The problem
 
 ```tsx
-// Repeated across multiple components
+// Repeated in every component that shows a count
 const count = useSelector(counterStore, (s) => s.count);
 const queue = useQueue(counterStore);
 
-return (
-  <button onClick={() => queue(CounterCommand.increment(1))}>
-    {count}
-  </button>
-);
+return <button onClick={() => queue(CounterCommand.increment)}>{count}</button>;
 ```
 
-If the state shape changes, the command API changes, or the store is swapped for testing, every component needs to be updated.
+If the state shape changes, the command definitions change, or the store is swapped for a test, every component changes with it. Components also should not need to know that commands exist.
 
 ## The pattern
 
-```ts title="hooks/use-counter.ts"
+```ts title="features/counter/hooks.ts"
 import { useSelector, useQueue } from "@naikidev/commiq-react";
-import { counterStore, CounterCommand } from "../stores/counter";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { CounterCommand } from "./commands";
+import { counterStore } from "./store";
+import type { CounterState } from "./store";
+
+function selectCount(state: DeepReadonly<CounterState>) {
+  return state.count;
+}
 
 export function useCounter() {
-  const count = useSelector(counterStore, (s) => s.count);
+  const count = useSelector(counterStore, selectCount);
   const queue = useQueue(counterStore);
 
   return {
     count,
-    increment: (amount: number) => queue(CounterCommand.increment(amount)),
-    decrement: (amount: number) => queue(CounterCommand.decrement(amount)),
-    reset: () => queue(CounterCommand.reset()),
+    increment: () => queue(CounterCommand.increment),
+    incrementBy: (amount: number) => queue(CounterCommand.incrementBy, { amount }),
+    reset: () => queue(CounterCommand.reset),
   };
 }
 ```
 
-Components become straightforward:
+Define selectors at module scope. The selector's argument is `DeepReadonly<CounterState>` — that is what the hook passes, and typing it explicitly is what lets you extract the function from the component body.
+
+Components stay declarative:
 
 ```tsx
 function Counter() {
-  const { count, increment, decrement, reset } = useCounter();
+  const { count, increment, reset } = useCounter();
 
   return (
     <div>
       <p>{count}</p>
-      <button onClick={() => increment(1)}>+</button>
-      <button onClick={() => decrement(1)}>-</button>
+      <button onClick={increment}>+</button>
       <button onClick={reset}>Reset</button>
     </div>
   );
 }
 ```
 
+Because `queue` returns a `CommandHandle`, the returned functions return one too. That is usually ignored — `onClick={increment}` discards it, which is safe because the handle never rejects. When a component needs the outcome, await it:
+
+```ts
+export function useCounter() {
+  const queue = useQueue(counterStore);
+
+  return {
+    incrementBy: async (amount: number) => {
+      const result = await queue(CounterCommand.incrementBy, { amount });
+      return result.status === "handled";
+    },
+  };
+}
+```
+
+## Selecting several fields
+
+One `useSelector` per field means one subscription per field. To read several at once, return an object and pass `shallowEqual` — without it the new object identity fails the default `Object.is` check and the component re-renders on every event.
+
+```ts title="features/cart/hooks.ts"
+import { useSelector, useQueue, shallowEqual } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { CartCommand } from "./commands";
+import { cartStore } from "./store";
+import type { CartState } from "./store";
+
+function selectCart(state: DeepReadonly<CartState>) {
+  return {
+    items: state.items,
+    total: state.items.reduce((sum, item) => sum + item.price * item.qty, 0),
+    itemCount: state.items.reduce((sum, item) => sum + item.qty, 0),
+  };
+}
+
+export function useCart() {
+  const { items, total, itemCount } = useSelector(cartStore, selectCart, shallowEqual);
+  const queue = useQueue(cartStore);
+
+  return {
+    items,
+    total,
+    itemCount,
+    add: (productId: string) => queue(CartCommand.add, { productId }),
+    remove: (productId: string) => queue(CartCommand.remove, { productId }),
+  };
+}
+```
+
+Deriving `total` and `itemCount` inside the selector is fine here because they are primitives — `shallowEqual` compares them by value, so the component only re-renders when a number actually changes. Deriving a new *array* inside a selector is different: see [state normalization](/patterns/state-normalization).
+
+## Including command status
+
+`useCommandStatus` belongs in the hook, not the component. It keeps `pending` and `error` out of the state shape entirely:
+
+```ts title="features/users/hooks.ts"
+import { useSelector, useQueue, useCommandStatus } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { UserCommand } from "./commands";
+import { userStore } from "./store";
+import type { UserState } from "./store";
+
+function selectUsers(state: DeepReadonly<UserState>) {
+  return state.users;
+}
+
+function toMessage(error: unknown): string | null {
+  if (error === null || error === undefined) return null;
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function useUsers() {
+  const users = useSelector(userStore, selectUsers);
+  const { pending, error } = useCommandStatus(userStore, UserCommand.fetch);
+  const queue = useQueue(userStore);
+
+  return {
+    users,
+    loading: pending,
+    errorMessage: toMessage(error),
+    fetch: () => queue(UserCommand.fetch),
+  };
+}
+```
+
+The hook is where `unknown` becomes a rendered string. Components should not do `error instanceof Error` checks. See [async loading states](/patterns/async-loading-states).
+
 ## Read/write split
 
-For stores where some components only read state and others only dispatch commands, splitting the hook avoids unnecessary re-renders.
+When some components only read and others only dispatch, splitting the hook keeps the dispatchers from re-rendering:
 
-```ts title="hooks/use-user.ts"
-import { useSelector, useQueue } from "@naikidev/commiq-react";
-import { userStore, UserCommand } from "../stores/user";
-
+```ts title="features/user/hooks.ts"
 export function useUserState() {
-  return {
-    id: useSelector(userStore, (s) => s.id),
-    name: useSelector(userStore, (s) => s.name),
-    status: useSelector(userStore, (s) => s.status),
-  };
+  return useSelector(userStore, selectUserSummary, shallowEqual);
 }
 
 export function useUserActions() {
   const queue = useQueue(userStore);
+
   return {
-    fetchUser: (id: string) => queue(UserCommand.fetchUser(id)),
-    signOut: () => queue(UserCommand.signOut()),
+    fetch: (id: string) => queue(UserCommand.fetch, { id }),
+    signOut: () => queue(UserCommand.signOut),
   };
 }
 ```
 
-A component that only reads state will not re-render when an action is dispatched:
-
 ```tsx
 function UserProfile() {
-  const { name, status } = useUserState(); // Re-renders on state change only
-
-  if (status === "loading") return <Spinner />;
+  const { name } = useUserState();  // re-renders on state change
   return <p>{name}</p>;
 }
 
 function SignOutButton() {
-  const { signOut } = useUserActions(); // Never re-renders due to state changes
-
+  const { signOut } = useUserActions();  // never re-renders from state
   return <button onClick={signOut}>Sign out</button>;
 }
 ```
 
-## Testing with CommiqProvider
+`useQueue` returns the store's `queue` property directly. It is a stable instance reference, so `useUserActions` triggers no re-render and needs no `useCallback` — though the arrow functions it returns *are* new each render, so memoize the object if you pass it into a `memo`'d child.
 
-Domain hooks make components testable in isolation. Wrap the component under test in `CommiqProvider` with a test store:
+## Injectable hooks for testing
 
-```tsx
-import { CommiqProvider } from "@naikidev/commiq-react";
-import { createStore, sealStore } from "@naikidev/commiq";
+Every hook accepts a `SealedStore` **or** a store name. A hook that imports the module-level store is not swappable; a hook that takes a name resolves through `CommiqProvider`:
+
+```ts title="features/counter/hooks.ts"
+import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { CounterCommand } from "./commands";
+import type { CounterState } from "./store";
+
+const STORE_NAME = "counter";
+
+const selectCount = (state: { readonly count: number }) => state.count;
+
+export function useCounter() {
+  const count = useSelector<CounterState, number>(STORE_NAME, selectCount);
+  const queue = useQueue<CounterState>(STORE_NAME);
+
+  return {
+    count,
+    increment: () => queue(CounterCommand.increment),
+  };
+}
+```
+
+The name form needs explicit type arguments, because there is no store instance to infer the state type from. In exchange, the component tree decides which store the hook binds to:
+
+```tsx title="App.tsx"
+<CommiqProvider stores={{ counter: counterStore, cart: cartStore }}>
+  <Routes />
+</CommiqProvider>
+```
+
+```tsx title="Counter.test.tsx"
 import { render, screen } from "@testing-library/react";
+import { CommiqProvider } from "@naikidev/commiq-react";
+import { createCounterStore } from "./store";
 
-it("displays the count", () => {
-  const testStore = sealStore(
-    createStore({ count: 42 })
-  );
+test("displays the count", () => {
+  const store = createCounterStore();
 
   render(
-    <CommiqProvider stores={{ counter: testStore }}>
+    <CommiqProvider stores={{ counter: store }}>
       <Counter />
-    </CommiqProvider>
+    </CommiqProvider>,
   );
 
-  expect(screen.getByText("42")).toBeInTheDocument();
+  expect(screen.getByText("0")).toBeInTheDocument();
 });
 ```
 
-<Callout>
-For `CommiqProvider`-based testing to work, the domain hook must read the store from context rather than importing it directly. See the [React hooks documentation](/react/hooks) for details on using `CommiqProvider` for dependency injection.
+<Callout type="warn">
+This works **only** for hooks that resolve by name. A hook importing `counterStore` directly ignores the provider entirely — the render succeeds and reads the module-level store, so the test passes against the wrong store and shares state with every other test. If you intend to inject, every hook in the chain must take a name.
 </Callout>
 
-## Where to place domain hooks
+The name form is also the per-request injection path for SSR, where a module-level singleton would be shared across requests. For a purely client-side app the instance form is simpler and type-inferred; pick one per feature rather than mixing.
 
-Place domain hooks in a `hooks/` directory alongside your components, or co-locate them with the feature they serve:
+`useStoreRegistry()` and `useNamedStore(name)` expose the registry directly if you need a store outside the selector hooks.
 
-<Files>
-  <Folder name="src" defaultOpen>
-    <Folder name="stores" defaultOpen>
-      <File name="counter.ts" />
-      <File name="user.ts" />
-    </Folder>
-    <Folder name="hooks" defaultOpen>
-      <File name="use-counter.ts" />
-      <File name="use-user.ts" />
-    </Folder>
-    <Folder name="components" defaultOpen>
-      <File name="Counter.tsx" />
-      <File name="UserProfile.tsx" />
-    </Folder>
-  </Folder>
-</Files>
+## Where to place hooks
 
-For feature-based project structures, co-locate the hook with the feature:
+Co-locate the hook with its feature:
 
 <Files>
   <Folder name="src" defaultOpen>
     <Folder name="features" defaultOpen>
       <Folder name="counter" defaultOpen>
-        <File name="counter.store.ts" />
-        <File name="use-counter.ts" />
-        <File name="Counter.tsx" />
-      </Folder>
-      <Folder name="user" defaultOpen>
-        <File name="user.store.ts" />
-        <File name="use-user.ts" />
-        <File name="UserProfile.tsx" />
+        <File name="commands.ts" />
+        <File name="events.ts" />
+        <File name="store.ts" />
+        <File name="hooks.ts" />
+        <File name="index.ts" />
+        <File name="CounterPage.tsx" />
       </Folder>
     </Folder>
   </Folder>
 </Files>
 
-## Benefits
+`index.ts` re-exports the hook alongside the store, so components import from `./features/counter`. See [store file structure](/patterns/store-file-structure).
 
-- **Single point of change.** When the store's shape or command API changes, update the hook — not every component.
-- **Readable components.** Components express intent (`increment`, `fetchUser`) rather than mechanics (`queue(createCommand(...))`).
-- **Consistent API.** Every component that uses a domain gets the same interface, regardless of which developer wrote it.
+## What this buys you
+
+- **One place to change.** A change to the state shape or a command definition touches the hook, not every component.
+- **Readable components.** They express intent (`increment`, `fetch`) rather than mechanics.
+- **Commands stay internal.** Components never import a `CommandDef`, so command names never leak into the view layer.
+- **A testing seam,** if the hook resolves its store by name.

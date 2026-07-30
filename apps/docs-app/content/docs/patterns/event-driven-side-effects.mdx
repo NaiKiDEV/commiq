@@ -5,72 +5,99 @@ description: Trigger notifications, navigation, and analytics from store events 
 
 # Event-Driven Side Effects
 
-Not all reactions to store events should be state changes. Showing a toast notification, navigating after a successful login, or logging an analytics event are concerns of the UI layer — they should not live in the store.
+Not every reaction to a store event is a state change. Showing a toast, navigating after login, logging an analytics event — these are UI concerns and should not live in the store.
 
-The `useEvent` hook subscribes a component to store events and runs a callback when they fire, without adding transient flags to the state.
+`useEvent(store, eventDef, handler)` subscribes a component to one event type and runs a callback when it fires, without adding transient flags to state. The subscription is removed on unmount.
 
 ## The problem with state flags
 
-The alternative — adding a `justSaved` or `loginRedirectPending` flag to state — creates noise and requires cleanup:
-
 ```ts
-// Avoid this approach
+// Avoid
 type FormState = {
-  saved: boolean;
-  justSaved: boolean; // Only exists to trigger a toast — belongs in UI, not store
+  readonly dirty: boolean;
+  readonly justSaved: boolean; // exists only to trigger a toast
 };
 ```
 
-Managing flag resets adds commands, adds complexity, and still does not prevent a component from missing the transition if it renders after the flag was set.
+A flag like `justSaved` needs a second command to clear it, shows up in every selector, and is still unreliable: a component that mounts after the flag was set sees a stale `true` and fires the toast late.
 
 ## The pattern
 
-Emit a semantic event from the command handler:
+Emit a semantic event from the handler:
 
-```ts title="stores/form.ts"
-export const FormEvent = {
-  Saved: createEvent<{ id: string }>("form:saved"),
-  SaveFailed: createEvent<{ message: string }>("form:save-failed"),
+```ts title="features/form/store.ts"
+import { createCommandDef, createEvent } from "@naikidev/commiq";
+
+type FormState = {
+  readonly dirty: boolean;
 };
 
-_store.addCommandHandler("form:save", async (ctx, cmd) => {
+export const FormCommand = {
+  save: createCommandDef<{ title: string; body: string }>("form:save"),
+};
+
+export const FormEvent = {
+  Saved: createEvent<{ id: string }>("form:saved"),
+  SaveFailed: createEvent<{ message: string }>("form:saveFailed"),
+};
+
+_store.addCommandHandler(FormCommand.save, async (ctx, cmd) => {
   try {
     const result = await saveFormData(cmd.data);
-    ctx.setState({ ...ctx.state, dirty: false });
+    ctx.setState((prev) => ({ ...prev, dirty: false }));
     ctx.emit(FormEvent.Saved, { id: result.id });
-  } catch (e) {
-    ctx.emit(FormEvent.SaveFailed, { message: (e as Error).message });
+  } catch (error) {
+    ctx.emit(FormEvent.SaveFailed, {
+      message: error instanceof Error ? error.message : "Could not save",
+    });
+    throw error;
   }
 });
 ```
 
-Subscribe to the event in the component that owns the side effect:
+The `throw error` matters: without it the handler swallows the failure, the command settles as `handled`, and nothing reaches `onError`. The emitted event tells the UI what happened; re-throwing tells the store the command failed. Both are needed — see [error handling](/patterns/error-handling).
 
-```tsx
+Subscribe in the component that owns the side effect:
+
+```tsx title="pages/FormPage.tsx"
 import { useEvent } from "@naikidev/commiq-react";
-import { formStore, FormEvent } from "../stores/form";
+import { formStore, FormEvent } from "../features/form";
 
 function FormPage() {
   useEvent(formStore, FormEvent.Saved, (event) => {
-    showToast(`Saved (ID: ${event.data.id})`);
+    showToast(`Saved (${event.data.id})`);
   });
 
   useEvent(formStore, FormEvent.SaveFailed, (event) => {
-    showToast(`Save failed: ${event.data.message}`, { type: "error" });
+    showToast(event.data.message, { type: "error" });
   });
 
   return <FormEditor />;
 }
 ```
 
-The store emits what happened. The component decides what to do about it. Neither knows about the other.
+`event.data` is typed from the `EventDef`, so no cast is needed. The store emits what happened; the component decides what to do. Neither knows about the other.
+
+<Callout type="info">
+`useEvent` only sees events emitted **while the component is mounted**. That is the point — a toast should not fire for something that happened before the page opened — but it also means it is not a way to observe past state. Read state with `useSelector`, and per-command status with `useCommandStatus`.
+</Callout>
+
+## Errors that are not your event
+
+For the failure of a specific command, you often do not need an event of your own:
+
+```tsx
+const { error } = useCommandStatus(formStore, FormCommand.save);
+```
+
+That derives from the builtin `commandHandlingError`, so a handler that simply lets its error escape needs no custom failure event at all. Emit `SaveFailed` when the *payload* matters — a field-level validation map, a retry token — not merely to signal that something failed.
 
 ## Navigation after an action
 
-```tsx
+```tsx title="pages/LoginPage.tsx"
 import { useNavigate } from "react-router-dom";
 import { useEvent } from "@naikidev/commiq-react";
-import { authStore, AuthEvent } from "../stores/auth";
+import { authStore, AuthEvent } from "../features/auth";
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -83,17 +110,19 @@ function LoginPage() {
 }
 ```
 
-Routing libraries are a UI concern. The auth store emits `AuthEvent.SignedIn` and is not aware of React Router.
+The router is a UI dependency. The auth store emits `AuthEvent.SignedIn` and knows nothing about React Router.
+
+The handler is read from a ref updated in a layout effect, so a callback closing over `navigate` always sees the current one — the subscription does not need to be torn down and rebuilt when the callback identity changes, and you do not need `useCallback` here.
 
 ## Analytics
 
-Centralizing analytics in a shell or layout component keeps tracking code out of store logic and out of individual feature components:
+Centralizing analytics in a layout keeps tracking out of both the store and individual features:
 
-```tsx
+```tsx title="AppShell.tsx"
 function AppShell() {
   useEvent(orderStore, OrderEvent.Placed, (event) => {
     analytics.track("order_placed", {
-      orderId: event.data.id,
+      orderId: event.data.orderId,
       total: event.data.total,
     });
   });
@@ -106,39 +135,86 @@ function AppShell() {
 }
 ```
 
-All `useEvent` subscriptions clean up automatically when the component unmounts, so analytics tracking stops when the shell is removed.
+Subscriptions clean up when the shell unmounts. That is the tradeoff: analytics stops when the component does. If an event must always be tracked regardless of what is mounted, it belongs in an [effect](/patterns/effects-and-cancellation), not here.
+
+## `useEvent` vs. the effects plugin
+
+| Reaction | Tool |
+|---|---|
+| Toast, modal, focus change | `useEvent` |
+| Navigation | `useEvent` |
+| Analytics owned by a mounted layout | `useEvent` |
+| Analytics that must never be missed | Effects plugin |
+| Queue a follow-up command | Effects plugin |
+| Call an API with cancellation | Effects plugin |
+
+**The test:** if the reaction must still happen with no UI mounted, use the effects plugin. If it only makes sense while a specific component is on screen, use `useEvent`.
+
+`useEvent` also cannot queue commands with cancellation, debouncing, or concurrency control. It is a plain callback — one subscription, no lifecycle beyond mount and unmount.
+
+<Callout type="warn">
+`useEvent` handlers that throw are **not** reported as store errors. The stream listener is isolated and the error is re-thrown asynchronously, so it surfaces as a window error rather than through `StoreOptions.onError`. Handle failures inside the callback — a `showToast` that throws should not be your only signal.
+</Callout>
 
 ## State vs. events
 
-| Reaction | Belongs in state | Belongs in useEvent |
+| Reaction | Belongs in state | Belongs in `useEvent` |
 |---|---|---|
-| Loading spinner | Yes | No |
-| Inline error message | Yes | No |
-| Transient toast notification | No | Yes |
+| Loading spinner | No — `useCommandStatus` | No |
+| Inline field error | Yes | No |
+| Transient toast | No | Yes |
 | Navigate to another page | No | Yes |
 | Analytics event | No | Yes |
-| Disabled button after submission | Yes | No |
+| Disabled button after submit | No — `useCommandStatus` | No |
+| Data the page renders | Yes | No |
 
-The distinction: **state** represents what is currently true about the domain. **Events** represent what just happened. Side effects triggered by "what happened" belong in `useEvent`, not in state.
+**State** is what is currently true about the domain. **Events** are what just happened. Two things that used to require state fields — `loading` and a per-command `error` — now come from `useCommandStatus`, so the "belongs in state" column is shorter than it was.
 
-## Placing useEvent calls
+## Observing many events at once
 
-Use `useEvent` in the component that owns the side effect — typically a page component, a layout, or a notification provider. Avoid placing it deep in a component tree where the subscription lifetime is tied to a rarely-rendered component.
+`useEvent` takes one `EventDef`. For a debug panel or an audit log that wants everything, use `useStream`:
 
 ```tsx
-// Good: the page owns the navigation side effect
+import { useStream } from "@naikidev/commiq-react";
+
+function EventLog() {
+  const [entries, setEntries] = useState<string[]>([]);
+
+  useStream(orderStore, (event) => {
+    setEntries((prev) => [...prev.slice(-100), `${event.name} @ ${event.timestamp}`]);
+  });
+
+  return <ul>{entries.map((entry, index) => <li key={index}>{entry}</li>)}</ul>;
+}
+```
+
+This receives every builtin event too, including one `stateChanged` per `setState`, so it is noisy by design. Cap the buffer. See [event stream](/examples/event-stream).
+
+## Where to put `useEvent`
+
+Put it in the component that owns the side effect — a page, a layout, or a notification provider. Avoid burying it in a leaf.
+
+```tsx
+// Good: the page owns the navigation
 function CheckoutPage() {
+  const navigate = useNavigate();
+
   useEvent(checkoutStore, CheckoutEvent.Completed, () => {
     navigate("/order-confirmation");
   });
+
   return <CheckoutForm />;
 }
 
-// Avoid: a leaf component triggering navigation is hard to trace
+// Avoid: a leaf navigating is hard to trace, and the subscription
+// disappears if the button unmounts mid-checkout
 function SubmitButton() {
   useEvent(checkoutStore, CheckoutEvent.Completed, () => {
-    navigate("/order-confirmation"); // Unexpected location for a navigation side effect
+    navigate("/order-confirmation");
   });
-  return <button>Place Order</button>;
+
+  return <button>Place order</button>;
 }
 ```
+
+The second form is not just stylistically worse: a button that unmounts while the command is in flight misses the event entirely, and the navigation silently never happens.

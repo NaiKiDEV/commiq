@@ -7,114 +7,165 @@ import { Steps, Step } from 'fumadocs-ui/components/steps';
 
 # Optimistic Updates
 
-Users expect immediate feedback. An optimistic update applies the expected state change synchronously — before the server confirms — and corrects it if the operation fails. Commiq's command handler structure makes this natural: call `setState` at the top of the handler, then reconcile after the async work finishes.
+An optimistic update applies the expected state change before the server confirms it, and corrects it if the operation fails. A command handler is a natural home for this: `setState` at the top, async work, then reconcile.
 
 ## The pattern
 
 <Steps>
 <Step>
 
-### Apply the optimistic state
+### Capture and apply
 
-Capture the current state for rollback, then set the expected outcome immediately.
+Read the value you may need to restore, then set the expected outcome immediately.
 
 </Step>
 <Step>
 
 ### Run the async operation
 
-Call the API, write to the database, or perform any async work.
-
 </Step>
 <Step>
 
 ### Reconcile
 
-On success, confirm with server-returned data if needed. On failure, restore the captured state and emit an error event.
+On success, confirm with server-returned data. On failure, restore the captured value and emit an error event.
 
 </Step>
 </Steps>
 
+Each `setState` publishes its own `stateChanged`, so the optimistic write, the confirmation, and a rollback are three distinct events — visible in devtools and observed by `useSelector` individually.
+
+## Declare state readonly
+
+Optimistic updates read a value out of state and write it back later. That round trip only typechecks if the state fields are `readonly`.
+
+`ctx.state` is `DeepReadonly<S>`, so a value read from a mutable field comes back as its readonly form and is not assignable to `S`:
+
+```ts
+type Bad = { settings: { theme: string; tags: string[] } };
+type Good = {
+  readonly settings: { readonly theme: string; readonly tags: readonly string[] };
+};
+```
+
+```ts
+// With Bad: TS2345 — readonly string[] is not assignable to string[]
+const snapshot = ctx.state.settings;
+ctx.setState((prev) => ({ ...prev, settings: snapshot }));
+
+// With Good: fine
+```
+
+There is no need to copy the snapshot. Outside production the store deep-freezes state, so the object you captured cannot change underneath you — `{ ...ctx.state.settings }` buys nothing and, on a mutable field type, fails to compile for the same reason.
+
 ## Optimistic list add
 
-Add an item to the list immediately. If the API call fails, remove it:
+Add the item immediately with a `pending` marker; replace it on success, remove it on failure.
 
 ```ts title="stores/todo.ts"
-const TodoEvent = {
-  AddFailed: createEvent<{ tempId: string; message: string }>("todo:add-failed"),
+import { createCommandDef, createEvent } from "@naikidev/commiq";
+
+type Todo = {
+  readonly id: string;
+  readonly text: string;
+  readonly pending: boolean;
 };
 
-_store.addCommandHandler<{ text: string }>("todo:add", async (ctx, cmd) => {
-  const tempId = `temp-${Date.now()}`;
+type TodoState = {
+  readonly items: readonly Todo[];
+};
 
-  // ── Optimistic: add immediately with a pending flag ──
-  ctx.setState({
-    items: [...ctx.state.items, { id: tempId, text: cmd.data.text, pending: true }],
-  });
+export const TodoCommand = {
+  add: createCommandDef<{ text: string }>("todo:add"),
+};
+
+export const TodoEvent = {
+  AddFailed: createEvent<{ tempId: string; message: string }>("todo:addFailed"),
+};
+
+_store.addCommandHandler(TodoCommand.add, async (ctx, cmd) => {
+  const tempId = `temp-${crypto.randomUUID()}`;
+
+  // ── Optimistic ──
+  ctx.setState((prev) => ({
+    items: [...prev.items, { id: tempId, text: cmd.data.text, pending: true }],
+  }));
 
   try {
     const created = await createTodoOnServer(cmd.data.text);
 
-    // ── Confirm: replace the temp item with the real one ──
-    ctx.setState({
-      items: ctx.state.items.map((item) =>
-        item.id === tempId ? { id: created.id, text: created.text, pending: false } : item,
+    // ── Confirm ──
+    ctx.setState((prev) => ({
+      items: prev.items.map((item) =>
+        item.id === tempId
+          ? { id: created.id, text: created.text, pending: false }
+          : item,
       ),
+    }));
+  } catch (error) {
+    // ── Rollback ──
+    ctx.setState((prev) => ({
+      items: prev.items.filter((item) => item.id !== tempId),
+    }));
+    ctx.emit(TodoEvent.AddFailed, {
+      tempId,
+      message: error instanceof Error ? error.message : "Could not save",
     });
-  } catch (e) {
-    // ── Rollback: remove the temp item ──
-    ctx.setState({
-      items: ctx.state.items.filter((item) => item.id !== tempId),
-    });
-    ctx.emit(TodoEvent.AddFailed, { tempId, message: (e as Error).message });
+    throw error;
   }
 });
 ```
 
-The `pending` flag lets the UI render optimistic items differently — a reduced opacity or a spinner next to the item — so users understand the item is not yet confirmed.
+<Callout type="warn">
+The `throw error` after the rollback is deliberate. Without it the handler swallows the failure: the command settles as `handled`, nothing reaches `onError`, no `commandHandlingError` is published, and `useCommandStatus` reports success. Re-throwing keeps the observability channels honest while still leaving state correct — the rollback already ran.
+
+If re-throwing is not what you want — because the emitted event *is* your error channel and a reported failure would be noise — that is a legitimate choice, but make it consciously.
+</Callout>
+
+Use the updater form (`(prev) => ...`) rather than reading `ctx.state` after an `await`. Both work — `ctx.state` is a live getter — but the updater makes it obvious that the write is based on whatever state exists at that moment, which matters when other commands ran in between.
+
+The `pending` marker lets the UI render unconfirmed items differently:
 
 ```tsx title="components/TodoItem.tsx"
-function TodoItem({ item }: { item: Todo }) {
+function TodoItem({ item }: { item: DeepReadonly<Todo> }) {
   return (
     <li style={{ opacity: item.pending ? 0.6 : 1 }}>
       {item.text}
-      {item.pending && <span> (saving...)</span>}
+      {item.pending && <span> (saving…)</span>}
     </li>
   );
 }
 ```
 
+A per-item marker is the right tool here; `useCommandStatus` is keyed by command *name*, so it cannot tell you which row is saving.
+
 ## Optimistic toggle
 
-Toggle a boolean immediately and revert on failure:
-
 ```ts title="stores/bookmark.ts"
-export const BookmarkEvent = {
-  ToggleFailed: createEvent<{ articleId: string }>("bookmark:toggle-failed"),
+type BookmarkState = {
+  readonly bookmarked: boolean;
 };
 
-_store.addCommandHandler<{ articleId: string }>("bookmark:toggle", async (ctx, cmd) => {
-  const { articleId } = cmd.data;
-  const prev = ctx.state.bookmarked;
+export const BookmarkEvent = {
+  ToggleFailed: createEvent<{ articleId: string }>("bookmark:toggleFailed"),
+};
 
-  // ── Optimistic: flip immediately ──
-  ctx.setState({ ...ctx.state, bookmarked: !prev });
+_store.addCommandHandler(BookmarkCommand.toggle, async (ctx, cmd) => {
+  const previous = ctx.state.bookmarked;
+
+  ctx.setState((prev) => ({ ...prev, bookmarked: !previous }));
 
   try {
-    if (!prev) {
-      await addBookmark(articleId);
-    } else {
-      await removeBookmark(articleId);
-    }
-  } catch (e) {
-    // ── Rollback: restore previous value ──
-    ctx.setState({ ...ctx.state, bookmarked: prev });
-    ctx.emit(BookmarkEvent.ToggleFailed, { articleId });
+    await (previous ? removeBookmark(cmd.data.articleId) : addBookmark(cmd.data.articleId));
+  } catch (error) {
+    ctx.setState((prev) => ({ ...prev, bookmarked: previous }));
+    ctx.emit(BookmarkEvent.ToggleFailed, { articleId: cmd.data.articleId });
+    throw error;
   }
 });
 ```
 
-Surface the failure as a transient notification using [event-driven side effects](/patterns/event-driven-side-effects):
+Surface the failure as a transient notification — see [event-driven side effects](/patterns/event-driven-side-effects):
 
 ```tsx
 useEvent(bookmarkStore, BookmarkEvent.ToggleFailed, () => {
@@ -122,43 +173,82 @@ useEvent(bookmarkStore, BookmarkEvent.ToggleFailed, () => {
 });
 ```
 
-## Rollback with captured snapshots
+<Callout type="info">
+Rapid toggling queues one command per click and they run in order, so the final state is consistent — but every click makes a request. For last-click-wins, register the handler `{ interruptable: true }` and pass `ctx.signal` to the request, or move the request into an effect with the default `mode: "switch"`.
+</Callout>
 
-For more complex state, capture a snapshot of the affected portion before the optimistic write:
+## Rollback on interrupt
+
+For an interruptable command, the store can restore the pre-command state itself:
+
+```ts
+_store.addCommandHandler(
+  BookmarkCommand.toggle,
+  async (ctx, cmd) => {
+    ctx.setState((prev) => ({ ...prev, bookmarked: !prev.bookmarked }));
+    await syncBookmark(cmd.data.articleId, { signal: ctx.signal });
+  },
+  { interruptable: true, rollbackOnInterrupt: true },
+);
+```
+
+When a newer instance supersedes this one, the store restores the state captured before the command started and publishes it as its own `stateChanged`, then publishes `commandInterrupted` and settles the handle as `interrupted`.
+
+This covers exactly one case: an optimistic write abandoned because the command was superseded. It does not roll back on *failure* — a handler that throws keeps whatever state it wrote, so the `catch` block above is still required.
+
+<Callout type="warn">
+`rollbackOnInterrupt` restores the whole state object, not the field you touched. If the handler awaited and another command modified an unrelated field in the meantime, that change is reverted too. It fits handlers that own their slice of state and are short-lived; for anything else, roll back explicitly.
+</Callout>
+
+## Snapshot and restore
+
+For a nested object, capture it and write it back:
 
 ```ts title="stores/settings.ts"
-_store.addCommandHandler<Partial<Settings>>("settings:update", async (ctx, cmd) => {
-  const snapshot = { ...ctx.state.settings };
+type Settings = {
+  readonly theme: string;
+  readonly density: "compact" | "comfortable";
+};
 
-  // ── Optimistic ──
-  ctx.setState({
-    ...ctx.state,
-    settings: { ...ctx.state.settings, ...cmd.data },
-  });
+type SettingsState = {
+  readonly settings: Settings;
+};
+
+_store.addCommandHandler(SettingsCommand.update, async (ctx, cmd) => {
+  const snapshot = ctx.state.settings;
+
+  ctx.setState((prev) => ({ ...prev, settings: { ...prev.settings, ...cmd.data } }));
 
   try {
     await saveSettings(cmd.data);
-  } catch (e) {
-    // ── Rollback to snapshot ──
-    ctx.setState({ ...ctx.state, settings: snapshot });
-    ctx.emit(SettingsEvent.UpdateFailed, { message: (e as Error).message });
+  } catch (error) {
+    ctx.setState((prev) => ({ ...prev, settings: snapshot }));
+    ctx.emit(SettingsEvent.UpdateFailed, {
+      message: error instanceof Error ? error.message : "Could not save",
+    });
+    throw error;
   }
 });
 ```
 
 <Callout>
-Capture the snapshot _before_ calling `setState`. After `setState`, `ctx.state` reflects the new value — the original is lost unless you save it first.
+Capture the snapshot **before** the first `setState`. Afterwards `ctx.state` reflects the new value and the original is gone. Because state is frozen, holding the reference is sufficient — no copy needed.
 </Callout>
+
+For undo across several commands rather than within one, `withHistory(store, { maxEntries })` from `commiq-context` keeps a bounded buffer of transitions and exposes `ctx.history.previous` and `ctx.history.entries`. Note it takes the store as its first argument, so the store must exist before the extension is built:
+
+```ts
+const _store = createStore<SettingsState>(initialState);
+_store.useExtension(withHistory(_store, { maxEntries: 20 }));
+```
 
 ## When not to use optimistic updates
 
-Optimistic updates are not always appropriate:
-
 | Scenario | Why to avoid |
 |---|---|
-| The operation generates server-side data the UI needs (IDs, timestamps, computed values) | The optimistic state would be incomplete — components expecting the real ID would break |
-| The operation has visible side effects beyond state (sending an email, charging a card) | Rolling back state does not undo the real-world action |
-| The failure rate is high | Users see constant flicker between optimistic and rolled-back states |
-| Multiple users edit the same resource concurrently | The optimistic state may conflict with another user's update |
+| The operation returns data the UI needs (IDs, timestamps, computed totals) | The optimistic state is incomplete; a component reading the real ID breaks |
+| The operation has real-world side effects (sends an email, charges a card) | Rolling back state does not undo the action |
+| Failures are common | Users see constant flicker between optimistic and rolled-back states |
+| Several users edit the same resource | The optimistic state may conflict with another writer |
 
-In these cases, use a standard [async loading state](/patterns/async-loading-states) — show a loading indicator, wait for confirmation, then update.
+In these cases show pending state and wait for confirmation — see [async loading states](/patterns/async-loading-states), where `useCommandStatus` gives you `pending` without adding a field to state.

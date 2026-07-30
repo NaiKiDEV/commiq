@@ -1,76 +1,135 @@
 ---
 title: Hooks
+description: The @naikidev/commiq-react hook surface — selectors, dispatch, events, command status and the store registry.
 ---
+
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # React Hooks
 
-The `@naikidev/commiq-react` package provides hooks to integrate Commiq stores with React components.
-
-## `CommiqProvider`
-
-Wraps a component tree and provides stores via React context. **This is optional** — all hooks accept stores directly as arguments, so no provider is required for typical usage. Use `CommiqProvider` when you need dependency injection, testing overrides, or SSR compatibility.
+`@naikidev/commiq-react` binds a `SealedStore` to React. No provider is required: pass the store to the hook.
 
 ```tsx
-import { CommiqProvider } from "@naikidev/commiq-react";
-
-const stores = {
-  counter: counterStore,
-  todo: todoStore,
-};
-
-function App() {
-  return (
-    <CommiqProvider stores={stores}>
-      <MyApp />
-    </CommiqProvider>
-  );
-}
-```
-
-## `useSelector(store, selector)`
-
-Subscribes to a sealed store and re-renders only when the selected value changes. Uses `useSyncExternalStore` under the hood.
-
-```tsx
-import { useSelector } from "@naikidev/commiq-react";
+import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { counterStore, increment } from "./stores/counter";
 
 function Counter() {
   const count = useSelector(counterStore, (s) => s.count);
-  return <p>{count}</p>;
-}
-```
+  const dispatch = useQueue(counterStore);
 
-**Key behaviors:**
-
-- Only re-renders when the selected value changes (referential equality)
-- Subscribes to `stateChanged` builtin events
-
-## `useQueue(store)`
-
-Returns a stable `queue` function for dispatching commands.
-
-```tsx
-import { useQueue } from "@naikidev/commiq-react";
-import { createCommand } from "@naikidev/commiq";
-
-function IncrementButton() {
-  const queue = useQueue(counterStore);
+  const handleIncrement = () => dispatch(increment);
 
   return (
-    <button onClick={() => queue(createCommand("increment", undefined))}>
-      +1
-    </button>
+    <div>
+      <p>{count}</p>
+      <button onClick={handleIncrement}>+1</button>
+    </div>
   );
 }
 ```
 
-**Key behaviors:**
+## Hook reference
 
-- Returns a referentially stable function (safe in dependency arrays)
+Every hook's first argument is a `StoreSource<S>` — a `SealedStore<S>` **or** a string name resolved through [`CommiqProvider`](#commiqprovider).
 
-## `useEvent(store, eventDef, handler)`
+| Hook | Returns | Notes |
+| --- | --- | --- |
+| `useSelector(source, selector, isEqual?)` | `T` | `isEqual` defaults to `Object.is`. Pass `shallowEqual` for selectors that build objects or arrays |
+| `useStore(source)` | `DeepReadonly<S>` | Whole state. Re-renders on every state change |
+| `useQueue(source)` | `QueueFn` | The store's own `queue`. Stable reference, so `await dispatch(cmd)` yields a `CommandResult` |
+| `useFlush(source)` | `() => Promise<void>` | Awaits full store quiescence |
+| `useEvent(source, eventDef, handler)` | `void` | Resubscribes only when the store or `eventDef.id` changes |
+| `useStream(source, listener)` | `void` | Every event, for logging and audit trails |
+| `useCommandStatus(source, nameOrDef)` | `CommandStatusSnapshot` | `{ pending, error, lastCompletedAt }`, derived from builtin lifecycle events |
+| `useNamedStore(name)` | `SealedStore<S>` | Looks a store up in the provider registry |
+| `useStoreRegistry()` | `StoreRegistry` | The registry the provider supplies |
 
-Subscribes to a specific event on a store. Automatically cleans up on unmount.
+Also exported: `shallowEqual`, `CommiqProvider`, `CommiqContext`, and the types `AnyStore`, `CommandSource`, `CommandStatusSnapshot`, `CommiqContextValue`, `CommiqProviderProps`, `IsEqual`, `StoreRegistry`, `StoreSource`.
+
+## `useSelector(source, selector, isEqual?)`
+
+Built on `useSyncExternalStore` with a selector, so the snapshot is cached and the selector is not re-run on unrelated renders.
+
+```tsx
+const count = useSelector(counterStore, (s) => s.count);
+```
+
+State reaching the selector is `DeepReadonly<S>` and frozen outside production — derive from it, never write to it.
+
+A selector that builds a new object or array returns a new reference every time, so under the default `Object.is` it re-renders on every published event. Pass `shallowEqual`:
+
+```tsx
+import { useSelector, shallowEqual } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+
+const selectCart = (s: DeepReadonly<CartState>) => ({
+  items: s.items,
+  total: s.items.reduce((sum, i) => sum + i.price * i.qty, 0),
+});
+
+const { items, total } = useSelector(cartStore, selectCart, shallowEqual);
+```
+
+`shallowEqual` compares own enumerable keys one level deep with `Object.is`. For a deeper structure, define the state so the subtree identity is stable, or pass your own `IsEqual<T>`.
+
+<Callout type="info">
+The subscription is the store's full event stream, not just `stateChanged`. Every published event asks React to re-check the snapshot; `isEqual` decides whether that becomes a render. Since v2 publishes `stateChanged` once per `ctx.setState()` rather than once per command, the check runs more often — the render count does not change, but a costly selector runs more often. Keep selectors cheap.
+</Callout>
+
+## `useStore(source)`
+
+The whole state object. Equivalent to `useSelector(source, (s) => s)`, so it re-renders on every state change. Convenient for small stores and debugging; prefer `useSelector` in anything that renders often.
+
+```tsx
+const state = useStore(counterStore);
+```
+
+## `useQueue(source)`
+
+Returns the store's `queue` function directly — a stable reference, safe in dependency arrays and effect bodies. It returns a `CommandHandle`, so a dispatch can be awaited.
+
+```tsx
+import { useQueue } from "@naikidev/commiq-react";
+import { addTodo } from "./stores/todos";
+
+function AddTodoForm() {
+  const dispatch = useQueue(todoStore);
+  const [text, setText] = useState("");
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const result = await dispatch(addTodo, { text });
+    if (result.status === "handled") setText("");
+  };
+
+  return <form onSubmit={handleSubmit}>{/* ... */}</form>;
+}
+```
+
+<Callout type="warn">
+A `CommandHandle` never rejects, so `try`/`catch` around `await dispatch(...)` catches nothing. Read `result.status` — one of `"handled"`, `"failed"`, `"interrupted"`, `"invalid"`, `"discarded"`. The handle settles when that command settles; events it triggered are dispatched afterwards, so use `useFlush` when you need full quiescence.
+</Callout>
+
+## `useFlush(source)`
+
+Returns a stable function that awaits store quiescence — the queue empty and no events pending. Useful in tests and in submit flows that must wait for follow-up commands queued by event handlers.
+
+```tsx
+const dispatch = useQueue(todoStore);
+const flush = useFlush(todoStore);
+
+const handleSave = async () => {
+  dispatch(save);
+  await flush();
+  navigate("/done");
+};
+```
+
+`flush()` never rejects. It throws if called from inside a store handler, which cannot happen from component code.
+
+## `useEvent(source, eventDef, handler)`
+
+Subscribes to one event. The handler is held in a ref, so it always sees the latest closure without resubscribing; the subscription is recreated only when the store or `eventDef.id` changes.
 
 ```tsx
 import { useEvent } from "@naikidev/commiq-react";
@@ -82,15 +141,126 @@ function ResetNotifier() {
   const [msg, setMsg] = useState("");
 
   useEvent(counterStore, counterReset, () => {
-    setMsg("Counter was reset!");
-    setTimeout(() => setMsg(""), 2000);
+    setMsg("Counter was reset");
   });
 
   return msg ? <p>{msg}</p> : null;
 }
 ```
 
-**Key behaviors:**
+Works with `handledEvent(name)` for `notify: true` commands, and with `BuiltinEvent.*`. A throwing handler is reported to `globalThis.reportError` (or rethrown on a microtask) rather than breaking the store's dispatch loop.
 
-- Uses a ref for the handler so it always calls the latest version
-- Cleans up on unmount — no stale listeners
+## `useStream(source, listener)`
+
+Every event the store publishes, in publish order. For logging, audit trails and analytics bridges — not for deriving render state.
+
+```tsx
+useStream(counterStore, (event) => {
+  analytics.track(event.name, { correlationId: event.correlationId });
+});
+```
+
+Listeners run synchronously at publish time. Keep them fast, or hand off to a queue.
+
+## `useCommandStatus(source, nameOrDef)`
+
+Tracks one command's lifecycle from the builtin events. No `isLoading` or `error` field in your state is required.
+
+```tsx
+import { useCommandStatus, useQueue } from "@naikidev/commiq-react";
+import { search } from "./stores/search";
+
+function SearchBox() {
+  const dispatch = useQueue(searchStore);
+  const { pending, error, lastCompletedAt } = useCommandStatus(searchStore, search);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) =>
+    dispatch(search, e.target.value);
+
+  return (
+    <>
+      <input onChange={handleChange} disabled={pending} />
+      {error ? <p role="alert">Search failed</p> : null}
+    </>
+  );
+}
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `pending` | `boolean` | At least one instance of this command is in flight |
+| `error` | `unknown` | The error from the most recent terminal event, or `null` |
+| `lastCompletedAt` | `number \| null` | `event.timestamp` of the most recent terminal event |
+
+The second argument is a `CommandSource` — a command name or a `CommandDef`. Concurrent instances are counted, so `pending` stays `true` until the last one settles.
+
+<Callout type="warn">
+`commandInterrupted` and `invalidCommand` are treated as terminal alongside `commandHandled` and `commandHandlingError`. On an `interruptable` command that fires on every keystroke, each cancelled instance is terminal, so `pending` flickers `false` between rapid triggers. If you need a steady indicator during typing, debounce the dispatch or derive the flag from your own state instead.
+</Callout>
+
+## `CommiqProvider`
+
+Supplies a registry of stores by name, which is what lets every hook accept a string instead of a store object.
+
+```tsx
+import { CommiqProvider } from "@naikidev/commiq-react";
+
+function App() {
+  return (
+    <CommiqProvider stores={{ counter: counterStore, todo: todoStore }}>
+      <MyApp />
+    </CommiqProvider>
+  );
+}
+```
+
+### `CommiqProviderProps`
+
+```ts
+type StoreRegistry = Record<string, AnyStore>;
+type CommiqProviderProps = PropsWithChildren<{ stores: StoreRegistry }>;
+```
+
+`AnyStore` is the structural minimum a registered store must satisfy — `state`, `queue`, `flush`, `openStream`, `closeStream` — so both a `SealedStore` and a `StoreImpl` can be registered. `CommiqContextValue` is `{ stores: StoreRegistry }`, and `CommiqContext` is exported for advanced cases such as reading the registry outside the provided hooks.
+
+### What the provider is for
+
+It is optional. Passing the store object to hooks needs no provider and stays the simplest path for a browser app with module-level stores.
+
+Use the provider when a name has to resolve to a **different store instance per subtree or per request**:
+
+- **SSR.** A module-level store is shared by every request in the same Node process. Create the graph per request and register it, so no user's state leaks into another's render.
+- **Tests.** Register fixtures under the same names the components ask for, without touching module state or resetting singletons between tests.
+
+```tsx
+function handler(req: Request, res: Response) {
+  const stores = { cart: sealStore(createCartStore()) };
+  res.send(renderToString(
+    <CommiqProvider stores={stores}>
+      <App />
+    </CommiqProvider>,
+  ));
+}
+
+function CartBadge() {
+  const count = useSelector<CartState, number>("cart", (s) => s.items.length);
+  return <span>{count}</span>;
+}
+```
+
+Resolving by name needs the type argument, as in `useSelector<CartState, number>("cart", ...)`, because a string carries no state type.
+
+<Callout type="warn">
+In commiq 1.x this provider was inert — it rendered a context that no hook read, while the docs credited it with dependency injection, test overrides and SSR. Code that wrapped an app in it for those reasons had no effect. It is load-bearing from 2.0 onward, but only for name resolution: hooks handed a store object ignore it entirely.
+</Callout>
+
+Requesting a store by name with no provider ancestor, or a name that is not in the registry, throws immediately with a message naming the store.
+
+## `useNamedStore(name)` / `useStoreRegistry()`
+
+`useNamedStore<S>(name)` resolves one store from the provider registry and returns the `SealedStore<S>`, for when you need the store itself rather than a hook over it. `useStoreRegistry()` returns the whole registry. Both throw if no `CommiqProvider` is above them.
+
+```tsx
+const cart = useNamedStore<CartState>("cart");
+const count = useSelector(cart, (s) => s.items.length);
+```

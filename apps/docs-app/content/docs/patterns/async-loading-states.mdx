@@ -1,120 +1,227 @@
 ---
 title: Async Loading States
-description: A standard pattern for async commands with loading, success, and error state handling.
+description: Track pending and error state for async commands with useCommandStatus instead of hand-rolled status fields.
 ---
 
 # Async Loading States
 
-Async command handlers naturally map to three phases: loading, success, and error. Representing these consistently in the state shape makes components predictable and eliminates edge cases.
+An async command has three observable phases: running, succeeded, failed. In v1 the only way to expose them to a component was to put a `status` or `loading` field in the state and set it by hand at the top and bottom of every handler. That is no longer necessary.
 
-## State shape
+`useCommandStatus(source, name | def)` derives the phase from the store's own event stream and returns `{ pending, error, lastCompletedAt }`. The state shape holds domain data only.
 
-Use a `status` discriminant rather than separate boolean flags:
+## Before and after
 
 ```ts
+// v1: three fields per async operation, maintained by hand
 type UserState = {
-  id: string | null;
-  name: string | null;
-  status: "idle" | "loading" | "error";
+  users: User[];
+  loading: boolean;
   errorMessage: string | null;
-};
-
-export const initialState: UserState = {
-  id: null,
-  name: null,
-  status: "idle",
-  errorMessage: null,
 };
 ```
 
-A `status` enum cannot represent impossible combinations. Two boolean flags (`isLoading`, `isError`) can both be `true` at the same time — `status` cannot.
-
-## Command handler
-
 ```ts
-import { createStore, createEvent, sealStore } from "@naikidev/commiq";
+// v2: the state holds users
+type UserState = {
+  readonly users: readonly User[];
+};
+```
 
-type User = { id: string; name: string };
+<Callout type="info">
+The hand-rolled fields also existed to work around a bug: `useSelector` did not observe intermediate `setState` calls, so a `loading: true` set at the top of a handler and cleared at the bottom could be missed entirely. That is fixed — `stateChanged` now fires once per `setState` and `useSelector` sees every one of them. The workaround is no longer load-bearing in either direction.
+</Callout>
+
+## The pattern
+
+The handler does the work and nothing else:
+
+```ts title="stores/users/store.ts"
+import { createStore, createCommandDef, createEvent, sealStore } from "@naikidev/commiq";
+
+export type User = { id: string; name: string };
+
+type UserState = {
+  readonly users: readonly User[];
+};
+
+export const initialState: UserState = { users: [] };
+
+export const UserCommand = {
+  fetch: createCommandDef("user:fetch"),
+  clear: createCommandDef("user:clear"),
+};
 
 export const UserEvent = {
-  Fetched: createEvent<User>("user:fetched"),
-  FetchFailed: createEvent<{ message: string }>("user:fetch-failed"),
+  Fetched: createEvent<{ count: number }>("user:fetched"),
 };
 
 const _store = createStore<UserState>(initialState);
 
-_store.addCommandHandler<{ id: string }>("user:fetch", async (ctx, cmd) => {
-  ctx.setState({ ...ctx.state, status: "loading", errorMessage: null });
-
-  try {
-    const user = await fetchUserById(cmd.data.id);
-    ctx.setState({ id: user.id, name: user.name, status: "idle", errorMessage: null });
-    ctx.emit(UserEvent.Fetched, user);
-  } catch (e) {
-    ctx.setState({ ...ctx.state, status: "error", errorMessage: (e as Error).message });
-    ctx.emit(UserEvent.FetchFailed, { message: (e as Error).message });
-  }
-});
+_store
+  .addCommandHandler(UserCommand.fetch, async (ctx) => {
+    const users = await fetchUsers();
+    ctx.setState((prev) => ({ users: [...prev.users, ...users] }));
+    ctx.emit(UserEvent.Fetched, { count: users.length });
+  })
+  .addCommandHandler(UserCommand.clear, (ctx) => {
+    ctx.setState(initialState);
+  });
 
 export const userStore = sealStore(_store);
 ```
 
-The handler transitions through three states in sequence:
+There is no try/catch. If `fetchUsers()` rejects, the error escapes the handler, which is what makes the command *fail* — the store reports it through `onError`, publishes `commandHandlingError`, settles the handle as `failed`, and `useCommandStatus` picks it up as `error`. Catching it here would report success.
 
-1. Set `status: "loading"` synchronously as the first line — this is immediate feedback.
-2. On success: update the data fields and set `status: "idle"`. Emit a success event.
-3. On failure: record the error message and set `status: "error"`. Emit a failure event.
+The domain hook composes reading, dispatching, and status:
 
-Emitting events on both outcomes allows other stores and UI layers to react without polling state.
+```ts title="stores/users/hooks.ts"
+import { useSelector, useQueue, useCommandStatus } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { userStore, UserCommand } from "./store";
+import type { UserState } from "./store";
 
-## Selectors
+function selectUsers(state: DeepReadonly<UserState>) {
+  return state.users;
+}
 
-Write targeted selectors to avoid unnecessary re-renders:
+function toMessage(error: unknown): string | null {
+  if (error === null || error === undefined) return null;
+  return error instanceof Error ? error.message : String(error);
+}
 
-```tsx
-function UserProfile({ userId }: { userId: string }) {
-  const status = useSelector(userStore, (s) => s.status);
-  const name = useSelector(userStore, (s) => s.name);
-  const errorMessage = useSelector(userStore, (s) => s.errorMessage);
+export function useUsers() {
+  const users = useSelector(userStore, selectUsers);
+  const { pending, error } = useCommandStatus(userStore, UserCommand.fetch);
   const queue = useQueue(userStore);
 
-  useEffect(() => {
-    queue(UserCommand.fetchUser(userId));
-  }, [userId]);
-
-  if (status === "loading") return <Spinner />;
-  if (status === "error") return <ErrorMessage message={errorMessage} />;
-  return <p>{name}</p>;
+  return {
+    users,
+    loading: pending,
+    errorMessage: toMessage(error),
+    fetch: () => queue(UserCommand.fetch),
+    clear: () => queue(UserCommand.clear),
+  };
 }
 ```
 
-Each `useSelector` call subscribes independently. A component that only reads `status` will not re-render when `name` changes. For encapsulating this into a reusable hook, see [domain hooks](/patterns/domain-hooks).
+```tsx title="pages/UsersPage.tsx"
+function UsersPage() {
+  const { users, loading, errorMessage, fetch } = useUsers();
 
-## Reset
-
-Provide an explicit reset command to clear state when navigating away or when the data is no longer relevant:
-
-```ts
-_store.addCommandHandler("user:reset", (ctx) => {
-  ctx.setState(initialState);
-});
+  return (
+    <div>
+      <button onClick={fetch} disabled={loading}>
+        {loading ? "Loading…" : "Fetch users"}
+      </button>
+      {errorMessage && <p role="alert">{errorMessage}</p>}
+      <ul>
+        {users.map((user) => (
+          <li key={user.id}>{user.name}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 ```
 
-Exporting `initialState` alongside the store ensures the reset is consistent with the initial state definition. Avoid duplicating the initial values in the reset handler.
+## What `useCommandStatus` actually tracks
 
-## Multiple async operations
+It filters the stream for events carrying a `command` whose `name` matches, and counts in-flight runs by `correlationId`:
 
-When a store manages several independent async operations, track each one with its own status field:
+| Field | Semantics |
+| --- | --- |
+| `pending` | `true` while at least one run of that command name is in flight |
+| `error` | The error from the most recent terminal event, or `null` |
+| `lastCompletedAt` | The `timestamp` of the most recent terminal event, or `null` |
+
+Terminal events are `commandHandled`, `commandHandlingError`, `commandInterrupted`, and `invalidCommand`. `pending` becomes `true` on `commandStarted` and clears `error`.
+
+Things worth knowing before you rely on it:
+
+- **It is keyed by command *name*, not by instance.** Two concurrent `user:fetch` runs share one snapshot; `pending` stays `true` until both settle. If you need per-item status — a spinner on one row of a list — put that in state, keyed by the item id.
+- **`error` is last-write-wins.** A failure followed by a success leaves `error: null`, because the success cleared it on `commandStarted`. It is not an error log.
+- **It starts empty.** The snapshot is `{ pending: false, error: null, lastCompletedAt: null }` until the first matching event arrives. A command dispatched before the component mounted is not retroactively visible.
+- **It costs a stream subscription per call.** Fine for a handful; do not call it in a list row rendered a thousand times.
+
+## When state is still the right place
+
+`useCommandStatus` covers "is this command running and did it fail". Anything else belongs in state:
+
+| Need | Where it goes |
+| --- | --- |
+| Is this command running? | `useCommandStatus` |
+| Did the last run fail, and with what? | `useCommandStatus` |
+| Which specific rows are saving? | State, keyed by id |
+| Has this data ever loaded, vs. loaded and empty? | State — an `idle`/`loaded` discriminant |
+| Progress percentage | State |
+| An error that must survive a remount | State |
+
+For the "loaded but empty" distinction, a discriminant in state is clearer than inferring it from `lastCompletedAt`:
 
 ```ts
-type DashboardState = {
-  user: { data: User | null; status: "idle" | "loading" | "error" };
-  orders: { data: Order[]; status: "idle" | "loading" | "error" };
+type UserState = {
+  readonly users: readonly User[];
+  readonly loaded: boolean;
 };
 ```
 
-This allows components to show granular loading states — a spinner next to the orders table while the user header has already loaded.
+Set `loaded: true` in the handler on success. `users.length === 0 && loaded` then means "no users", while `!loaded` means "not fetched yet" — `useCommandStatus` cannot tell those apart.
 
-<Callout type="warn">
-Do not queue a second fetch command while a fetch is already in progress unless you intend to cancel the first. Commiq processes commands sequentially, so a second `user:fetch` queued while the first is still running will wait and then execute after the first completes.
-</Callout>
+## Awaiting a command directly
+
+Outside React, `queue()` returns a `CommandHandle`. Await it for the outcome of that one dispatch:
+
+```ts
+const result = await userStore.queue(UserCommand.fetch);
+
+if (result.status === "failed") {
+  console.error(result.error);
+}
+```
+
+The handle never rejects — the outcome is in `result.status`. See [error handling](/patterns/error-handling).
+
+## Sequential processing
+
+Commands are processed one at a time. A second `user:fetch` queued while the first is still awaiting will wait for it and then run.
+
+```ts
+userStore.queue(UserCommand.fetch);
+userStore.queue(UserCommand.fetch); // runs after the first finishes
+```
+
+If you want the second dispatch to *replace* the first rather than follow it, register the handler as `interruptable`:
+
+```ts
+_store.addCommandHandler(
+  SearchCommand.query,
+  async (ctx, cmd) => {
+    const results = await searchApi(cmd.data, { signal: ctx.signal });
+    if (ctx.signal?.aborted) return;
+    ctx.setState((prev) => ({ ...prev, results }));
+  },
+  { interruptable: true },
+);
+```
+
+The superseded run's handle settles as `interrupted`, and `useCommandStatus` treats that as terminal. Add `{ rollbackOnInterrupt: true }` if a partially applied state change should be undone when the command is superseded.
+
+## Multiple independent operations
+
+Each command gets its own status hook — no per-operation fields in state:
+
+```tsx
+function Dashboard() {
+  const userStatus = useCommandStatus(dashboardStore, DashboardCommand.loadUser);
+  const orderStatus = useCommandStatus(dashboardStore, DashboardCommand.loadOrders);
+
+  return (
+    <>
+      {userStatus.pending ? <HeaderSkeleton /> : <Header />}
+      {orderStatus.pending ? <TableSkeleton /> : <OrderTable />}
+    </>
+  );
+}
+```
+
+The two hooks are independent because they filter on different command names. See [domain hooks](/patterns/domain-hooks) for wrapping this up per feature.

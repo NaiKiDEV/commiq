@@ -1,12 +1,16 @@
 ---
 title: Devtools React
+description: Embedded React devtools panel for commiq — seven tabs including a write-side Dispatch tab, plus the useDevtoolsEngine hook for building your own UI.
 ---
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Devtools React
 
-`@naikidev/commiq-devtools` provides an embedded devtools panel for your applications. Drop it into your app to inspect events, trace causality, view state, and monitor performance — no browser extension required.
+`@naikidev/commiq-devtools` is an embedded devtools panel. Drop it into your app to inspect events, trace causality, view state, dispatch commands and monitor performance — no browser extension required.
+
+It builds on [`@naikidev/commiq-devtools-core`](/plugins/devtools), which does the collecting.
 
 ## Installation
 
@@ -35,11 +39,11 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 Peer dependencies: `@naikidev/commiq`, `react`, `react-dom`.
 
-## Basic Usage
+## Basic usage
 
 No provider required. Pass stores directly as props or mount imperatively.
 
-### As a Component
+### As a component
 
 ```tsx
 import { CommiqDevtools } from "@naikidev/commiq-devtools";
@@ -50,102 +54,155 @@ function App() {
   return (
     <>
       <YourApp />
-      <CommiqDevtools
-        stores={{ counter: counterStore, todos: todoStore }}
-      />
+      <CommiqDevtools stores={{ counter: counterStore, todos: todoStore }} />
     </>
   );
 }
 ```
 
-### Without JSX
+The panel body is loaded through `React.lazy`, so nothing beyond the small wrapper reaches the bundle until the panel is actually enabled.
 
-Mount from anywhere — `main.ts`, a store file, or a plain script:
+### Without JSX
 
 ```ts
 import { mountDevtools } from "@naikidev/commiq-devtools";
 import { counterStore } from "./stores/counter";
-import { todoStore } from "./stores/todos";
 
-const unmount = mountDevtools({
-  stores: { counter: counterStore, todos: todoStore },
-});
+const unmount = mountDevtools({ stores: { counter: counterStore } });
 
-// Later, to remove:
 unmount();
 ```
 
-Both approaches render a floating button in the corner of the screen. Click it to open the devtools panel.
+`MountDevtoolsOptions` is `CommiqDevtoolsProps` minus `enabled` — `mountDevtools` always mounts, since calling it is the explicit decision that `enabled` otherwise represents. Gate the call yourself if you need to.
 
-## Props
+## `CommiqDevtoolsProps`
 
-| Prop          | Type                                                           | Default          | Description                                                                 |
-| ------------- | -------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------- |
-| `stores`      | `Record<string, SealedStore<any>>`                             | (required)       | Stores to monitor, keyed by display name                                    |
-| `enabled`     | `boolean`                                                      | auto-detect      | `true` = always show, `false` = never show, `undefined` = hide in production |
-| `position`    | `"bottom-left" \| "bottom-right" \| "top-left" \| "top-right"` | `"bottom-right"` | Position of the floating trigger button                                     |
-| `initialOpen` | `boolean`                                                      | `false`          | Whether the panel starts open                                               |
-| `maxEvents`   | `number`                                                       | `500`            | Maximum events kept in the timeline ring buffer                             |
-| `panelHeight` | `number`                                                       | `360`            | Panel height in pixels                                                      |
-| `buttonStyle` | `CSSProperties`                                                | —                | Additional styles for the trigger button                                    |
+| Prop | Type | Default | Description |
+| --- | --- | --- | --- |
+| `stores` | `DevtoolsStoreRegistry` | *required* | Stores to monitor, keyed by display name |
+| `enabled` | `boolean` | auto-detect | `true` always shows, `false` never shows, `undefined` hides when `NODE_ENV === "production"` |
+| `position` | `"bottom-left" \| "bottom-right" \| "top-left" \| "top-right"` | `"bottom-right"` | Position of the floating trigger button |
+| `initialOpen` | `boolean` | `false` | Whether the panel starts open |
+| `maxEvents` | `number` | `500` | Timeline ring buffer size |
+| `panelHeight` | `number` | `360` | Initial panel height in pixels — the panel is resizable by dragging |
+| `buttonStyle` | `CSSProperties` | — | Additional styles for the trigger button |
 
-## Features
+### `DevtoolsStoreRegistry`
 
-### Events Tab
+```ts
+type DevtoolsStoreLike = {
+  readonly state: unknown;
+  queue: QueueFn;
+  flush: () => Promise<void>;
+  openStream: (listener: StreamListener) => Unsubscribe;
+  closeStream: (listener: StreamListener) => void;
+};
 
-Linear event log showing all store activity. Filter by store or toggle built-in events. Click any row to expand details including event data and state diffs.
+type DevtoolsStoreRegistry = Record<string, DevtoolsStoreLike>;
+```
 
-### Causality Graph
+<Callout type="warn">
+`stores` is **not** `Record<string, SealedStore<any>>`, as v1's docs claimed. A `SealedStore` does satisfy `DevtoolsStoreLike`, so existing calls keep working — but `queue` is part of the contract, which is what the [Dispatch tab](#dispatch) needs. A read-only store double will not type-check.
+</Callout>
 
-Hierarchical tree view of command causality chains. See which commands triggered other commands and events, with expandable detail panels.
+Pass the same object identity across renders. `stores` is an effect dependency, so a fresh literal on every render reconnects every store on every render. Define it at module scope, or memoize it.
+
+## Panel features
+
+Seven tabs.
+
+### Events
+
+Linear log of all store activity. Click a row to expand event data, the command payload and a state diff. Rows are virtualized, so a full ring buffer stays responsive.
+
+### Graph
+
+Hierarchical tree of command causality chains — which command triggered which commands and events, with expandable detail panels.
 
 ### Timeline
 
-Visual SVG timeline with per-store swimlanes. Events appear as dots connected by causality links. Zoom with scroll, pan by dragging.
+SVG timeline with per-store swimlanes. Entries appear as dots connected by causality links. Scroll to zoom, drag to pan.
 
 ### Performance
 
-Aggregated command metrics: total/average/min/max duration per command type, with visual bar charts. Sort by total time, average time, max time, or call count.
+Aggregated command metrics: total, average, min and max duration per command name, with bar charts. Sortable by total time, average time, max time or call count.
 
 ### State
 
-Current state of each connected store displayed as a collapsible JSON tree.
+Current state of each connected store as a collapsible JSON tree.
 
-### Dependency Map
+### Deps
 
-Force-directed graph showing inter-store dependencies. Nodes represent stores, edges show command flows between them with call counts.
+Force-directed graph of inter-store dependencies. Nodes are stores, edges are command flows with call counts.
 
-## Production Gating
+### Dispatch
 
-By default, `CommiqDevtools` auto-detects the environment and renders nothing in production. Override this with the `enabled` prop:
+**The panel's only write-side capability**, and usually the reason to open devtools mid-debug: dispatch a command into a live store without touching your UI.
+
+The tab lists every command name it has observed in the timeline, with its call count and the payload from its most recent invocation. Select one to prefill the name and payload, edit the JSON, and dispatch. Or type a command name the timeline has never seen.
+
+Notes on how it behaves, since it is dispatching into your real application:
+
+- The payload box is parsed with `JSON.parse`. A parse failure is shown inline and blocks the dispatch; nothing is queued.
+- An empty payload box dispatches `undefined` as the data.
+- The command is built with `createCommand(name, data)` and dispatched via `store.queue`. It goes through the normal queue: normal ordering, normal handlers, normal events.
+- A command name with no registered handler produces an `invalidCommand` event, exactly as it would from application code.
+- Only one store receives the dispatch — the one selected in the toolbar.
+
+### Filtering and search
+
+The Events, Graph and Timeline tabs share a filter toolbar:
+
+- **Store filter** — narrow to one connected store.
+- **Built-ins toggle** — hide the builtin events (`stateChanged`, `commandStarted`, `commandHandled`, and the rest of `BuiltinEventName`) to leave only your domain events. Useful in v2, where `stateChanged` fires once per `setState` rather than once per command and can crowd out everything else.
+- **Search** — substring match across entry names and data.
+
+`BUILTIN_EVENT_NAMES` and `ERROR_EVENT_NAMES` are exported if you want the same sets in your own UI.
+
+### Pinning
+
+Click the pin on any Events row to mark it. A **Pinned (n)** filter then appears, showing only pinned entries — useful for keeping a handful of interesting entries visible while a busy log scrolls past.
+
+Pins are keyed by `seq` + `correlationId`, so they attach to a specific occurrence rather than to a command name. They are UI state only: a pinned entry evicted from the collector's ring buffer, or dropped by the panel's clear button, is gone. Export the timeline if you need it to outlive the buffer.
+
+### Error badge
+
+When error events have been collected, a count badge appears in the header. Clicking it filters the Events tab to errors only. Errors are `invalidCommand`, `commandHandlingError`, `eventHandlingError` and `unhandledError` — the last two are new in v2, arriving from core's error channel.
+
+### Export and import
+
+**Export** downloads the current timeline as `commiq-timeline-<timestamp>.json`. **Import** loads a previously exported file for offline inspection, which puts the panel into a read-only view of that timeline until you clear it.
+
+## Production gating
+
+By default `CommiqDevtools` renders nothing when `NODE_ENV === "production"`:
 
 ```tsx
-// Always show (e.g., staging environment)
-<CommiqDevtools stores={stores} enabled={true} />
-
-// Never show
-<CommiqDevtools stores={stores} enabled={false} />
-
-// Auto-detect (default) — hidden when NODE_ENV === "production"
-<CommiqDevtools stores={stores} />
+<CommiqDevtools stores={stores} enabled={true} />  {/* staging */}
+<CommiqDevtools stores={stores} enabled={false} /> {/* off */}
+<CommiqDevtools stores={stores} />                 {/* auto-detect */}
 ```
 
-## Custom Devtools UI
+The check is wrapped in a `try`/`catch` and treats a missing `process` as non-production, so it does not throw in a browser bundle that never shimmed `process`.
 
-Use the `useDevtoolsEngine` hook to build your own devtools interface:
+## `useDevtoolsEngine(stores, maxEvents?)`
+
+Build your own devtools UI on the same engine.
 
 ```tsx
 import { useDevtoolsEngine } from "@naikidev/commiq-devtools";
+import { stores } from "./stores";
 
 function MyDevtools() {
-  const engine = useDevtoolsEngine({ counter: counterStore });
+  const engine = useDevtoolsEngine(stores, 2000);
 
   return (
     <div>
-      <p>Events: {engine.eventCount}</p>
+      <p>{engine.eventCount} events, {engine.errorCount} errors</p>
+      <button onClick={engine.clearErrors}>Dismiss errors</button>
       <ul>
         {engine.timeline.map((entry) => (
-          <li key={entry.correlationId}>{entry.name}</li>
+          <li key={`${entry.seq}-${entry.correlationId}`}>{entry.name}</li>
         ))}
       </ul>
     </div>
@@ -153,18 +210,64 @@ function MyDevtools() {
 }
 ```
 
-The hook returns a `DevtoolsEngine` with:
+`maxEvents` is the hook's **second parameter**, defaulting to `500`. It is read once, when the internal collector is created, so changing it later has no effect.
 
-| Property          | Type                                          | Description                          |
-| ----------------- | --------------------------------------------- | ------------------------------------ |
-| `timeline`        | `TimelineEntry[]`                             | All collected events                 |
-| `getChain`        | `(correlationId: string) => TimelineEntry[]`  | Events linked by causality           |
-| `getStateHistory` | `(storeName: string) => StateSnapshot[]`      | State changes over time              |
-| `storeStates`     | `Record<string, unknown>`                     | Current state of each store          |
-| `storeNames`      | `string[]`                                    | Connected store names                |
-| `eventCount`      | `number`                                      | Total events collected               |
-| `clear`           | `() => void`                                  | Reset collection                     |
+<Callout type="warn">
+Key list rows by `seq` — or `seq` + `correlationId` — never by `correlationId` alone. A single command produces several entries sharing one correlation id, so a `correlationId` key duplicates.
+</Callout>
 
-## Export and Import
+### `DevtoolsEngine`
 
-The devtools panel includes export/import buttons. Export saves the current timeline as a JSON file. Import loads a previously exported timeline for offline inspection.
+| Member | Type | Description |
+| --- | --- | --- |
+| `version` | `number` | Bumps when the engine has new data to render |
+| `timeline` | `readonly TimelineEntry[]` | All collected entries |
+| `getChain` | `(correlationId: string) => readonly TimelineEntry[]` | Full causality chain |
+| `getStateHistory` | `(storeName: string) => readonly StateSnapshot[]` | Bounded snapshot history |
+| `storeStates` | `Record<string, unknown>` | Current state of each store |
+| `storeNames` | `string[]` | Connected store names |
+| `eventCount` | `number` | Total entries collected since the last clear |
+| `errorCount` | `number` | Error entries collected since the last clear or `clearErrors()` |
+| `errors` | `readonly ErrorEntry[]` | The most recent error entries, capped at `MAX_TRACKED_ERRORS` (`50`) |
+| `clearCount` | `number` | How many times `clear()` has been called — useful for resetting derived UI state |
+| `clearErrors` | `() => void` | Drop the tracked errors and reset `errorCount` |
+| `clear` | `() => void` | Reset collection |
+
+All three query results are **`readonly`** arrays. Copy before sorting.
+
+Renders are batched through `requestAnimationFrame`, so a burst of events produces one re-render rather than one per event. `clear()` and `clearErrors()` flush immediately.
+
+### `ErrorEntry`
+
+```ts
+type ErrorEntry = {
+  id: number;
+  name: string;
+  storeName: string;
+  correlationId: string;
+};
+```
+
+<Callout type="warn">
+`ErrorEntry` no longer carries the full `TimelineEntry`. Holding one retained the entry's state snapshots long after the ring buffer had evicted them. Use `correlationId` with `getChain` to recover the context on demand.
+</Callout>
+
+## Exported helpers
+
+| Export | Purpose |
+| --- | --- |
+| `safeStringify(value)` | Cycle-safe single-line stringify for row previews |
+| `safeStringifyPretty(value)` | Indented variant for detail panels |
+| `toSafeJson(value)` | Plain, serializable structure for export |
+| `BUILTIN_EVENT_NAMES` | Set of builtin event names, for a built-ins toggle |
+| `ERROR_EVENT_NAMES` | Set of error event names, for an error filter |
+| `MAX_TRACKED_ERRORS` | The `errors` cap |
+
+Types: `CommiqDevtoolsProps`, `MountDevtoolsOptions`, `DevtoolsEngine`, `ErrorEntry`, `DevtoolsStoreLike`, `DevtoolsStoreRegistry`.
+
+```ts
+import type { CommiqDevtoolsProps, DevtoolsStoreRegistry } from "@naikidev/commiq-devtools";
+
+const stores: DevtoolsStoreRegistry = { counter: counterStore };
+const devtoolsProps: CommiqDevtoolsProps = { stores, position: "top-right" };
+```

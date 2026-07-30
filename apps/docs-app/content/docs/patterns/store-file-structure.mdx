@@ -7,11 +7,32 @@ import { File, Folder, Files } from 'fumadocs-ui/components/files';
 
 # Store File Structure
 
-Commiq stores are plain TypeScript modules. There is no required file structure, but the patterns below have proven effective for projects of different sizes.
+Commiq stores are plain TypeScript modules. No structure is required, but the layouts below hold up as a project grows.
+
+## Declare state fields readonly
+
+Before any layout question: **declare every state field `readonly`, and every array `readonly T[]`.**
+
+Every state-reading surface — `store.state`, `ctx.state`, a selector's argument, `StateUpdater`'s `prev` — is typed `DeepReadonly<S>`. If a state field is a mutable `Item[]`, then `DeepReadonly<S>` gives you `readonly Item[]`, which is not assignable back to `S`. Spreading `ctx.state` and keeping that field is a compile error:
+
+```ts
+type Bad = { items: Item[]; total: number };            // mutable
+type Good = { readonly items: readonly Item[]; readonly total: number };
+```
+
+```ts
+// With Bad: TS2345 — readonly Item[] is not assignable to Item[]
+ctx.setState((prev) => ({ ...prev, total: 10 }));
+
+// With Good: fine, and so is every other spread
+ctx.setState((prev) => ({ ...prev, total: 10 }));
+```
+
+With a mutable field you must rebuild it on every update, which is easy to miss and produces an error message about variance rather than about your intent. Declaring the type `readonly` costs one keyword and makes both forms of `setState` work everywhere. Outside production the store also deep-freezes state, so the readonly types match the runtime behavior instead of merely describing an intention.
 
 ## Single-file stores
 
-For most stores, a single file per domain is the right choice. Place all commands, events, handler registration, and the sealed export together.
+For most stores, one file per domain is right. Commands, events, handlers, and the sealed export live together.
 
 <Files>
   <Folder name="src" defaultOpen>
@@ -23,147 +44,242 @@ For most stores, a single file per domain is the right choice. Place all command
   </Folder>
 </Files>
 
-A complete single-file store follows this structure:
-
 ```ts title="stores/counter.ts"
-import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
+import {
+  createStore,
+  createCommandDef,
+  createEvent,
+  sealStore,
+} from "@naikidev/commiq";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type CounterState = {
-  count: number;
+export type CounterState = {
+  readonly count: number;
 };
+
+export const initialState: CounterState = { count: 0 };
 
 // ── Events ───────────────────────────────────────────────────────────────────
 
 export const CounterEvent = {
   Incremented: createEvent<{ amount: number }>("counter:incremented"),
-  Decremented: createEvent<{ amount: number }>("counter:decremented"),
   Reset: createEvent<void>("counter:reset"),
 };
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 export const CounterCommand = {
-  increment: (amount: number) => createCommand("counter:increment", { amount }),
-  decrement: (amount: number) => createCommand("counter:decrement", { amount }),
-  reset: () => createCommand("counter:reset", undefined),
+  increment: createCommandDef("counter:increment"),
+  incrementBy: createCommandDef<{ amount: number }>("counter:incrementBy"),
+  reset: createCommandDef("counter:reset"),
 };
 
-// ── Store ─────────────────────────────────────────────────────────────────────
+// ── Store (private) ──────────────────────────────────────────────────────────
 
-const _store = createStore<CounterState>({ count: 0 });
+const _store = createStore<CounterState>(initialState, {
+  onError: (report) => reportToService(report.error, { source: report.source }),
+});
 
 _store
-  .addCommandHandler<{ amount: number }>("counter:increment", (ctx, cmd) => {
-    ctx.setState({ count: ctx.state.count + cmd.data.amount });
+  .addCommandHandler(CounterCommand.increment, (ctx) => {
+    ctx.setState((prev) => ({ count: prev.count + 1 }));
+    ctx.emit(CounterEvent.Incremented, { amount: 1 });
+  })
+  .addCommandHandler(CounterCommand.incrementBy, (ctx, cmd) => {
+    ctx.setState((prev) => ({ count: prev.count + cmd.data.amount }));
     ctx.emit(CounterEvent.Incremented, { amount: cmd.data.amount });
   })
-  .addCommandHandler<{ amount: number }>("counter:decrement", (ctx, cmd) => {
-    ctx.setState({ count: ctx.state.count - cmd.data.amount });
-    ctx.emit(CounterEvent.Decremented, { amount: cmd.data.amount });
-  })
-  .addCommandHandler("counter:reset", (ctx) => {
-    ctx.setState({ count: 0 });
+  .addCommandHandler(CounterCommand.reset, (ctx) => {
+    ctx.setState(initialState);
     ctx.emit(CounterEvent.Reset, undefined);
   });
 
-// ── Public interface ──────────────────────────────────────────────────────────
+// ── Public interface ─────────────────────────────────────────────────────────
 
 export const counterStore = sealStore(_store);
 ```
 
-The raw store (`_store`) stays private. The sealed store, events, and command factories are the only public exports.
+The raw store stays private. The sealed store, the command definitions, the events, and `initialState` are the public exports.
+
+`addCommandHandler` returns the store, so it chains. `addEventHandler` and `openStream` return an `Unsubscribe` and cannot be chained — call them as separate statements:
+
+```ts
+// Chains
+_store
+  .addCommandHandler(CounterCommand.increment, handleIncrement)
+  .addCommandHandler(CounterCommand.reset, handleReset);
+
+// Does not chain — returns Unsubscribe
+const stopWatching = _store.addEventHandler(CounterEvent.Reset, handleReset);
+```
 
 ## Domain folder stores
 
-As a store grows — more commands, event handlers, or complex types — split it into a domain folder. This keeps each file focused and makes large stores easier to navigate.
+As a store grows, split it. Each file stays focused and the public surface is one `index.ts`.
 
 <Files>
   <Folder name="src" defaultOpen>
-    <Folder name="stores" defaultOpen>
+    <Folder name="features" defaultOpen>
       <Folder name="user" defaultOpen>
-        <File name="events.ts" />
         <File name="commands.ts" />
+        <File name="events.ts" />
         <File name="store.ts" />
+        <File name="hooks.ts" />
         <File name="index.ts" />
       </Folder>
       <Folder name="cart">
-        <File name="events.ts" />
         <File name="commands.ts" />
+        <File name="events.ts" />
         <File name="store.ts" />
+        <File name="hooks.ts" />
         <File name="index.ts" />
       </Folder>
     </Folder>
   </Folder>
 </Files>
 
-```ts title="stores/user/events.ts"
+```ts title="features/user/commands.ts"
+import { createCommandDef } from "@naikidev/commiq";
+
+export const UserCommand = {
+  fetch: createCommandDef<{ id: string }>("user:fetch"),
+  signOut: createCommandDef("user:signOut"),
+};
+```
+
+```ts title="features/user/events.ts"
 import { createEvent } from "@naikidev/commiq";
 
 export const UserEvent = {
   Fetched: createEvent<{ id: string; name: string }>("user:fetched"),
-  FetchFailed: createEvent<{ message: string }>("user:fetch-failed"),
-  SignedOut: createEvent<void>("user:signed-out"),
+  SignedOut: createEvent<void>("user:signedOut"),
 };
 ```
 
-```ts title="stores/user/commands.ts"
-import { createCommand } from "@naikidev/commiq";
-
-export const UserCommand = {
-  fetchUser: (id: string) => createCommand("user:fetch", { id }),
-  signOut: () => createCommand("user:sign-out", undefined),
-};
-```
-
-```ts title="stores/user/store.ts"
-import { createStore } from "@naikidev/commiq";
+```ts title="features/user/store.ts"
+import { createStore, sealStore } from "@naikidev/commiq";
+import { UserCommand } from "./commands";
 import { UserEvent } from "./events";
 
-type UserState = {
-  id: string | null;
-  name: string | null;
-  status: "idle" | "loading" | "error";
+export type UserState = {
+  readonly id: string | null;
+  readonly name: string | null;
 };
 
-export const initialState: UserState = { id: null, name: null, status: "idle" };
+export const initialState: UserState = { id: null, name: null };
 
-export const _store = createStore<UserState>(initialState);
+const _store = createStore<UserState>(initialState);
 
 _store
-  .addCommandHandler<{ id: string }>("user:fetch", async (ctx, cmd) => {
-    ctx.setState({ ...ctx.state, status: "loading" });
-    try {
-      const user = await fetchUserById(cmd.data.id);
-      ctx.setState({ id: user.id, name: user.name, status: "idle" });
-      ctx.emit(UserEvent.Fetched, user);
-    } catch (e) {
-      ctx.setState({ ...ctx.state, status: "error" });
-      ctx.emit(UserEvent.FetchFailed, { message: (e as Error).message });
-    }
+  .addCommandHandler(UserCommand.fetch, async (ctx, cmd) => {
+    const user = await fetchUserById(cmd.data.id);
+    ctx.setState({ id: user.id, name: user.name });
+    ctx.emit(UserEvent.Fetched, user);
   })
-  .addCommandHandler("user:sign-out", (ctx) => {
+  .addCommandHandler(UserCommand.signOut, (ctx) => {
     ctx.setState(initialState);
     ctx.emit(UserEvent.SignedOut, undefined);
   });
-```
 
-```ts title="stores/user/index.ts"
-import { sealStore } from "@naikidev/commiq";
-import { _store } from "./store";
-
-export { UserEvent } from "./events";
-export { UserCommand } from "./commands";
 export const userStore = sealStore(_store);
 ```
 
-The `index.ts` is the single public entry point. Consumers import from `./stores/user`, not from individual files inside it.
+Seal in `store.ts`, not in `index.ts`. Anything in the folder that needs the raw store — `addEventHandler`, `useExtension`, a devtools `connect` — must live in the same file, because `_store` is not exported.
+
+```ts title="features/user/hooks.ts"
+import { useSelector, useQueue, useCommandStatus } from "@naikidev/commiq-react";
+import type { DeepReadonly } from "@naikidev/commiq";
+import { UserCommand } from "./commands";
+import { userStore } from "./store";
+import type { UserState } from "./store";
+
+function selectUser(state: DeepReadonly<UserState>) {
+  return state.name;
+}
+
+export function useUser() {
+  const name = useSelector(userStore, selectUser);
+  const { pending, error } = useCommandStatus(userStore, UserCommand.fetch);
+  const queue = useQueue(userStore);
+
+  return {
+    name,
+    loading: pending,
+    error,
+    fetch: (id: string) => queue(UserCommand.fetch, { id }),
+    signOut: () => queue(UserCommand.signOut),
+  };
+}
+```
+
+Define selectors at module scope, not inline. A selector declared inside the component is a new function every render; `useSelector` handles that, but a module-level function is free and makes the return-value memoization straightforward to reason about.
+
+```ts title="features/user/index.ts"
+export { UserCommand } from "./commands";
+export { UserEvent } from "./events";
+export { userStore, initialState } from "./store";
+export type { UserState } from "./store";
+export { useUser } from "./hooks";
+```
+
+Consumers import from `./features/user`, never from a file inside it.
+
+## Wiring that spans stores
+
+Cross-store wiring does not belong in either store. Give it its own module:
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="features" defaultOpen>
+      <Folder name="pipeline" defaultOpen>
+        <File name="bus.ts" />
+        <File name="orderStore.ts" />
+        <File name="paymentStore.ts" />
+        <File name="index.ts" />
+      </Folder>
+    </Folder>
+  </Folder>
+</Files>
+
+`bus.ts` imports the sealed stores, connects them to an event bus, and routes events to commands. It is the only file that knows the whole flow — see [multi-store coordination](/patterns/multi-store-coordination).
+
+Plugin setup — devtools, persist, OpenTelemetry — belongs in its own module for the same reason. See [composing plugins](/patterns/composing-plugins).
+
+## Store factories for testability
+
+Exporting a factory alongside the singleton lets tests get a fresh store, and lets the store take injected dependencies:
+
+```ts title="features/counter/store.ts"
+import { createStore, sealStore } from "@naikidev/commiq";
+import type { StoreOptions } from "@naikidev/commiq";
+import { CounterCommand } from "./commands";
+
+export type CounterState = { readonly count: number };
+export const initialState: CounterState = { count: 0 };
+
+export function createCounterStore(options?: StoreOptions) {
+  const _store = createStore<CounterState>(initialState, options);
+
+  _store.addCommandHandler(CounterCommand.increment, (ctx) => {
+    ctx.setState((prev) => ({ count: prev.count + 1 }));
+  });
+
+  return sealStore(_store);
+}
+
+export const counterStore = createCounterStore();
+```
+
+Accepting `StoreOptions` is what makes the factory useful in tests: they pass their own `onError` to assert on failures and to keep expected errors out of the output. See [testing](/patterns/testing) and [dependency injection](/patterns/dependency-injection).
 
 ## Rules of thumb
 
-- **Export sealed stores.** Never export the raw store from a module that other parts of the app import. The sealed interface is intentional — it restricts consumers to reading state and queuing commands.
-- **Keep the raw store private.** Prefix it with `_` or limit its scope to the store module. Anything that needs the raw store (event bus wiring, `addEventHandler` calls) belongs in the same file or a dedicated wiring module.
-- **Group by domain, not by type.** Avoid a flat `events/` or `commands/` folder. Co-location makes it straightforward to understand what a store does.
-- **Namespace command and event names.** Use `"user:fetch"` rather than `"fetch"` to avoid collisions between stores and make debug output readable.
-- **Export initial state.** Exporting `initialState` alongside the store allows reset commands to reference it directly, ensuring consistency.
+- **Declare state readonly.** Not stylistic — mutable fields make `setState` spreads fail to compile.
+- **Export the sealed store.** The sealed facade is `state`, `queue`, `flush`, `suspend`, `openStream`, `closeStream`. It narrows what consumers can reach; it is not a security boundary and does not add freezing of its own.
+- **Keep the raw store private.** Prefix it `_` and never export it. Anything needing it lives in the same file.
+- **Group by domain, not by type.** Avoid a global `events/` or `commands/` folder.
+- **Namespace names.** `"user:fetch"`, not `"fetch"`. Names appear in devtools, in error reports, and in `useCommandStatus`.
+- **Export `initialState`.** Reset handlers reference it instead of duplicating the values.
+- **Install `onError` at creation.** It is the only channel that sees stream-listener and extension failures, and in production the default reporter is silent.
+- **One `withDefer(store)` / `withHistory(store)` per store.** They bind to the store passed as their first argument and report an error if shared.

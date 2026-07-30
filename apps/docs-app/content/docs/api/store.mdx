@@ -1,227 +1,417 @@
 ---
 title: Store
+description: createStore, handler registration, the command queue, state reads, suspension, lifecycle and the builtin event set.
 ---
+
+import { Callout } from 'fumadocs-ui/components/callout';
 
 # Store API
 
-The store is the heart of Commiq. It holds state, routes commands to handlers, and broadcasts events.
+A store holds one state object, routes commands to handlers sequentially, and publishes events. `createStore` returns a `StoreImpl` — the full surface, including registration. Wrap it in [`sealStore`](/api/commands-events#sealstorestore) to hand consumers a read-and-dispatch view.
 
-## `createStore<S>(initialState: S)`
-
-Creates a new store with the given initial state.
+## `createStore<S>(initialState, options?)`
 
 ```ts
 import { createStore } from "@naikidev/commiq";
 
-const store = createStore({ count: 0 });
+type CounterState = { count: number };
+
+const store = createStore<CounterState>({ count: 0 }, {
+  onError: (report) => console.error(report.source, report.error),
+});
 ```
 
-## `store.addCommandHandler(name, handler, options?)`
+### `StoreOptions`
 
-Registers a handler for a named command. Returns `this` for chaining.
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `onError` | `ErrorReporter` | `console.error` outside production, no-op in production | Receives a `StoreErrorReport` for every failure the library catches |
+| `suspendWarningMs` | `number` | `5000` | Reports once through `onError` when a `suspend()` gate is held longer than this. `0` disables |
+
+## `store.state`
+
+Typed `DeepReadonly<S>`. Reading it is always a read of the current state — there is no snapshot to go stale.
 
 ```ts
-store.addCommandHandler("increment", (ctx) => {
+store.state.count; // number
+```
+
+<Callout type="warn">
+Outside production each new state object is deep-frozen, so a plain-JS write throws a `TypeError` instead of silently succeeding. The freeze covers plain objects and arrays only — `Map`, `Set`, class instances and functions in state are typed readonly but **not** frozen. In a production build freezing is off entirely and the types are the only guard.
+</Callout>
+
+## `store.queue(command)` / `store.queue(def, data?)`
+
+Adds a command to the queue and returns a `CommandHandle`. Commands are processed sequentially on a microtask, so state does not change on the same tick as the call.
+
+```ts
+import { createCommandDef } from "@naikidev/commiq";
+
+const increment = createCommandDef("increment");
+
+store.queue(increment);
+await store.flush();
+store.state.count; // 1
+```
+
+Each queued command is **cloned**, then assigned a fresh `correlationId` (a nanoid). Its `causedBy` is the explicit value you passed to `createCommand`, if any; otherwise the correlation ID of the command or event currently being processed, or `null` when queued from application code.
+
+`store.queue` is a stable property, so destructuring it is safe: `const { queue } = store`.
+
+### `CommandHandle`
+
+```ts
+type CommandHandle = Promise<CommandResult> & {
+  readonly command: Command;
+  readonly correlationId: string;
+};
+
+type CommandResult = {
+  status: "handled" | "failed" | "interrupted" | "invalid" | "discarded";
+  command: Command;
+  error?: unknown;
+};
+```
+
+A handle **never rejects**, so ignoring it can never produce an unhandled rejection. Awaiting it is how you find out whether a command succeeded:
+
+```ts
+const result = await store.queue(increment);
+if (result.status === "failed") {
+  reportToUser(result.error);
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `handled` | The handler resolved |
+| `failed` | The handler threw. Also reported through `onError` and published as `commandHandlingError` |
+| `interrupted` | Removed from the queue or aborted mid-flight by a newer instance of an interruptable command |
+| `invalid` | No handler is registered for that name |
+| `discarded` | The store was destroyed before or during processing |
+
+<Callout type="info">
+A handle settles when *that* command settles. Events it published are dispatched to event handlers afterwards, and commands those handlers queue run later still. `await queue(...)` is not quiescence — use `flush()`.
+</Callout>
+
+## `store.flush()`
+
+Resolves when the queue is empty and no events are pending. Never rejects, including when a handler threw.
+
+```ts
+store.queue(increment);
+await store.flush();
+```
+
+<Callout type="warn">
+`flush()` **throws synchronously** when called from inside a command or event handler. In 1.x it deadlocked. The guard is based on synchronous handler depth, so a handler that `await`s something first and *then* calls `flush()` escapes the guard and still deadlocks — the queue cannot drain while that handler is unresolved. Do not call `flush()` from handler code.
+</Callout>
+
+## `store.addCommandHandler(nameOrDef, handler, options?)`
+
+Registers the handler for one command name and returns the store, so command registrations chain. Exactly one handler per name — registering a second replaces the first and reports a `duplicateHandler` error through `onError`.
+
+```ts
+store.addCommandHandler(increment, (ctx) => {
   ctx.setState({ count: ctx.state.count + 1 });
 });
 ```
 
-### Handler Context (`CommandContext<S>`)
+Passing a `CommandDef` instead of a string ties the handler's `cmd.data` to the def's payload type. See [`createCommandDef`](/api/commands-events#createcommanddefdname).
 
-| Property   | Type                       | Description                                         |
-| ---------- | -------------------------- | --------------------------------------------------- |
-| `state`    | `S`                        | Current state (updated live)                        |
-| `setState` | `(next: S) => void`        | Replace the state                                   |
-| `emit`     | `(eventDef, data) => void` | Emit a custom event                                 |
-| `signal`   | `AbortSignal \| undefined` | Abort signal (present only for interruptable handlers) |
+### `CommandContext<S>`
 
-### Options
+| Property | Type | Description |
+| --- | --- | --- |
+| `state` | `DeepReadonly<S>` | Live getter — re-reads current state on every access, including after an `await` |
+| `setState` | `(next: S \| (prev: DeepReadonly<S>) => S) => void` | Replaces state and publishes `stateChanged` immediately |
+| `emit` | `<D>(eventDef: EventDef<D>, data: D) => void` | Publishes a custom event immediately |
+| `signal` | `AbortSignal \| undefined` | Present only when the handler is registered `interruptable` |
 
-| Option          | Type      | Default | Description                               |
-| --------------- | --------- | ------- | ----------------------------------------- |
-| `notify`        | `boolean` | `false` | Auto-emit a `<commandName>:handled` event |
-| `interruptable` | `boolean` | `false` | Enable cancellation on re-queue           |
-
-## `store.addEventHandler(eventDef, handler)`
-
-Registers a handler that reacts to a specific event. Event handlers can queue new commands.
+`setState` accepts a value or an updater:
 
 ```ts
-import { createEvent, createCommand } from "@naikidev/commiq";
-
-const userCreated = createEvent<{ name: string }>("userCreated");
-
-store.addEventHandler(userCreated, (ctx, event) => {
-  ctx.queue(createCommand("sendWelcome", { name: event.data.name }));
+store.addCommandHandler(increment, (ctx) => {
+  ctx.setState((prev) => ({ count: prev.count + 1 }));
 });
 ```
 
-### Event Handler Context (`EventContext<S>`)
-
-| Property | Type                         | Description              |
-| -------- | ---------------------------- | ------------------------ |
-| `state`  | `S`                          | Current state (readonly) |
-| `queue`  | `(command: Command) => void` | Queue a new command      |
-
-## `store.queue(command)`
-
-Adds a command to the queue. Commands are processed sequentially. Each queued command is automatically assigned a unique `correlationId` and its `causedBy` is set based on the current execution context (the correlation ID of the parent command/event, or `null` if queued from user code).
+Every `setState` call publishes its own `stateChanged`, so intermediate states are observable:
 
 ```ts
-store.queue(createCommand("increment", undefined));
+store.addCommandHandler(search, async (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, isLoading: true });   // published
+  const results = await fetchResults(cmd.data);
+  ctx.setState({ ...ctx.state, isLoading: false, results }); // published
+});
 ```
 
-## `store.flush()`
+The context is disposed once the handler settles. A late `setState` or `emit` — from a callback that outlived the handler — is rejected and reported with `source: "disposedContext"`.
 
-Returns a promise that resolves when all queued commands have been processed.
+### `CommandHandlerOptions`
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `notify` | `boolean` | `false` | Also publish `handledEvent(name)` — the interned `"<name>:handled"` event — when the command is handled |
+| `interruptable` | `boolean` | `false` | Cancel earlier instances of the same command when a new one is queued, and supply `ctx.signal` |
+| `rollbackOnInterrupt` | `boolean` | `false` | On interruption, restore the state the store had when the handler started. Published as its own `stateChanged` |
+
+`rollbackOnInterrupt` only applies to a handler that is also `interruptable`. It restores the state object captured at handler entry, so any `setState` the aborted handler already applied is undone:
 
 ```ts
-store.queue(createCommand("increment", undefined));
-await store.flush();
-console.log(store.state.count); // 1
+store.addCommandHandler(
+  search,
+  async (ctx, cmd) => {
+    ctx.setState({ ...ctx.state, isLoading: true });
+    const res = await fetch(`/api/search?q=${cmd.data}`, { signal: ctx.signal });
+    ctx.setState({ ...ctx.state, isLoading: false, results: await res.json() });
+  },
+  { interruptable: true, rollbackOnInterrupt: true },
+);
 ```
+
+Without `rollbackOnInterrupt` the aborted run leaves `isLoading: true` behind for the next instance to clear.
+
+## `store.removeCommandHandler(nameOrDef)`
+
+Unregisters the handler. Returns `true` if one was registered. Commands queued for that name afterwards settle as `invalid`.
+
+## `store.addEventHandler(eventDef, handler)`
+
+Registers a handler for one event and returns an `Unsubscribe`. Zero or many handlers per event. Event handlers cannot change state — they can only queue commands.
+
+```ts
+const off = store.addEventHandler(userCreated, (ctx, event) => {
+  ctx.queue(sendWelcome, { name: event.data.name });
+});
+
+off(); // or store.removeEventHandler(userCreated, handler)
+```
+
+<Callout type="warn">
+This used to return the store. Chaining off it — `store.addCommandHandler(...).addEventHandler(...).addCommandHandler(...)` — no longer compiles.
+</Callout>
+
+### `EventContext<S>`
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `state` | `DeepReadonly<S>` | Current state |
+| `queue` | `QueueFn` | Queue a command. Returns a `CommandHandle` |
+
+Handlers are dispatched from a snapshot of the handler list and isolated from each other: one that throws publishes `eventHandlingError`, reaches `onError`, and does not stop the others or suppress `commandHandled`.
+
+## `store.removeEventHandler(eventDef, handler)`
+
+Explicit form of the returned unsubscribe. Returns `true` if the handler was registered.
 
 ## `store.openStream(listener)` / `store.closeStream(listener)`
 
-Subscribe/unsubscribe to all events emitted by the store.
+`openStream` subscribes to **every** event the store publishes and returns an `Unsubscribe`. Listeners are called **synchronously** at publish time.
 
 ```ts
-const listener = (event) => console.log(event.name, event.data);
-store.openStream(listener);
-// later...
-store.closeStream(listener);
+const off = store.openStream((event) => {
+  console.log(event.name, event.correlationId, event.causedBy);
+});
+
+off(); // or store.closeStream(listener)
 ```
 
-Every event received by stream listeners includes instrumentation metadata:
+Every `StoreEvent` carries instrumentation metadata:
 
-| Property        | Type             | Description                                      |
-| --------------- | ---------------- | ------------------------------------------------ |
-| `timestamp`     | `number`         | `Date.now()` when the event was emitted          |
-| `correlationId` | `string`         | Unique identifier for this event                 |
-| `causedBy`      | `string \| null` | Correlation ID of the parent command/event        |
+| Property | Type | Description |
+| --- | --- | --- |
+| `id` | `symbol` | Identity of the event definition. Compare with `matchEvent` |
+| `name` | `string` | Human-readable name, for logging and serialization |
+| `data` | `unknown` at the stream boundary | Narrow with `matchEvent` |
+| `timestamp` | `number` | `Date.now()` at publish |
+| `correlationId` | `string` | Unique ID for this event |
+| `causedBy` | `string \| null` | Correlation ID of the command or event that caused it |
+
+A listener that throws is caught, reported with `source: "streamListener"`, and additionally published as `unhandledError`. Other listeners are unaffected.
+
+## `store.suspend()`
+
+Pauses **command execution** and returns a release. The gate is counted, not boolean: every suspender must release before processing resumes. `release()` is idempotent.
+
+```ts
+const release = store.suspend();
+try {
+  const saved = await loadFromIndexedDb();
+  store.replaceState(saved);
+} finally {
+  release();
+}
+```
+
+- `queue()` still accepts commands while suspended and returns real handles. They run in order once the gate opens.
+- **Event dispatch is not gated.** Publishing, stream listeners, event-handler dispatch and `replaceState` all keep working — that is what makes plugin hydration possible. An event handler's `queue()` is accepted immediately but executed after release.
+- `flush()` resolves on quiescence: immediately if the queue and pending events are already empty, otherwise once the gate opens and the queue drains.
+- A gate held longer than `suspendWarningMs` reports once through `onError` with `source: "suspendedQueue"`. It does not publish an event.
+
+`store.isSuspended` reports whether any gate is currently held.
+
+## `store.replaceState(next)`
+
+Replaces state without going through a command handler. Available on `StoreImpl` only — not on `SealedStore`. Publishes `stateChanged` and then `stateReset`. No-op when `next` is the same reference as the current state.
+
+```ts
+store.replaceState(hydratedState);
+```
+
+Intended for persistence rehydration, undo/redo and state synchronization. Take a `suspend()` gate around it if commands might be queued while you load.
 
 ## `store.useExtension(ext)`
 
-Registers a context extension that adds custom properties to `CommandContext` and/or `EventContext`. Returns `this` with an expanded type, so extensions compose via chaining.
+Registers a context extension that adds properties to `CommandContext` and/or `EventContext`. Returns the store with widened types, so extensions chain.
 
 ```ts
-import { createStore, createCommand } from "@naikidev/commiq";
+import { createStore, createCommandDef } from "@naikidev/commiq";
 import type { ContextExtensionDef } from "@naikidev/commiq";
 
 type AppState = { count: number };
+type LogProps = { log: (msg: string) => void };
 
-const logger: ContextExtensionDef<AppState, { log: (msg: string) => void }> = {
-  command: () => ({
-    log: (msg: string) => console.log(`[cmd] ${msg}`),
-  }),
-  event: () => ({
-    log: (msg: string) => console.log(`[evt] ${msg}`),
-  }),
+const logger: ContextExtensionDef<AppState, LogProps, LogProps> = {
+  command: () => ({ log: (msg) => console.log(`[cmd] ${msg}`) }),
+  event: () => ({ log: (msg) => console.log(`[evt] ${msg}`) }),
 };
+
+const increment = createCommandDef("increment");
 
 const store = createStore<AppState>({ count: 0 })
   .useExtension(logger)
-  .addCommandHandler("increment", (ctx) => {
+  .addCommandHandler(increment, (ctx) => {
     ctx.log("incrementing");
     ctx.setState({ count: ctx.state.count + 1 });
   });
 ```
 
-After `useExtension(ext)`, all handlers registered on the store see the extra properties on `ctx`.
+### `ContextExtensionDef<S, TCommand, TEvent>`
 
-### `ContextExtensionDef<S, T>`
+| Property | Type | Description |
+| --- | --- | --- |
+| `command` | `(ctx: CommandContext<S>, command: Command) => TCommand` | Builder run per command execution |
+| `event` | `(ctx: EventContext<S>, event: StoreEvent) => TEvent` | Builder run per event handling |
+| `afterCommand` | `() => void \| Promise<void>` | Runs after each command handler settles, including on error |
+| `afterEvent` | `() => void \| Promise<void>` | Runs after each event handler settles, including on error |
+| `destroy` | `() => void` | Teardown, run once by `removeExtension` or `store.destroy()` |
 
-| Property  | Type                                          | Description                          |
-| --------- | --------------------------------------------- | ------------------------------------ |
-| `command`   | `(ctx: CommandContext<S>, command: Command) => T` | Builder called per command execution |
-| `event`     | `(ctx: EventContext<S>, event: StoreEvent) => T`  | Builder called per event handling    |
-| `afterCommand` | `() => void \| Promise<void>`              | Lifecycle hook called after each command handler completes (including on error) |
-| `afterEvent`   | `() => void \| Promise<void>`              | Lifecycle hook called after each event handler completes (including on error) |
+All fields are optional. `TCommand` and `TEvent` default to `{}` and are widened **separately** — an extension that defines only `command` is a compile error if referenced from an event handler, where in 1.x it type-checked and was silently skipped at runtime.
 
-All fields are optional. An extension that only provides `command` will not appear in event handler contexts. The `afterCommand` and `afterEvent` hooks run in a `finally` block — they execute even when the handler throws, and errors from the hooks themselves are swallowed.
-
-The builder receives the base context — extensions can use `ctx.setState`, `ctx.emit`, or `ctx.queue` to build utilities that wrap built-in behavior.
+`afterCommand` / `afterEvent` run in a `finally` block. A throwing hook is reported with `source: "contextExtension"`, published as `unhandledError`, and does not abort the remaining hooks.
 
 ### Constraints
 
-- **No overriding built-in keys.** Extension keys that collide with `state`, `setState`, `emit`, `signal` (command context) or `state`, `queue` (event context) cause a `commandHandlingError` event at runtime.
-- **No duplicate keys across extensions.** If two extensions produce the same key, a `commandHandlingError` event is emitted.
-- **Locked after first command.** `useExtension` throws if called after the first command has been queued. Register all extensions before queuing.
+- **No overriding builtin keys.** Keys colliding with `state`, `setState`, `emit`, `signal` (command context) or `state`, `queue` (event context) are reported through `onError`.
+- **No duplicate keys across extensions.** Two extensions producing the same key are reported.
+- **Locked once active.** `useExtension` throws if called after the first command has been queued.
 
-### Multiple extensions
+### `store.removeExtension(ext)`
 
-Chain multiple `useExtension` calls. The type accumulates across calls:
+Detaches by identity and runs the extension's `destroy()`. Returns `true` if it was registered. It removes the runtime hooks but cannot narrow the already-widened context types, so handlers registered earlier still *appear* to have the extra properties at compile time.
 
-```ts
-const store = createStore<AppState>({ count: 0 })
-  .useExtension(loggerExt)
-  .useExtension(metaExt)
-  .addCommandHandler("test", (ctx) => {
-    ctx.log("hello");     // from loggerExt
-    ctx.meta.commandName; // from metaExt
-  });
-```
+See [`@naikidev/commiq-context`](/plugins/context) for pre-built extensions.
 
-See [`@naikidev/commiq-context`](/plugins/context) for pre-built extensions and composition utilities.
+## `store.destroy()`
 
-## `store.replaceState(next)`
+Satisfies `Disposable`. Resets the suspension gate, aborts interrupt controllers, clears the queue, pending events, stream listeners and all handlers, runs each extension's `destroy()`, settles every outstanding handle as `discarded`, and resolves pending `flush()` callers.
 
-Directly replaces the store's state without going through a command handler. This is an advanced API available only on `StoreImpl` — it is not exposed on `SealedStore`.
+After `destroy()`, `queue()` and registration calls are no-ops that report with `source: "destroyedStore"`.
 
-Emits `stateChanged` (with `{ prev, next }`) and `stateReset` events. No-op if `next` is the same reference as the current state.
+## Interruptable commands
 
 ```ts
-// Hydrate state from persistence
-const saved = JSON.parse(localStorage.getItem("app-state")!);
-store.replaceState(saved);
-```
+const search = createCommandDef<string>("search");
 
-Use cases: persistence rehydration, undo/redo, state synchronization.
-
-## Interruptable Commands
-
-Mark a handler as `interruptable` to enable automatic cancellation when the same command is re-queued.
-
-```ts
-store.addCommandHandler("search", async (ctx, cmd) => {
-  const res = await fetch(`/api/search?q=${cmd.data}`, { signal: ctx.signal });
-  const data = await res.json();
-  ctx.setState({ results: data });
-}, { interruptable: true });
+store.addCommandHandler(
+  search,
+  async (ctx, cmd) => {
+    const res = await fetch(`/api/search?q=${cmd.data}`, { signal: ctx.signal });
+    ctx.setState({ ...ctx.state, results: await res.json() });
+  },
+  { interruptable: true },
+);
 ```
 
 When a new command with the same name is queued:
 
-1. Any queued (not-yet-started) instances are removed — a `commandInterrupted` event is emitted with `phase: "queued"` for each.
-2. If an instance is currently running, its `AbortController` is aborted — a `commandInterrupted` event is emitted with `phase: "running"` when it completes.
+1. Queued-but-not-started instances are removed. Each publishes `commandInterrupted` with `phase: "queued"` and its handle settles as `interrupted`.
+2. A running instance has its `AbortController` aborted. `commandInterrupted` with `phase: "running"` is published when it completes.
 
-The handler receives `ctx.signal` (an `AbortSignal`) to pass to cancellable APIs like `fetch`. Non-interruptable handlers have `ctx.signal` set to `undefined`.
+Pass `ctx.signal` to cancellable APIs. Non-interruptable handlers have `ctx.signal` set to `undefined`. If an interruptable handler throws because of the abort, `commandInterrupted` is published rather than `commandHandlingError`.
 
-If an interruptable handler throws due to abort (e.g. `AbortError` from `fetch`), `commandInterrupted` is emitted instead of `commandHandlingError`.
+## The error channel
 
-## Builtin Events
-
-These events are emitted automatically by the store:
-
-| Event                  | Data                 | When                                  |
-| ---------------------- | -------------------- | ------------------------------------- |
-| `stateChanged`         | `{ prev, next }`     | State was updated by a handler or `replaceState` |
-| `commandStarted`       | `{ command }`        | A command is about to be handled      |
-| `commandHandled`       | `{ command }`        | A command was successfully handled    |
-| `invalidCommand`       | `{ command }`        | No handler registered for the command |
-| `commandHandlingError` | `{ command, error }` | A handler threw an error              |
-| `commandInterrupted`   | `{ command, phase }`  | An interruptable command was cancelled |
-| `stateReset`           | `void`               | State was replaced via `replaceState` |
-
-Access them via `matchEvent` for type-safe narrowing:
+Nothing thrown inside the library is swallowed. `onError` receives a `StoreErrorReport`:
 
 ```ts
-import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
+type StoreErrorReport = {
+  error: unknown;
+  source: StoreErrorSource;
+  command?: Command;
+  event?: StoreEvent;
+};
+```
+
+`StoreErrorSource` is one of `"commandHandler"`, `"eventHandler"`, `"streamListener"`, `"contextExtension"`, `"disposedContext"`, `"queueProcessor"`, `"duplicateHandler"`, `"destroyedStore"`, `"suspendedQueue"`.
+
+Failures with no dedicated event channel — stream listeners, extension hooks, disposed contexts — additionally publish `unhandledError`.
+
+<Callout type="warn">
+A throwing handler does **not** propagate out of `queue()` or `flush()`. Neither rejects. `try { await store.flush() } catch {}` never fires. The three ways to observe a failure are the `CommandHandle` result, `onError`, and the `commandHandlingError` / `eventHandlingError` events.
+</Callout>
+
+## Builtin events
+
+`BuiltinEvent` holds the event definitions; `BuiltinEventName` holds their string names for comparisons against `event.name`.
+
+| Event | Data | When |
+| --- | --- | --- |
+| `stateChanged` | `{ prev, next }` | Every `ctx.setState()`, plus `replaceState` and interrupt rollback |
+| `commandStarted` | `{ command }` | A command is about to be handled |
+| `commandHandled` | `{ command }` | A command's handler resolved |
+| `invalidCommand` | `{ command }` | No handler is registered for that name |
+| `commandHandlingError` | `{ command, error }` | A command handler threw |
+| `commandInterrupted` | `{ command, phase }` | `phase` is `"queued"` or `"running"` |
+| `eventHandlingError` | `{ event, error }` | An event handler threw |
+| `unhandledError` | `StoreErrorReport` | A failure with no other event channel |
+| `stateReset` | `void` | State was replaced via `replaceState` |
+
+```ts
+import { BuiltinEvent, BuiltinEventName, matchEvent } from "@naikidev/commiq";
 
 store.openStream((event) => {
   if (matchEvent(event, BuiltinEvent.StateChanged)) {
-    // event.data is typed as { prev: unknown; next: unknown }
-    console.log("State changed:", event.data.prev, "→", event.data.next);
+    console.log(event.data.prev, "→", event.data.next);
+  }
+  if (event.name === BuiltinEventName.CommandInterrupted) {
+    // string comparison, when you only need the name
   }
 });
 ```
+
+`BuiltinEvent.StateChanged` is declared as `StateChangedData<unknown>`, so a generic stream listener sees `prev` and `next` as `unknown`. Cast to your own state type at the boundary where you know it, or read state from `store.state` instead.
+
+## Exported handler types
+
+Use these when extracting a handler into its own module.
+
+| Type | Shape |
+| --- | --- |
+| `CommandHandler<S, D, Ctx>` | `(ctx: CommandContext<S> & Ctx, cmd: Command<string, D>) => void \| Promise<void>` |
+| `EventHandler<S, D, Ctx>` | `(ctx: EventContext<S> & Ctx, event: StoreEvent<D>) => void \| Promise<void>` |
+| `StreamListener` | `(event: StoreEvent) => void` |
+| `QueueFn` | The `queue` signature — accepts a `Command`, or a `CommandDef` plus its payload |
+| `Unsubscribe` | `() => void` |
+| `Disposable` | `{ destroy(): void }` |
+
+```ts
+import type { CommandHandler } from "@naikidev/commiq";
+
+export const handleIncrement: CommandHandler<CounterState> = (ctx) => {
+  ctx.setState({ count: ctx.state.count + 1 });
+};
+```
+
+`D` and `Ctx` default to `unknown` and `{}` respectively.

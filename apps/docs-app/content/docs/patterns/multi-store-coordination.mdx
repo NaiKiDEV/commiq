@@ -7,49 +7,87 @@ import { Steps, Step } from 'fumadocs-ui/components/steps';
 
 # Multi-Store Coordination
 
-A single store works well for a single domain. When two domains need to communicate — orders trigger payments, payments trigger fulfillment — coupling them into one store creates a tangled state object. The event bus provides a clean boundary: each store manages its own state, and events flow between them.
+One store per domain works well. When two domains need to communicate — orders trigger payments, payments trigger fulfillment — folding them into one store produces a tangled state object. The event bus gives a clean boundary: each store owns its state, and events flow between them.
 
-## When to split stores
+## When to split
 
 | Signal | Approach |
 |---|---|
-| State fields belong to the same domain (user profile, avatar, preferences) | Single store |
-| Two features share no state but react to each other's events | Separate stores, connected via event bus |
-| A feature has grown beyond 5-6 command handlers | Consider splitting by subdomain |
-| Components from different pages read overlapping state | Single store with targeted selectors |
+| Fields belong to the same domain (profile, avatar, preferences) | Single store |
+| Two features share no state but react to each other's events | Separate stores, connected via the bus |
+| A feature has grown past 5–6 command handlers | Consider splitting by subdomain |
+| Components on different pages read overlapping state | Single store with targeted selectors |
 
-The threshold is not about size — it is about ownership. If two groups of state fields change independently and are consumed by different parts of the UI, they are candidates for separate stores.
+The threshold is ownership, not size. If two groups of fields change independently and are consumed by different parts of the UI, they are candidates for separate stores.
 
-## Connecting stores with EventBus
+There is a real cost to splitting: `flush()` is per store, so a test or a coordinator awaiting a cross-store cascade must await each store in turn, and a failure in a downstream store is reported by *that* store's `onError`, not the one that started the chain.
 
-`createEventBus()` returns a bus that listens to every event emitted by connected stores and lets you route them:
+## Connecting stores
 
-```ts title="bus.ts"
-import { createEventBus, createCommand } from "@naikidev/commiq";
-import { orderStore, OrderEvent } from "./order";
-import { paymentStore } from "./payment";
+`createEventBus()` returns a bus that receives every event from connected stores and routes them:
+
+```ts title="features/pipeline/bus.ts"
+import { createEventBus } from "@naikidev/commiq";
+import { orderStore } from "./orderStore";
+import { paymentStore } from "./paymentStore";
+import { OrderCommand, PaymentCommand } from "./commands";
+import { OrderEvent, PaymentEvent } from "./events";
 
 const bus = createEventBus();
-bus.connect(orderStore);
-bus.connect(paymentStore);
 
-bus.on(OrderEvent.Validated, (event) => {
-  paymentStore.queue(
-    createCommand("payment:process", {
-      orderId: event.data.orderId,
-      amount: event.data.total,
-    }),
-  );
+const disconnectOrder = bus.connect(orderStore);
+const disconnectPayment = bus.connect(paymentStore);
+
+const stopOnValidated = bus.on(OrderEvent.Validated, (event) => {
+  paymentStore.queue(PaymentCommand.process, {
+    orderId: event.data.orderId,
+    amount: event.data.total,
+  });
+});
+
+bus.on(PaymentEvent.Completed, (event) => {
+  orderStore.queue(OrderCommand.updateStatus, {
+    orderId: event.data.orderId,
+    status: "paid",
+  });
 });
 
 export { bus };
 ```
 
-Each `.on()` call registers a listener for a specific event definition. When any connected store emits that event, the handler fires.
+`connect(store)` and `on(eventDef, handler)` both return an `Unsubscribe`. `event.data` is typed from the `EventDef`, so `event.data.orderId` needs no cast.
 
-## Unidirectional event flow
+<Callout type="info">
+Connections are **refcounted**. Connecting the same store twice keeps one underlying stream listener with a refcount of two, and the first `disconnect` decrements rather than detaching. Two modules can each connect the same store without one's teardown breaking the other. `bus.off(eventDef, handler)` removes a handler by identity and returns whether it was found; `bus.destroy()` detaches every store and drops every handler.
+</Callout>
 
-The strongest multi-store architectures are pipelines: events flow in one direction, and no store queues commands back to an upstream store.
+## The bus dispatches synchronously
+
+Bus handlers run inside the emitting store's publish path, synchronously. A handler that throws is caught and logged (outside production) so one failure cannot stop the others — but it is **not** routed to any store's `onError` and does not appear as a builtin event.
+
+Keep bus handlers to routing only: read `event.data`, queue a command, return. Anything that can fail belongs in the command handler on the receiving store, where the store's error channel covers it.
+
+```ts
+// Avoid — this failure is only console-logged
+bus.on(OrderEvent.Validated, async (event) => {
+  const rate = await fetchExchangeRate();
+  paymentStore.queue(PaymentCommand.process, { amount: event.data.total * rate });
+});
+
+// Prefer — the async work is a command, so failures are reported
+bus.on(OrderEvent.Validated, (event) => {
+  paymentStore.queue(PaymentCommand.process, {
+    orderId: event.data.orderId,
+    amount: event.data.total,
+  });
+});
+```
+
+Bus handlers are also `async`-unaware: returning a promise does not make the bus wait for it, and a rejection becomes an unhandled rejection rather than reaching the catch.
+
+## Unidirectional flow
+
+The strongest multi-store architectures are pipelines: events flow one way and no store queues back upstream.
 
 <Mermaid chart={`
 graph LR
@@ -58,52 +96,78 @@ graph LR
     C -->|FulfillmentEvent.Shipped| D[Notification Store]
 `} />
 
-Each store emits what happened. The bus decides who should react. No store imports another store directly.
+Each store emits what happened. The bus decides who reacts. No store imports another.
 
-## Avoiding circular chains
+A store updating its own status in response to a downstream event — `order:updateStatus` after `PaymentEvent.Completed` — is fine and does not make the graph cyclic, because the command does not emit an event the bus routes back to payment.
 
-A circular chain — store A emits an event that queues a command on store B, which emits an event that queues a command back on store A — creates an infinite loop. Commiq does not detect this automatically.
+## Avoiding cycles
+
+A cycle — A's event queues a command on B, whose event queues a command back on A, whose handler emits the first event again — loops forever. Commiq does not detect this.
 
 <Callout type="warn">
-If store A reacts to an event from store B, and store B reacts to an event from store A, the system will loop indefinitely. Design flows as directed acyclic graphs. If you need bidirectional communication, introduce a third store or use a terminal event that breaks the cycle.
+If A reacts to B's events and B reacts to A's, the system can loop indefinitely. Design flows as directed acyclic graphs. Because bus handlers and event handlers run inside the queue loop, the loop is tight enough to lock the tab: `flush()` never resolves and there is no error.
 </Callout>
 
-Signs of a circular chain during development:
-- The browser tab freezes after queuing a single command
-- Devtools show unbounded event growth
-- `flush()` never resolves in tests
+Symptoms during development:
 
-To break a cycle, remove the return path. If store B needs to notify store A that processing is complete, have the component or a dedicated coordinator read from store B's state instead of routing an event back.
+- The tab freezes after one command
+- The devtools timeline grows without bound and the ring buffer wraps
+- `flush()` never resolves in a test
+
+To break a cycle, remove the return path. If B needs to tell A that processing finished, have A react to a *terminal* event that no handler re-emits, or have the component read B's state.
+
+## Bus vs. direct `openStream`
+
+The bus is not the only option:
+
+| Need | Tool |
+| --- | --- |
+| Several stores routing several event types | `createEventBus()` |
+| One store reacting to one other store | `openStream` on the source store |
+| Reacting within a single store | `addEventHandler` |
+| Async work in reaction to an event | The [effects plugin](/patterns/effects-and-cancellation) |
+
+For a single directed edge, `sourceStore.openStream(...)` with a `matchEvent` filter is less machinery. The bus earns its place once there are three or more stores, because it centralizes the routing table into one readable file.
 
 ## Initialization and teardown
 
-Create the bus in a dedicated module. Import that module once at application startup:
+Import the bus module once at startup. Prefer exporting a setup function over relying on a module side effect, so teardown stays available:
+
+```ts title="features/pipeline/bus.ts"
+export function connectPipeline() {
+  const bus = createEventBus();
+  bus.connect(orderStore);
+  bus.connect(paymentStore);
+
+  bus.on(OrderEvent.Validated, routeToPayment);
+  bus.on(PaymentEvent.Completed, routeToFulfillment);
+
+  return () => bus.destroy();
+}
+```
 
 ```ts title="main.ts"
-import "./bus"; // Executes bus setup, connects stores
-import { createRoot } from "react-dom/client";
-import { App } from "./App";
+import { connectPipeline } from "./features/pipeline/bus";
 
-createRoot(document.getElementById("root")!).render(<App />);
+const disconnectPipeline = connectPipeline();
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(disconnectPipeline);
+}
 ```
 
-For cleanup (relevant in tests or micro-frontends), call `disconnect`:
-
-```ts
-bus.disconnect(orderStore);
-bus.disconnect(paymentStore);
-```
+`bus.destroy()` detaches every connected store and drops every handler in one call — the reason to prefer it over tracking each `Unsubscribe`. Without teardown, hot-module replacement leaves the old bus attached and every event is routed twice.
 
 ## Full example: order pipeline
 
-A four-store pipeline where each store handles one domain:
+Each store defines its own commands and events. The events are what the bus routes:
 
-Each store defines its own events and handlers following the standard [async loading states](/patterns/async-loading-states) pattern. The key detail is the events each store emits — those are what the bus routes:
+```ts title="features/pipeline/events.ts"
+import { createEvent } from "@naikidev/commiq";
 
-```ts
-// Each store exports its domain events
 export const OrderEvent = {
   Validated: createEvent<{ orderId: string; total: number }>("order:validated"),
+  Rejected: createEvent<{ orderId: string; reason: string }>("order:rejected"),
 };
 
 export const PaymentEvent = {
@@ -116,49 +180,82 @@ export const FulfillmentEvent = {
 };
 ```
 
-Wire them together in the bus:
+Import the definitions everywhere they are needed — event identity is the symbol on the `EventDef`, so a second `createEvent("order:validated")` produces a definition that never matches the first.
 
-```ts title="bus.ts"
-import { createEventBus, createCommand } from "@naikidev/commiq";
-import { orderStore, OrderEvent } from "./stores/order";
-import { paymentStore, PaymentEvent } from "./stores/payment";
-import { fulfillmentStore, FulfillmentEvent } from "./stores/fulfillment";
-import { notificationStore } from "./stores/notification";
+```ts title="features/pipeline/bus.ts"
+import { createEventBus } from "@naikidev/commiq";
+import { OrderCommand, PaymentCommand, FulfillmentCommand, NotificationCommand } from "./commands";
+import { OrderEvent, PaymentEvent, FulfillmentEvent } from "./events";
+import { orderStore } from "./orderStore";
+import { paymentStore } from "./paymentStore";
+import { fulfillmentStore } from "./fulfillmentStore";
+import { notificationStore } from "./notificationStore";
 
-const bus = createEventBus();
-bus.connect(orderStore);
-bus.connect(paymentStore);
-bus.connect(fulfillmentStore);
-bus.connect(notificationStore);
+export function connectPipeline() {
+  const bus = createEventBus();
 
-bus.on(OrderEvent.Validated, (event) => {
-  paymentStore.queue(
-    createCommand("payment:process", {
+  bus.connect(orderStore);
+  bus.connect(paymentStore);
+  bus.connect(fulfillmentStore);
+  bus.connect(notificationStore);
+
+  bus.on(OrderEvent.Validated, (event) => {
+    paymentStore.queue(PaymentCommand.process, {
       orderId: event.data.orderId,
       amount: event.data.total,
-    }),
-  );
-});
+    });
+  });
 
-bus.on(PaymentEvent.Completed, (event) => {
-  fulfillmentStore.queue(
-    createCommand("fulfillment:ship", {
+  bus.on(PaymentEvent.Completed, (event) => {
+    orderStore.queue(OrderCommand.updateStatus, {
+      orderId: event.data.orderId,
+      status: "paid",
+    });
+    fulfillmentStore.queue(FulfillmentCommand.ship, {
       orderId: event.data.orderId,
       transactionId: event.data.transactionId,
-    }),
-  );
-});
+    });
+  });
 
-bus.on(FulfillmentEvent.Shipped, (event) => {
-  notificationStore.queue(
-    createCommand("notification:send", {
+  bus.on(PaymentEvent.Failed, (event) => {
+    orderStore.queue(OrderCommand.updateStatus, {
+      orderId: event.data.orderId,
+      status: "rejected",
+    });
+  });
+
+  bus.on(FulfillmentEvent.Shipped, (event) => {
+    notificationStore.queue(NotificationCommand.send, {
       orderId: event.data.orderId,
       trackingCode: event.data.trackingCode,
-    }),
-  );
-});
+    });
+  });
 
-export { bus };
+  return () => bus.destroy();
+}
 ```
 
-Each store is independently testable. The bus file is the only place that knows the full flow. See [testing](/patterns/testing) for how to test multi-store setups with `flush()`.
+Each store is independently testable. The bus file is the only place that knows the whole flow.
+
+## Tracing across stores
+
+Commands queued by a bus handler carry a `causedBy` linking them to the event that triggered them, so the whole pipeline is one causality chain:
+
+<Steps>
+<Step>
+
+### Devtools
+
+Connect every store to one `createDevtools()` instance with `connect(store, name)`. `getChain(correlationId)` then walks the chain across store boundaries. See [composing plugins](/patterns/composing-plugins).
+
+</Step>
+<Step>
+
+### OpenTelemetry
+
+Pass one shared `createTraceRegistry()` to every `instrumentStore` call. That registry is what links a span on the payment store to the command on the order store that caused it — without it each store's spans form a separate trace.
+
+</Step>
+</Steps>
+
+Without one of these, a four-store pipeline is difficult to debug: each store reports its own failures through its own `onError`, and nothing shows you the path that led there. Wire up shared instrumentation before the pipeline grows past two stores.

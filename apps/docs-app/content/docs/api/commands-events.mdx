@@ -1,14 +1,41 @@
 ---
 title: Commands & Events
+description: createCommand, createCommandDef, createEvent, handledEvent, matchEvent, sealStore and createEventBus.
 ---
 
 import { Callout } from 'fumadocs-ui/components/callout';
 
 # Commands & Events
 
-## `createCommand(name, data)`
+A command is an intent — one handler, may change state. An event is a fact — zero or many handlers, may only queue more commands.
 
-Creates a command object to be queued on a store.
+## `createCommandDef<D>(name)`
+
+Creates a command definition that carries both the command name and its payload type. This is the preferred way to declare a command: `addCommandHandler` and `queue` share one `D`, so a wrong payload or an unregistered name is a compile error rather than a runtime `invalidCommand`.
+
+```ts
+import { createCommandDef } from "@naikidev/commiq";
+
+export const addTodo = createCommandDef<{ text: string }>("addTodo");
+export const clearTodos = createCommandDef("clearTodos");
+```
+
+`D` defaults to `void`, so a definition with no payload is queued with no second argument:
+
+```ts
+store.addCommandHandler(addTodo, (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, todos: [...ctx.state.todos, cmd.data.text] });
+});
+
+store.queue(addTodo, { text: "Buy milk" });
+store.queue(clearTodos);
+```
+
+`CommandPayloadArgs<D>` is the helper that makes the payload argument required for a real `D` and optional when `D` includes `undefined` or `void`. You rarely reference it directly.
+
+## `createCommand(name, data, options?)`
+
+Creates a command object. Still fully supported, and the right choice when the name is computed at runtime or when you need to set `causedBy` by hand.
 
 ```ts
 import { createCommand } from "@naikidev/commiq";
@@ -17,144 +44,192 @@ const cmd = createCommand("addTodo", { text: "Buy milk" });
 // { name: "addTodo", data: { text: "Buy milk" }, correlationId: "", causedBy: null }
 ```
 
-Note: `correlationId` is assigned automatically when the command is queued via `store.queue()`. The empty string from `createCommand` is overwritten with a unique nanoid.
-
-Tip: wrap in factory functions for a clean API:
+`correlationId` is empty until the command is queued — `store.queue()` assigns a nanoid. `options.causedBy` links the command into an existing causal chain, and an explicit value takes precedence over the ambient correlation ID of whatever is currently being processed.
 
 ```ts
-export const addTodo = (text: string) => createCommand("addTodo", text);
-export const toggleTodo = (id: number) => createCommand("toggleTodo", id);
+const followUp = createCommand("notify", { id }, { causedBy: parentCorrelationId });
 ```
+
+`queue()` clones the command it is given, so the object you pass is never modified and can be reused.
 
 ## `createEvent<D>(name)`
 
-Creates an event definition. The returned object contains a unique `symbol` id — this ensures events are matched by identity, not string comparison.
+Creates an event definition holding a fresh `symbol` id. Events match by symbol identity, not by string, so two definitions with the same name are two different events.
 
 ```ts
 import { createEvent } from "@naikidev/commiq";
 
-const userCreated = createEvent<{ name: string }>("userCreated");
+export const userCreated = createEvent<{ name: string }>("userCreated");
 ```
 
-Use it to emit from a handler:
+Emit it from a command handler, and subscribe from an event handler:
 
 ```ts
-store.addCommandHandler("createUser", (ctx, cmd) => {
-  ctx.setState({ user: cmd.data });
+store.addCommandHandler(createUser, (ctx, cmd) => {
+  ctx.setState({ ...ctx.state, user: cmd.data });
   ctx.emit(userCreated, { name: cmd.data.name });
 });
+
+const off = store.addEventHandler(userCreated, (ctx, event) => {
+  ctx.queue(sendEmail, { to: event.data.name });
+});
 ```
 
-And to listen:
+`addEventHandler` returns an `Unsubscribe`. It does not return the store, so it cannot be chained.
+
+### `EventDef<D>` is branded
+
+`EventDef` carries a phantom `__data` member, so `EventDef<{ name: string }>` is not assignable to a bare `EventDef` (whose payload is `unknown`). For a parameter that accepts any event definition, make it generic or use `EventDef<never>`:
 
 ```ts
-store.addEventHandler(userCreated, (ctx, event) => {
-  ctx.queue(createCommand("sendEmail", { to: event.data.name }));
-});
+function describe<D>(def: EventDef<D>): string {
+  return def.name;
+}
+
+function cancelSource(def: EventDef<never>): void { /* ... */ }
 ```
 
 ## `handledEvent(commandName)`
 
-Creates an event definition matching the auto-notify naming convention (`<commandName>:handled`). Useful when subscribing to auto-notified command events.
+Returns the event definition for the auto-notify convention `"<commandName>:handled"`. Symbols are **interned by name**, so every call for the same command name returns the same definition — which is what makes it match a `notify: true` command.
 
 ```ts
 import { handledEvent } from "@naikidev/commiq";
 
-const incHandled = handledEvent("increment");
-// { id: Symbol("increment:handled"), name: "increment:handled" }
+store.addCommandHandler(increment, incrementHandler, { notify: true });
+
+store.addEventHandler(handledEvent("increment"), (ctx, event) => {
+  // runs after every successful "increment"
+});
 ```
 
-To auto-notify, set `notify: true` on the handler:
+<Callout type="warn">
+In commiq 1.x this never worked. `handledEvent` minted a fresh symbol on each call and the notify path minted another, so the handler registered above was never invoked — with no error. If you are upgrading, see [the migration guide](/migration-v2#handledevent-with-notify-true): the handler body has never run and may be stale.
+</Callout>
 
-```ts
-store.addCommandHandler("increment", handler, { notify: true });
-```
+The payload is `{ command }`. `handledEvent` is the only interned event factory — `createEvent` is deliberately not interned.
 
 ## `matchEvent(event, eventDef)`
 
-Type guard that narrows a `StoreEvent` to its specific data type based on the event definition's symbol identity.
+Type guard narrowing a `StoreEvent` to its payload type by symbol identity. Needed in raw `openStream` listeners, where `data` is `unknown`.
 
 ```ts
 import { matchEvent, BuiltinEvent } from "@naikidev/commiq";
+import type { Command } from "@naikidev/commiq";
 
 store.openStream((event) => {
-  if (matchEvent(event, BuiltinEvent.StateChanged)) {
-    // event.data is typed as { prev: S; next: S }
-    console.log(event.data.prev, "→", event.data.next);
+  // without matchEvent — requires an unsafe cast
+  if (event.id === BuiltinEvent.CommandHandlingError.id) {
+    const { command, error } = event.data as { command: Command; error: unknown };
+  }
+
+  // with matchEvent — inferred
+  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+    const { command, error } = event.data;
   }
 });
 ```
 
-`openStream` listeners receive `StoreEvent` with `data: unknown`. Since TypeScript cannot narrow generic types through symbol identity checks, `matchEvent` provides the type-safe bridge:
+Works the same for your own events:
 
 ```ts
-// Without matchEvent — requires unsafe cast
-if (event.id === BuiltinEvent.CommandHandlingError.id) {
-  const { command, error } = event.data as { command: Command; error: unknown };
-}
-
-// With matchEvent — fully typed
-if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
-  const { command, error } = event.data; // inferred
-}
-```
-
-Works with custom events too:
-
-```ts
-const OrderPlaced = createEvent<{ orderId: string }>("order:placed");
+const orderPlaced = createEvent<{ orderId: string }>("order:placed");
 
 store.openStream((event) => {
-  if (matchEvent(event, OrderPlaced)) {
+  if (matchEvent(event, orderPlaced)) {
     console.log(event.data.orderId); // string
   }
 });
 ```
 
 <Callout type="info">
-Typed APIs like `addEventHandler`, `bus.on`, and `effects.on` already infer data types from the `EventDef` — use `matchEvent` only in raw `openStream` listeners.
+Typed APIs — `addEventHandler`, `bus.on`, `effects.on` — already infer the payload from the `EventDef`. Reach for `matchEvent` only in raw `openStream` listeners.
 </Callout>
 
 ## `sealStore(store)`
 
-Wraps a store in a read-only proxy that only exposes:
+Returns a frozen facade over a `StoreImpl`, exposing exactly:
 
-- `state` — current state (getter)
-- `queue(command)` — dispatch a command
-- `flush()` — wait for all queued commands to complete
-- `openStream(listener)` / `closeStream(listener)` — subscribe to events
+| Member | Type |
+| --- | --- |
+| `state` | `DeepReadonly<S>` (getter) |
+| `queue` | `QueueFn` |
+| `flush` | `() => Promise<void>` |
+| `suspend` | `() => Unsubscribe` |
+| `openStream` | `(listener: StreamListener) => Unsubscribe` |
+| `closeStream` | `(listener: StreamListener) => void` |
 
 ```ts
 import { sealStore } from "@naikidev/commiq";
 
-const sealed = sealStore(store);
-sealed.state; // allowed
-sealed.queue(cmd); // allowed
-await sealed.flush(); // allowed
-sealed.addCommandHandler; // undefined (not exposed)
+export const counterStore = sealStore(store);
+
+counterStore.state.count;
+counterStore.queue(increment);
+await counterStore.flush();
 ```
+
+Registration is absent from the `SealedStore` type, so a consumer reaching for it does not compile:
+
+```ts
+counterStore.addCommandHandler(increment, handler);
+// Property 'addCommandHandler' does not exist on type 'SealedStore<CounterState>'
+```
+
+This is a **compile-time** absence, not a runtime `undefined` check — the facade object simply has no such property, and `Object.freeze` prevents one being added.
+
+### What sealing does and does not guarantee
+
+`state` is `DeepReadonly<S>`, and outside production every state object is deep-frozen, so a write throws a `TypeError`:
+
+```ts
+counterStore.state.count = 999; // type error; TypeError at runtime outside production
+```
+
+What it does not cover:
+
+- **Production builds do not freeze.** Freezing is skipped when the environment is production, so in a production bundle the types are the only guard and a plain-JS caller can still write.
+- **`Map`, `Set`, class instances and functions are not frozen** at any depth, in any environment. They are typed readonly, and that is all.
+- **A cast defeats it.** `(sealed.state as CounterState).count = 1` compiles. In development it throws; in production it silently mutates state with no event and no devtools entry.
+
+Sealing is a boundary that makes the mutation path obvious and cheap to review. It is not a sandbox.
+
+<Callout type="warn">
+In commiq 1.x `sealStore` was documented as a read-only proxy in five places while `sealed.state.count = 999` mutated the real store with no event and no type error. If your code has defensive copies added because of that, they can go.
+</Callout>
 
 ## `createEventBus()`
 
-Creates a bus that routes events between multiple stores.
+Routes events between stores without coupling them. The bus subscribes to each connected store's stream and dispatches to handlers registered by event definition.
 
 ```ts
 import { createEventBus } from "@naikidev/commiq";
 
 const bus = createEventBus();
-bus.connect(storeA);
-bus.connect(storeB);
 
-bus.on(userCreated, (event) => {
-  storeB.queue(createCommand("greet", { name: event.data.name }));
+const disconnectA = bus.connect(storeA);
+const disconnectB = bus.connect(storeB);
+
+const off = bus.on(userCreated, (event) => {
+  storeB.queue(greet, { name: event.data.name });
 });
 
-// Later, disconnect:
-bus.disconnect(storeA);
+off();
+disconnectA();
 ```
 
-| Method       | Description                             |
-| ------------ | --------------------------------------- |
-| `connect`    | Subscribe the bus to a store's stream   |
-| `disconnect` | Unsubscribe from a store's stream       |
-| `on`         | Register a handler for a specific event |
+| Method | Returns | Description |
+| --- | --- | --- |
+| `connect(store)` | `Unsubscribe` | Subscribe the bus to a store's stream. **Refcounted** |
+| `disconnect(store)` | `void` | Decrement the refcount; unsubscribes when it reaches zero |
+| `on(eventDef, handler)` | `Unsubscribe` | Register a handler for one event |
+| `off(eventDef, handler)` | `boolean` | Explicit form of the returned unsubscribe |
+| `destroy()` | `void` | Unsubscribe from every store and drop every handler |
+
+`connect` accepts anything matching `Streamable` — `{ openStream, closeStream }` — which includes both `StoreImpl` and `SealedStore`.
+
+<Callout type="info">
+Connections are refcounted, so `connect(store)` twice needs two disconnects. In 1.x the second `connect` installed a duplicate listener but overwrote the tracked entry, so a single `disconnect` silenced the bus while the caller believed one connection remained. Prefer the `Unsubscribe` returned by `connect` over calling `disconnect` yourself.
+</Callout>
+
+A bus handler that throws is caught and logged to the console; it does not stop the other handlers. The bus has no `onError` option — for structured error reporting, use the store's own [error channel](/api/store#the-error-channel).

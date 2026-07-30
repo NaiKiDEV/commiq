@@ -3,78 +3,76 @@ title: Dependency Injection
 description: Provide typed dependencies to command handlers for testability and environment flexibility.
 ---
 
-Command handlers often need access to external services — API clients, analytics, storage adapters, configuration. Importing these directly couples your store logic to specific implementations, making testing harder and reuse across environments impossible.
+Command handlers often need external services — API clients, analytics, storage adapters, clocks. Importing them directly couples store logic to one implementation, which makes tests depend on module mocking and makes the same store unusable in a second environment.
 
-The `withInjector` context extension solves this by providing typed dependencies through `ctx.deps`, configured at store creation time.
+`withInjector` provides typed dependencies through `ctx.deps`, supplied when the store is created.
 
 ## The problem
-
-Without injection, stores import services directly:
 
 ```ts title="stores/user.ts"
 import { apiClient } from "../services/api";
 
-_store.addCommandHandler("user:load", async (ctx, cmd) => {
+_store.addCommandHandler(UserCommand.load, async (ctx, cmd) => {
   const user = await apiClient.fetchUser(cmd.data.id);
-  ctx.setState({ ...ctx.state, user });
+  ctx.setState((prev) => ({ ...prev, user }));
 });
 ```
 
-This works until you need to:
-- Test with a mock API client
-- Run the same store in SSR with a different base URL
-- Swap implementations between environments
+This works until you need to test with a stub, run the same store server-side against a different base URL, or swap the implementation per environment.
 
-## Inject dependencies at creation time
+## Inject at creation time
+
+`withInjector` is curried: `withInjector<S>()` fixes the state type, and calling the result with the dependency object infers its shape.
 
 ```ts title="stores/user.ts"
-import { createStore, createCommand, createEvent, sealStore } from "@naikidev/commiq";
-import { withInjector, withGuard, withDefer } from "@naikidev/commiq-context";
+import { createStore, createCommandDef, createEvent, sealStore } from "@naikidev/commiq";
+import { withGuard, withInjector } from "@naikidev/commiq-context";
+import type { StoreOptions } from "@naikidev/commiq";
 import type { ApiClient } from "../services/api";
 import type { AnalyticsService } from "../services/analytics";
 
+export type User = { id: string; name: string };
+
 type UserState = {
-  user: { id: string; name: string } | null;
-  loading: boolean;
-  error: string | null;
+  readonly user: User | null;
 };
 
-type UserDeps = {
+export type UserDeps = {
   api: ApiClient;
   analytics: AnalyticsService;
 };
 
-const UserEvent = {
-  Loaded: createEvent<{ id: string }>("user:loaded"),
-  LoadFailed: createEvent<{ id: string; reason: string }>("user:loadFailed"),
+export const UserCommand = {
+  load: createCommandDef<{ id: string }>("user:load"),
 };
 
-export function createUserStore(deps: UserDeps) {
-  const _store = createStore<UserState>({ user: null, loading: false, error: null })
+export const UserEvent = {
+  Loaded: createEvent<{ id: string }>("user:loaded"),
+};
+
+const initialState: UserState = { user: null };
+
+export function createUserStore(deps: UserDeps, options?: StoreOptions) {
+  const _store = createStore<UserState>(initialState, options)
     .useExtension(withInjector<UserState>()(deps))
     .useExtension(withGuard<UserState>())
-    .addCommandHandler<{ id: string }>("user:load", async (ctx, cmd) => {
-      ctx.guard(cmd.data.id !== "", "user ID is required");
+    .addCommandHandler(UserCommand.load, async (ctx, cmd) => {
+      ctx.guard(cmd.data.id !== "", "A user ID is required");
 
-      ctx.setState({ ...ctx.state, loading: true, error: null });
+      const user = await ctx.deps.api.fetchUser(cmd.data.id);
 
-      try {
-        const user = await ctx.deps.api.fetchUser(cmd.data.id);
-        ctx.setState({ ...ctx.state, user, loading: false });
-        ctx.deps.analytics.track("user_loaded", { id: cmd.data.id });
-        ctx.emit(UserEvent.Loaded, { id: cmd.data.id });
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : "Unknown error";
-        ctx.setState({ ...ctx.state, loading: false, error: reason });
-        ctx.emit(UserEvent.LoadFailed, { id: cmd.data.id, reason });
-      }
+      ctx.setState({ user });
+      ctx.deps.analytics.track("user_loaded", { id: cmd.data.id });
+      ctx.emit(UserEvent.Loaded, { id: cmd.data.id });
     });
 
   return sealStore(_store);
 }
 ```
 
-The store factory accepts its dependencies as an argument. Production code and test code each provide their own implementations.
+`ctx.deps` is typed as `UserDeps` inside the handler — the extension widens the command context type, so property access is checked. `withInjector` provides `deps` on **both** command and event contexts.
+
+Note there is no try/catch. Letting a fetch failure escape is what marks the command as failed: the store reports it through `onError`, publishes `commandHandlingError`, and settles the handle as `{ status: "failed", error }`. The factory also forwards `StoreOptions` so callers — especially tests — can supply their own `onError`.
 
 ## Production setup
 
@@ -83,84 +81,164 @@ import { createUserStore } from "./stores/user";
 import { ApiClient } from "./services/api";
 import { PosthogAnalytics } from "./services/analytics";
 
-export const userStore = createUserStore({
-  api: new ApiClient({ baseUrl: "/api" }),
-  analytics: new PosthogAnalytics(),
-});
+export const userStore = createUserStore(
+  {
+    api: new ApiClient({ baseUrl: "/api" }),
+    analytics: new PosthogAnalytics(),
+  },
+  {
+    onError: (report) =>
+      errorReportingService.capture(report.error, {
+        source: report.source,
+        command: report.command?.name,
+      }),
+  },
+);
 ```
 
 ## Test setup
 
-```ts title="stores/user.test.ts"
-import { describe, it, expect, vi } from "vitest";
-import { createCommand } from "@naikidev/commiq";
-import { createUserStore } from "./user";
+Each test gets its own store with exactly the dependencies it needs. No module mocking.
 
-function createMockApi(overrides?: Partial<ApiClient>) {
+```ts title="stores/user.test.ts"
+import { describe, expect, it, vi } from "vitest";
+import { createUserStore, UserCommand } from "./user";
+import type { UserDeps } from "./user";
+
+function createDeps(overrides?: Partial<UserDeps["api"]>): UserDeps {
   return {
-    fetchUser: vi.fn().mockResolvedValue({ id: "1", name: "Test User" }),
-    ...overrides,
+    api: {
+      fetchUser: vi.fn().mockResolvedValue({ id: "1", name: "Test User" }),
+      ...overrides,
+    } as UserDeps["api"],
+    analytics: { track: vi.fn() } as unknown as UserDeps["analytics"],
   };
 }
 
-const noopAnalytics = { track: vi.fn() };
-
 describe("user store", () => {
   it("loads a user", async () => {
-    const api = createMockApi();
-    const store = createUserStore({ api, analytics: noopAnalytics });
+    const deps = createDeps();
+    const store = createUserStore(deps);
 
-    store.queue(createCommand("user:load", { id: "1" }));
-    await store.flush();
+    const result = await store.queue(UserCommand.load, { id: "1" });
 
+    expect(result.status).toBe("handled");
     expect(store.state.user).toEqual({ id: "1", name: "Test User" });
-    expect(store.state.loading).toBe(false);
-    expect(api.fetchUser).toHaveBeenCalledWith("1");
+    expect(deps.api.fetchUser).toHaveBeenCalledWith("1");
   });
 
-  it("handles API failure", async () => {
-    const api = createMockApi({
+  it("reports a failed fetch without touching state", async () => {
+    const onError = vi.fn();
+    const deps = createDeps({
       fetchUser: vi.fn().mockRejectedValue(new Error("Network error")),
     });
-    const store = createUserStore({ api, analytics: noopAnalytics });
+    const store = createUserStore(deps, { onError });
 
-    store.queue(createCommand("user:load", { id: "1" }));
-    await store.flush();
+    const result = await store.queue(UserCommand.load, { id: "1" });
 
+    expect(result.status).toBe("failed");
+    expect(result.error).toEqual(new Error("Network error"));
     expect(store.state.user).toBeNull();
-    expect(store.state.error).toBe("Network error");
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "commandHandler" }),
+    );
   });
 
-  it("rejects empty user ID", async () => {
-    const api = createMockApi();
-    const store = createUserStore({ api, analytics: noopAnalytics });
+  it("rejects an empty user ID before calling the API", async () => {
+    const deps = createDeps();
+    const store = createUserStore(deps);
 
-    store.queue(createCommand("user:load", { id: "" }));
-    await store.flush();
+    const result = await store.queue(UserCommand.load, { id: "" });
 
-    expect(api.fetchUser).not.toHaveBeenCalled();
+    expect(result.status).toBe("failed");
+    expect(deps.api.fetchUser).not.toHaveBeenCalled();
   });
 });
 ```
 
-No module mocking needed. Each test gets its own store with precisely controlled dependencies.
+Awaiting the `CommandHandle` returned by `queue()` is enough here — each test dispatches one command and asserts on its result. Use `await store.flush()` when event handlers queue follow-up commands you also need to settle.
 
-## Combining with `withDefer` for resource cleanup
+Passing `onError` in the failure test keeps the expected error out of the test output; the default reporter would log it.
 
-When a handler acquires a resource (a database connection, a file handle, a lock), use `withDefer` alongside `withInjector` to guarantee cleanup:
+## `withInjector` vs. a factory closure
 
-```ts title="stores/export.ts"
-const _store = createStore<ExportState>(initialState)
-  .useExtension(withInjector<ExportState>()(deps))
-  .useExtension(withDefer<ExportState>())
-  .addCommandHandler<{ format: string }>("export:generate", async (ctx, cmd) => {
-    const connection = await ctx.deps.database.connect();
-    ctx.defer(() => connection.release());
+`withInjector` is not the only way to inject. A plain closure works too:
 
-    const data = await connection.query("SELECT * FROM exports");
-    const output = ctx.deps.formatter.format(data, cmd.data.format);
-    ctx.setState({ ...ctx.state, output, generated: true });
+```ts
+export function createUserStore(deps: UserDeps) {
+  const _store = createStore<UserState>(initialState);
+
+  _store.addCommandHandler(UserCommand.load, async (ctx, cmd) => {
+    const user = await deps.api.fetchUser(cmd.data.id); // captured, not injected
+    ctx.setState({ user });
   });
+
+  return sealStore(_store);
+}
 ```
 
-Even if `query()` or `format()` throws, the connection is released.
+This is simpler and has no extension overhead. Reach for `withInjector` when:
+
+- **Handlers live in other files.** A handler exported from `handlers/load-user.ts` cannot close over the factory's argument, but it can read `ctx.deps`.
+- **You want the dependency set visible in the handler's type.** `ctx.deps` documents what a handler is allowed to touch; a closure hides it.
+- **Devtools or logging should see the dependency boundary.** `deps` is part of the context, not an invisible capture.
+
+For a store whose handlers are all defined inline in one file, the closure is usually the better trade.
+
+<Callout type="warn">
+`deps` occupies the context key `deps`. Registering two `withInjector` extensions on the same store, or another extension that also provides `deps`, throws at registration with a key-conflict error. The reserved keys are `state`, `setState`, `emit`, and `signal` for command contexts, and `state` and `queue` for event contexts.
+</Callout>
+
+## Injecting non-determinism
+
+Clocks and random sources are the dependencies most worth injecting, because they are what make tests flaky:
+
+```ts
+export type UserDeps = {
+  api: ApiClient;
+  now: () => number;
+  newId: () => string;
+};
+
+_store.addCommandHandler(UserCommand.load, async (ctx, cmd) => {
+  const user = await ctx.deps.api.fetchUser(cmd.data.id);
+  ctx.setState({ user, fetchedAt: ctx.deps.now() });
+});
+```
+
+```ts
+const store = createUserStore({
+  api: stubApi,
+  now: () => 1_700_000_000_000,
+  newId: () => "fixed-id",
+});
+```
+
+State assertions then compare against exact values rather than `expect.any(Number)`.
+
+## Combining with `withDefer`
+
+When a handler acquires a resource from an injected dependency, `withDefer` guarantees release. Because `withDefer` takes the store as its argument, the store has to be created before the chain starts:
+
+```ts title="stores/export.ts"
+export function createExportStore(deps: ExportDeps) {
+  const _store = createStore<ExportState>(initialState);
+
+  _store
+    .useExtension(withInjector<ExportState>()(deps))
+    .useExtension(withDefer(_store))
+    .addCommandHandler(ExportCommand.generate, async (ctx, cmd) => {
+      const connection = await ctx.deps.database.connect();
+      ctx.defer(() => connection.release());
+
+      const rows = await connection.query("SELECT * FROM exports");
+      const output = ctx.deps.formatter.format(rows, cmd.data.format);
+
+      ctx.setState({ output, generated: true });
+    });
+
+  return sealStore(_store);
+}
+```
+
+Even if `query()` or `format()` throws, the connection is released. See [deferred cleanup](/patterns/deferred-cleanup) — note in particular that a cleanup failure is now reported through `onError` rather than swallowed.

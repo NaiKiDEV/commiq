@@ -1,154 +1,303 @@
 ---
 title: Error Handling and Recovery
-description: Handle command errors, detect invalid commands, and implement retry patterns.
+description: Observe command failures through onError, command handles, and builtin error events, and build retries on top.
 ---
 
 import { Steps, Step } from 'fumadocs-ui/components/steps';
 
 # Error Handling and Recovery
 
-Commiq provides builtin events for every error scenario: a command handler throws, a command has no registered handler, or an interruptable command is aborted. Building on these events gives you consistent error handling without scattering try-catch blocks across your application.
+<Callout type="warn">
+**Nothing thrown inside a command or event handler propagates out of `queue()` or `flush()`.** Wrapping `await store.flush()` in a try/catch will never catch a handler failure, and `queue()` returns a promise that **never rejects**. There are three ways to observe a failure, and none of them is a try/catch around the dispatch site:
 
-## Structured error state
+1. **`StoreOptions.onError`** — one callback that sees every failure from every source
+2. **The `CommandHandle` returned by `queue()`** — `await` it for the result of *that* command
+3. **Builtin error events** — `commandHandlingError`, `eventHandlingError`, `unhandledError`, `invalidCommand`
+</Callout>
 
-Use a `status` discriminant with an `errorMessage` field, as described in [async loading states](/patterns/async-loading-states). Set the error state inside the handler's catch block, and emit a semantic error event so the UI can react via [event-driven side effects](/patterns/event-driven-side-effects).
+The store swallows nothing internally: every failure is routed to at least one of those channels. But it also never lets a failure escape the queue, because a rejected promise nobody awaited would become an unhandled rejection and a thrown error mid-queue would strand every command behind it.
 
-This section focuses on errors that go _beyond_ individual handler try-catch blocks — builtin error events, retries, and centralized monitoring.
+## `onError`: the one channel that sees everything
 
-## CommandHandlingError
+Pass `onError` when creating the store. It receives a `StoreErrorReport`:
 
-When a command handler throws an unhandled exception, Commiq emits `BuiltinEvent.CommandHandlingError` with the original command and the error. This fires _in addition to_ the exception propagating — the store remains functional.
-
-Use it for centralized error logging:
-
-```ts title="stores/error-monitor.ts"
-import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
-
-_store.openStream((event) => {
-  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
-    const { command, error } = event.data;
-    console.error(`Command "${command.name}" failed:`, error);
-    errorReportingService.capture(error, { command: command.name });
-  }
-});
+```ts
+type StoreErrorReport = {
+  error: unknown;
+  source: StoreErrorSource;
+  command?: Command;
+  event?: StoreEvent;
+};
 ```
 
-This listener can live on any store — including a dedicated monitoring store — since `openStream` receives all events emitted by that store.
+```ts title="stores/app.ts"
+import { createStore } from "@naikidev/commiq";
+import type { StoreErrorReport } from "@naikidev/commiq";
 
-## InvalidCommand
+function reportStoreError(report: StoreErrorReport): void {
+  errorReportingService.capture(report.error, {
+    source: report.source,
+    command: report.command?.name,
+    event: report.event?.name,
+    correlationId: report.command?.correlationId ?? report.event?.correlationId,
+  });
+}
 
-When a command is queued but no handler is registered for its name, Commiq emits `BuiltinEvent.InvalidCommand`. This catches typos, missing registrations, and commands dispatched to the wrong store:
+const _store = createStore<AppState>(initialState, { onError: reportStoreError });
+```
+
+`source` is one of:
+
+| Source | Fires when |
+| --- | --- |
+| `commandHandler` | A command handler threw |
+| `eventHandler` | An event handler threw |
+| `streamListener` | An `openStream` listener threw |
+| `contextExtension` | An extension's `command`/`event`/`afterCommand`/`afterEvent`/`destroy` hook threw |
+| `disposedContext` | A handler called `setState` or `emit` after its command settled |
+| `queueProcessor` | The queue loop itself failed |
+| `duplicateHandler` | `addCommandHandler` replaced an existing handler for the same name |
+| `destroyedStore` | Something was queued or registered on a destroyed store |
+| `suspendedQueue` | A `suspend()` gate was held past `suspendWarningMs` |
+
+<Callout type="info">
+Outside production the default reporter logs to the console. In production (`NODE_ENV === "production"`) the default is **silent** — if you want production visibility you must pass `onError` explicitly.
+</Callout>
+
+`onError` is the right place for centralized monitoring because it is the only channel that sees `streamListener`, `contextExtension`, and `disposedContext` failures. Those have no event handler of their own to fail into; they are additionally published as `unhandledError`, but nothing else surfaces them.
+
+## Command handles: the result of one command
+
+`queue()` returns a `CommandHandle` — a `Promise<CommandResult>` that also carries `command` and `correlationId`. Awaiting it tells you how that specific command ended:
+
+```ts
+type CommandResult = {
+  status: "handled" | "failed" | "interrupted" | "invalid" | "discarded";
+  command: Command;
+  error?: unknown;
+};
+```
+
+```ts
+const result = await store.queue(SyncCommand.push, { endpoint: "/api/sync" });
+
+if (result.status === "failed") {
+  console.error("sync failed", result.error);
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `handled` | The handler resolved without throwing |
+| `failed` | The handler threw; `error` carries what it threw |
+| `interrupted` | An interruptable command was aborted by a newer instance |
+| `invalid` | No handler is registered for that command name |
+| `discarded` | The store was destroyed before the command ran |
+
+The handle **never rejects**, so an ignored handle can never become an unhandled rejection. That also means `void store.queue(...)` is safe and is the normal form in event handlers and UI callbacks.
+
+<Callout type="info">
+A handle settles when *that command* settles. Events emitted by the handler are dispatched to event handlers afterwards, so if you need the whole cascade to finish — including commands queued by event handlers — use `await store.flush()` instead.
+</Callout>
+
+`flush()` **throws synchronously** if called from inside a command or event handler. Inside a handler, await the handle from `queue()` instead.
+
+## Builtin error events
+
+Use these when the reaction belongs to the domain — updating state, queuing a retry — rather than to monitoring.
 
 ```ts title="stores/diagnostics.ts"
 import { BuiltinEvent, matchEvent } from "@naikidev/commiq";
 
-_store.openStream((event) => {
+const unsubscribe = store.openStream((event) => {
+  if (matchEvent(event, BuiltinEvent.CommandHandlingError)) {
+    const { command, error } = event.data;
+    console.error(`command "${command.name}" failed:`, error);
+  }
+
+  if (matchEvent(event, BuiltinEvent.EventHandlingError)) {
+    console.error(`event "${event.data.event.name}" handler failed:`, event.data.error);
+  }
+
+  if (matchEvent(event, BuiltinEvent.UnhandledError)) {
+    console.error(`unhandled ${event.data.source} error:`, event.data.error);
+  }
+
   if (matchEvent(event, BuiltinEvent.InvalidCommand)) {
-    const { command } = event.data;
-    console.warn(`No handler registered for command "${command.name}"`);
+    console.warn(`no handler registered for "${event.data.command.name}"`);
   }
 });
 ```
 
-<Callout type="info">
-In production, invalid commands are typically programming errors. Log them as warnings during development and consider reporting them to your error tracking service.
+`openStream` returns an `Unsubscribe`. Keep it if the listener is not meant to live as long as the store.
+
+`matchEvent` narrows `event.data` to the definition's payload type, so `event.data.command` and `event.data.error` are typed without a cast.
+
+<Callout type="warn">
+`unhandledError` covers exactly the sources that have no event channel of their own — stream listeners, extension hooks, disposed contexts, and the queue processor. A command handler that throws produces `commandHandlingError`, **not** `unhandledError`. Listening only for `unhandledError` will miss every handler failure.
 </Callout>
+
+### InvalidCommand
+
+A command queued with no registered handler emits `invalidCommand` and settles its handle as `invalid`. This catches typos, missing registrations, and commands sent to the wrong store. Using [`createCommandDef`](/patterns/typed-command-factories) turns most of these into compile errors instead, since the same definition object is used to register the handler and to dispatch.
+
+## Errors that belong in state
+
+`onError` and the builtin events are for observability. A failure the *user* needs to see belongs in state, set by the handler that failed:
+
+```ts title="stores/sync.ts"
+type SyncState = {
+  readonly synced: boolean;
+  readonly errorMessage: string | null;
+};
+
+_store.addCommandHandler(SyncCommand.push, async (ctx, cmd) => {
+  try {
+    await pushToServer(cmd.data.endpoint);
+    ctx.setState((prev) => ({ ...prev, synced: true, errorMessage: null }));
+  } catch (error) {
+    ctx.setState((prev) => ({
+      ...prev,
+      errorMessage: error instanceof Error ? error.message : "Sync failed",
+    }));
+    ctx.emit(SyncEvent.Failed, { endpoint: cmd.data.endpoint, attempt: 1 });
+  }
+});
+```
+
+A handler that catches its own error and records it in state does **not** produce `commandHandlingError`, and its handle settles as `handled` — the command did what it was asked to do. Only let the error escape the handler if "the command failed" is the truth you want the rest of the system to see.
+
+In React, per-command pending and error state does not need to be stored at all — [`useCommandStatus`](/patterns/async-loading-states) reads it from the event stream.
 
 ## Retry pattern
 
-An event handler can re-queue a failed command. Track the attempt count in the command data to prevent infinite retries:
+An event handler can re-queue a failed command. Track the attempt count in the command payload so the retry terminates:
 
 ```ts title="stores/sync.ts"
-const SyncEvent = {
+import { createCommandDef, createEvent } from "@naikidev/commiq";
+
+const MAX_ATTEMPTS = 3;
+
+export const SyncCommand = {
+  push: createCommandDef<{ endpoint: string; attempt: number }>("sync:push"),
+  setError: createCommandDef<{ message: string }>("sync:setError"),
+};
+
+export const SyncEvent = {
   Failed: createEvent<{ endpoint: string; attempt: number }>("sync:failed"),
 };
 
-_store.addCommandHandler<{ endpoint: string; attempt?: number }>(
-  "sync:push",
-  async (ctx, cmd) => {
-    const attempt = cmd.data.attempt ?? 1;
-
-    try {
-      await pushToServer(cmd.data.endpoint);
-      ctx.setState({ ...ctx.state, synced: true });
-    } catch (e) {
-      ctx.emit(SyncEvent.Failed, { endpoint: cmd.data.endpoint, attempt });
-    }
-  },
-);
+_store.addCommandHandler(SyncCommand.push, async (ctx, cmd) => {
+  try {
+    await pushToServer(cmd.data.endpoint);
+    ctx.setState((prev) => ({ ...prev, synced: true }));
+  } catch {
+    ctx.emit(SyncEvent.Failed, cmd.data);
+  }
+});
 
 _store.addEventHandler(SyncEvent.Failed, (ctx, event) => {
-  if (event.data.attempt < 3) {
-    ctx.queue(
-      createCommand("sync:push", {
-        endpoint: event.data.endpoint,
-        attempt: event.data.attempt + 1,
-      }),
-    );
-  } else {
-    ctx.queue(createCommand("sync:set-error", "Sync failed after 3 attempts"));
+  const { endpoint, attempt } = event.data;
+
+  if (attempt < MAX_ATTEMPTS) {
+    ctx.queue(SyncCommand.push, { endpoint, attempt: attempt + 1 });
+    return;
   }
+
+  ctx.queue(SyncCommand.setError, {
+    message: `Sync failed after ${MAX_ATTEMPTS} attempts`,
+  });
 });
 ```
 
 <Callout type="warn">
-Always cap retry attempts. An event handler that unconditionally re-queues a failing command creates an infinite loop. Use the attempt count or a maximum-retries constant to break the cycle.
+Always cap retries. An event handler that unconditionally re-queues a failing command loops forever, and because event handlers run inside the queue loop, the loop is tight enough to lock the tab. `flush()` will never resolve.
 </Callout>
+
+Event handlers receive an `EventContext` with `state` and `queue` only — no `setState`. That is deliberate: state changes flow through commands so the audit trail stays intact. To change state in reaction to an event, queue a command.
 
 The retry flow:
 
 <Steps>
 <Step>
 
-### Command fails
+### The command fails
 
-The handler catches the error and emits `SyncEvent.Failed` with the current attempt number.
+The handler catches its own error and emits `SyncEvent.Failed` carrying the current attempt number.
 
 </Step>
 <Step>
 
-### Event handler evaluates
+### The event handler decides
 
-If the attempt count is below the limit, the event handler queues the same command with an incremented attempt.
+Below the cap, it queues the same command with an incremented attempt. The new command's `causedBy` links to the event, so devtools shows the full retry chain under one `getChain(correlationId)` query.
 
 </Step>
 <Step>
 
 ### Final failure
 
-After exhausting retries, the event handler queues a command that sets an error state for the UI to display.
+At the cap, it queues a command that records the error in state for the UI to render.
 
 </Step>
 </Steps>
 
+Adding a delay between attempts belongs in an [effect](/patterns/effects-and-cancellation) rather than a handler — effects support `debounce` and an `AbortSignal`, and a `setTimeout` inside a command handler holds the queue for its whole duration.
+
 ## Surfacing errors to the UI
 
-Use `useEvent` to display transient error notifications — the store emits what happened, the component decides how to present it. See [event-driven side effects](/patterns/event-driven-side-effects) for the full pattern.
+`useEvent` runs a callback when an event fires, without adding a transient flag to state:
 
 ```tsx title="pages/SyncPage.tsx"
-useEvent(syncStore, SyncEvent.Failed, (event) => {
-  if (event.data.attempt >= 3) {
-    showToast(`Sync to ${event.data.endpoint} failed permanently`, { type: "error" });
-  }
+import { useEvent } from "@naikidev/commiq-react";
+import { syncStore, SyncEvent } from "../stores/sync";
+
+const MAX_ATTEMPTS = 3;
+
+function SyncPage() {
+  useEvent(syncStore, SyncEvent.Failed, (event) => {
+    if (event.data.attempt < MAX_ATTEMPTS) return;
+    showToast(`Sync to ${event.data.endpoint} failed`, { type: "error" });
+  });
+
+  return <SyncStatus />;
+}
+```
+
+For the failure of one specific command, `useCommandStatus` is more direct — it exposes `error` without any event of your own:
+
+```tsx
+const { pending, error } = useCommandStatus(syncStore, SyncCommand.push);
+```
+
+See [event-driven side effects](/patterns/event-driven-side-effects) for the wider pattern.
+
+## Testing failures
+
+`StoreOptions.onError` is the cleanest assertion point in tests, because it is synchronous and sees every source:
+
+```ts title="sync.test.ts"
+import { expect, test, vi } from "vitest";
+import { createStore } from "@naikidev/commiq";
+
+test("a failing push reports through onError", async () => {
+  const onError = vi.fn();
+  const store = createStore<SyncState>(initialState, { onError });
+  store.addCommandHandler(SyncCommand.push, () => {
+    throw new Error("network down");
+  });
+
+  const result = await store.queue(SyncCommand.push, {
+    endpoint: "/api",
+    attempt: 1,
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.error).toEqual(new Error("network down"));
+  expect(onError).toHaveBeenCalledWith(
+    expect.objectContaining({ source: "commandHandler" }),
+  );
 });
 ```
 
-## Centralized error monitoring
-
-For unexpected errors that slip through handler-level try-catch blocks, attach a `CommandHandlingError` listener that reports to your error tracking service. The `correlationId` on the command links the error to the full causality chain in devtools:
-
-```ts title="stores/setup.ts"
-import { BuiltinEvent } from "@naikidev/commiq";
-
-export function attachErrorMonitoring(store: SealedStore<unknown>) {
-  store.openStream((event) => {
-    if (event.id === BuiltinEvent.CommandHandlingError.id) {
-      const { command, error } = event.data as { command: Command; error: unknown };
-      errorReportingService.capture(error, {
-        command: command.name,
-        correlationId: command.correlationId,
-      });
-    }
-  });
-}
-```
+Passing an `onError` spy also keeps expected failures out of the test output, which the default console reporter would otherwise print. See [testing](/patterns/testing).

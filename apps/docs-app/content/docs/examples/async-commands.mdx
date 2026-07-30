@@ -1,101 +1,114 @@
 ---
 title: Async Commands
+description: Async command handlers, sequential queue processing, and reporting pending and error state.
 ---
 
 # Async Commands
 
-Command handlers can be `async`. This is useful for API calls, timers, or any asynchronous operation.
+Command handlers can be `async` — useful for API calls, timers, or any asynchronous work.
 
-**Key behavior:** The store processes commands **sequentially**. When a handler is async, the queue waits for it to complete before picking up the next command. This guarantees ordering and prevents race conditions.
+**Key behavior:** the store processes commands **sequentially**. When a handler is async, the queue waits for it before picking up the next command. That guarantees ordering, and it means a slow handler holds everything behind it.
 
-## Example: Fetching Users
+## Example: fetching users
 
 ### Store
 
-```ts
+```ts title="features/users/store.ts"
 import {
   createStore,
-  createCommand,
+  createCommandDef,
   createEvent,
   sealStore,
 } from "@naikidev/commiq";
 
-type AsyncState = {
-  users: User[];
-  loading: boolean;
-  error: string;
+export type User = { id: string; name: string };
+
+type UserState = {
+  readonly users: readonly User[];
 };
 
-const fetchCompleted = createEvent<{ count: number }>("fetchCompleted");
-const fetchFailed = createEvent<{ error: string }>("fetchFailed");
+export const initialState: UserState = { users: [] };
 
-const _store = createStore<AsyncState>({
-  users: [],
-  loading: false,
-  error: "",
+export const UserCommand = {
+  fetch: createCommandDef("user:fetch"),
+  clear: createCommandDef("user:clear"),
+};
+
+export const UserEvent = {
+  Fetched: createEvent<{ count: number }>("user:fetched"),
+};
+
+const _store = createStore<UserState>(initialState, {
+  onError: (report) =>
+    console.error(`[users] ${report.source}`, report.command?.name, report.error),
 });
 
-_store.addCommandHandler("fetchUsers", async (ctx) => {
-  // 1. Enter loading state
-  ctx.setState({ ...ctx.state, loading: true, error: "" });
-
-  try {
-    // 2. Async work
+_store
+  .addCommandHandler(UserCommand.fetch, async (ctx) => {
     const response = await fetch("/api/users");
-    const users = await response.json();
 
-    // 3. Update state with result
-    ctx.setState({
-      users: [...ctx.state.users, ...users],
-      loading: false,
-      error: "",
-    });
+    if (!response.ok) {
+      throw new Error(`Request failed with ${response.status}`);
+    }
 
-    // 4. Emit success event
-    ctx.emit(fetchCompleted, { count: users.length });
-  } catch (err) {
-    // 5. Handle failure
-    ctx.setState({
-      ...ctx.state,
-      loading: false,
-      error: err.message,
-    });
-    ctx.emit(fetchFailed, { error: err.message });
-  }
-});
+    const users = (await response.json()) as User[];
 
-export const asyncStore = sealStore(_store);
-export const fetchUsers = () => createCommand("fetchUsers", undefined);
+    ctx.setState((prev) => ({ users: [...prev.users, ...users] }));
+    ctx.emit(UserEvent.Fetched, { count: users.length });
+  })
+  .addCommandHandler(UserCommand.clear, (ctx) => {
+    ctx.setState(initialState);
+  });
+
+export const userStore = sealStore(_store);
 ```
 
-### React Component
+Three things worth noting:
 
-```tsx
-function UserList() {
-  const { users, loading, error } = useSelector(asyncStore, (s) => s);
-  const queue = useQueue(asyncStore);
+- **State fields are `readonly`.** Every state-reading surface is `DeepReadonly<S>`; a mutable `User[]` would make `{ ...prev }` fail to compile. See [store file structure](/patterns/store-file-structure).
+- **There is no `loading` or `error` field, and no try/catch.** Letting the error escape is what marks the command as *failed*. Catching it and recording a message would report success.
+- **`!response.ok` is thrown explicitly.** `fetch` does not reject on a 4xx or 5xx, so without this check the handler would happily parse an error page as JSON.
+
+### React component
+
+`useCommandStatus` derives `pending` and `error` from the event stream, so neither lives in state:
+
+```tsx title="features/users/UsersPage.tsx"
+import { useSelector, useQueue, useCommandStatus, useEvent } from "@naikidev/commiq-react";
+import { userStore, UserCommand, UserEvent } from "./store";
+
+function toMessage(error: unknown): string | null {
+  if (error === null || error === undefined) return null;
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function UsersPage() {
+  const users = useSelector(userStore, (state) => state.users);
+  const { pending, error } = useCommandStatus(userStore, UserCommand.fetch);
+  const queue = useQueue(userStore);
   const [log, setLog] = useState<string[]>([]);
 
-  // Listen to events for side-effects
-  useEvent(asyncStore, fetchCompleted, (e) => {
-    setLog((prev) => [...prev, `Fetched ${e.data.count} users`]);
+  useEvent(userStore, UserEvent.Fetched, (event) => {
+    setLog((prev) => [...prev, `Fetched ${event.data.count} users`]);
   });
 
-  useEvent(asyncStore, fetchFailed, (e) => {
-    setLog((prev) => [...prev, `Error: ${e.data.error}`]);
-  });
+  const handleFetch = () => {
+    queue(UserCommand.fetch);
+  };
+
+  const errorMessage = toMessage(error);
 
   return (
     <div>
-      <button onClick={() => queue(fetchUsers())} disabled={loading}>
-        {loading ? "Loading…" : "Fetch Users"}
+      <button onClick={handleFetch} disabled={pending}>
+        {pending ? "Loading…" : "Fetch users"}
       </button>
 
-      {error && <p className="error">{error}</p>}
+      {errorMessage && <p role="alert">{errorMessage}</p>}
 
       <ul>
-        {users.map((u) => (
-          <li key={u.id}>{u.name}</li>
+        {users.map((user) => (
+          <li key={user.id}>{user.name}</li>
         ))}
       </ul>
     </div>
@@ -103,9 +116,52 @@ function UserList() {
 }
 ```
 
-## Important Notes
+`queue(UserCommand.fetch)` returns a `CommandHandle` that is discarded here. That is safe — the handle never rejects, so an ignored one can never become an unhandled rejection.
 
-- **Sequential processing** — while an async handler runs, the queue waits. The next command runs only after the handler's promise resolves.
-- **State is live** — `ctx.state` always reflects the latest state, even if you called `setState` earlier in the same handler.
-- **Error handling** — use try/catch inside the handler. If an uncaught error is thrown, the store emits a `commandHandlingError` builtin event automatically.
-- **Loading patterns** — set `loading: true` at the start of the handler and `loading: false` at the end. React components subscribed via `useSelector` will re-render at each `setState` call.
+## Awaiting a command
+
+Outside a component, await the handle for the outcome of that one dispatch:
+
+```ts
+const result = await userStore.queue(UserCommand.fetch);
+
+if (result.status === "failed") {
+  console.error(result.error);
+}
+```
+
+The handle settles when *that command* settles. Events it emitted are dispatched to event handlers afterwards, so use `await userStore.flush()` when you need the whole cascade — including commands queued by event handlers — to finish.
+
+## Sequential processing
+
+```ts
+userStore.queue(UserCommand.fetch);
+userStore.queue(UserCommand.fetch); // starts after the first finishes
+await userStore.flush();
+```
+
+Two dispatches produce two requests, one after the other. If the second should *replace* the first, register the handler as interruptable:
+
+```ts
+_store.addCommandHandler(
+  SearchCommand.query,
+  async (ctx, cmd) => {
+    const results = await searchApi(cmd.data, { signal: ctx.signal });
+    if (ctx.signal?.aborted) return;
+    ctx.setState((prev) => ({ ...prev, results }));
+  },
+  { interruptable: true },
+);
+```
+
+The superseded run's handle settles as `interrupted`, and passing `ctx.signal` to `fetch` cancels the request itself. `ctx.signal` is `AbortSignal | undefined` — it is only present when the handler was registered `interruptable`, hence the `?.`.
+
+## Important notes
+
+- **Sequential processing.** The queue waits for each handler's promise. A handler that never resolves stalls the store, and `flush()` never resolves either.
+- **`ctx.state` is a live getter.** It reflects the latest state even after an `await`, including changes from commands that ran in between. The updater form, `setState((prev) => ...)`, makes that dependency explicit and is the safer default after an `await`.
+- **Nothing propagates out of `queue()` or `flush()`.** Neither ever rejects. Observe failures through the handle's `status`, `StoreOptions.onError`, or the `commandHandlingError` event. A try/catch around `await flush()` will never fire.
+- **`stateChanged` fires once per `setState`,** not once per command. `useSelector` sees each one, so intermediate state is observable.
+- **`flush()` throws synchronously if called inside a handler.** Await the handle from `queue()` instead.
+
+See [error handling](/patterns/error-handling) for the full failure model and [async loading states](/patterns/async-loading-states) for what `useCommandStatus` does and does not cover.

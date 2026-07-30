@@ -1,10 +1,16 @@
 ---
 title: Getting Started
+description: Install commiq, build a store with typed commands, and wire it into React.
 ---
 
+import { Callout } from 'fumadocs-ui/components/callout';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
 # Getting Started
+
+<Callout type="info">
+Upgrading from 1.x? Read the [migration guide](/migration-v2) — state reads, `queue()` and handler subscriptions all changed.
+</Callout>
 
 ## Installation
 
@@ -47,80 +53,113 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
   </Tab>
 </Tabs>
 
-## Your First Store
+## Your first store
 
-### 1. Define the state
+### 1. Define the state and the commands
+
+A `CommandDef` carries a command's name and its payload type together, so a wrong payload is a compile error rather than a runtime surprise.
 
 ```ts
-type CounterState = {
+import { createCommandDef } from "@naikidev/commiq";
+
+export type CounterState = {
   count: number;
 };
+
+export const increment = createCommandDef("increment");
+export const addAmount = createCommandDef<number>("addAmount");
 ```
 
-### 2. Create the store and add handlers
+### 2. Create the store and register handlers
 
 ```ts
-import { createStore, createCommand, sealStore } from "@naikidev/commiq";
+import { createStore } from "@naikidev/commiq";
 
-const _store = createStore<CounterState>({ count: 0 });
+const store = createStore<CounterState>({ count: 0 }, {
+  onError: (report) => console.error(`[${report.source}]`, report.error),
+});
 
-_store
-  .addCommandHandler("increment", (ctx) => {
+store
+  .addCommandHandler(increment, (ctx) => {
     ctx.setState({ count: ctx.state.count + 1 });
   })
-  .addCommandHandler("decrement", (ctx) => {
-    ctx.setState({ count: ctx.state.count - 1 });
+  .addCommandHandler(addAmount, (ctx, cmd) => {
+    ctx.setState({ count: ctx.state.count + cmd.data });
   });
 ```
 
+`ctx.state` is `DeepReadonly<CounterState>` — build a new state object instead of writing to it. Outside production the state is deep-frozen, so an accidental write throws.
+
+`onError` is optional; it defaults to `console.error` outside production. Wire it to your error reporter in real applications, because a handler that throws does **not** propagate out of `queue()`.
+
 ### 3. Seal the store
 
-Sealing prevents direct access to `addCommandHandler` and `addEventHandler`, ensuring consumers can only read state and queue commands.
+`sealStore` returns a facade with no registration methods, so consumers can only read state, dispatch commands and observe events.
 
 ```ts
-export const counterStore = sealStore(_store);
+import { sealStore } from "@naikidev/commiq";
+
+export const counterStore = sealStore(store);
 ```
+
+<Callout type="warn">
+Sealing is a boundary, not a sandbox. `state` is `DeepReadonly` and frozen in development, so a stray write is a type error and throws at runtime. In a production build there is no freeze, and `Map`, `Set` and class instances in state are never frozen — see [what sealing guarantees](/api/commands-events#what-sealing-does-and-does-not-guarantee).
+</Callout>
 
 ### 4. Use it
 
+Commands are queued and processed asynchronously. State does not change on the tick you dispatch:
+
 ```ts
-counterStore.queue(createCommand("increment", undefined));
-console.log(counterStore.state.count); // 1
+counterStore.queue(increment);
+counterStore.state.count; // still 0 — the queue drains on a microtask
+
+await counterStore.flush();
+counterStore.state.count; // 1
 ```
+
+`flush()` waits for the whole store to go quiet, including commands queued by event handlers. To wait for one command and learn whether it succeeded, await the handle `queue()` returns:
+
+```ts
+const result = await counterStore.queue(addAmount, 5);
+result.status; // "handled" | "failed" | "interrupted" | "invalid" | "discarded"
+counterStore.state.count; // 6
+```
+
+<Callout type="info">
+A command handle never rejects, so ignoring it is safe and `try`/`catch` around it catches nothing. Check `result.status`, or supply `onError`.
+</Callout>
 
 ## Using with React
 
-```tsx
-import { CommiqProvider, useSelector, useQueue } from "@naikidev/commiq-react";
-import { counterStore } from "./stores/counter";
-import { createCommand } from "@naikidev/commiq";
+Hooks take the store directly — no provider needed.
 
-function App() {
-  return (
-    <CommiqProvider stores={{ counter: counterStore }}>
-      <Counter />
-    </CommiqProvider>
-  );
-}
+```tsx
+import { useSelector, useQueue } from "@naikidev/commiq-react";
+import { counterStore, increment } from "./stores/counter";
 
 function Counter() {
   const count = useSelector(counterStore, (s) => s.count);
-  const queue = useQueue(counterStore);
+  const dispatch = useQueue(counterStore);
+
+  const handleIncrement = () => dispatch(increment);
 
   return (
     <div>
       <p>{count}</p>
-      <button onClick={() => queue(createCommand("increment", undefined))}>
-        +1
-      </button>
+      <button onClick={handleIncrement}>+1</button>
     </div>
   );
 }
 ```
 
-## Add Devtools
+`useSelector` re-renders only when the selected value changes. Extract callbacks into named `handle*` functions rather than inlining them in JSX props.
 
-During development, drop in the `CommiqDevtools` component to see store activity, trace causality chains, and inspect state:
+`CommiqProvider` is optional and only needed when a store name must resolve to a different instance per subtree or per request — SSR and tests. See [React hooks](/react/hooks#commiqprovider).
+
+## Add devtools
+
+During development, drop in `CommiqDevtools` to see the event timeline, trace causality chains, inspect state and dispatch commands by hand.
 
 <Tabs groupId="pkg-manager" items={['pnpm', 'npm', 'Yarn', 'Bun']}>
   <Tab value="pnpm">
@@ -158,3 +197,12 @@ function App() {
   );
 }
 ```
+
+The panel renders nothing when `NODE_ENV` is `production`; pass `enabled` to override that. See [devtools React](/plugins/devtools-react) for the panel, and [devtools](/plugins/devtools) for the framework-agnostic instrumentation engine underneath it.
+
+## Next steps
+
+- [Store API](/api/store) — handlers, the queue, suspension, lifecycle and the builtin events
+- [Commands and events](/api/commands-events) — definitions, event identity, sealing and the event bus
+- [React hooks](/react/hooks) — the full hook surface
+- [Patterns](/patterns) — how to structure real applications

@@ -7,89 +7,95 @@ import { Card, Cards } from 'fumadocs-ui/components/card';
 
 # Patterns
 
-These patterns address recurring architectural decisions when building with Commiq. Each one is prescriptive — it reflects how the library is designed to be used and what works well in practice.
+These pages cover the recurring architectural decisions in a Commiq application. Each one reflects how the library is designed to be used, including where a pattern has a cost or a limit.
 
-Use them as starting points. Copy the code, adapt the names, and apply the structure that fits your project.
+Every snippet uses only exported APIs and is written to be copy-pasted.
+
+## Two things that apply everywhere
+
+**Declare state fields `readonly`.** Every state-reading surface is typed `DeepReadonly<S>`, so a mutable `Item[]` field cannot be spread out of `ctx.state` and written back — `{ ...ctx.state, other: 1 }` is a compile error. One keyword per field makes both forms of `setState` work everywhere. See [store file structure](/patterns/store-file-structure).
+
+**Nothing propagates out of `queue()` or `flush()`.** Neither ever rejects. A failure is observed through the `CommandHandle` returned by `queue()`, through `StoreOptions.onError`, or through the builtin error events — never through a try/catch at the dispatch site. See [error handling](/patterns/error-handling).
 
 <Cards>
   <Card
     title="Store File Structure"
     href="/patterns/store-file-structure"
-    description="How to organize store files for clarity, testability, and scale."
+    description="Organize store files, and why state fields must be declared readonly."
   />
   <Card
-    title="Typed Command Factories"
+    title="Typed Command Definitions"
     href="/patterns/typed-command-factories"
-    description="Replace magic strings with typed factory functions for type-safe command dispatch."
+    description="Use createCommandDef so a command's name and payload type travel together."
   />
   <Card
     title="Domain Hooks"
     href="/patterns/domain-hooks"
-    description="Encapsulate store interactions in a clean React hook API."
+    description="Encapsulate store interactions in a reusable React hook API."
   />
   <Card
     title="Async Loading States"
     href="/patterns/async-loading-states"
-    description="A standard approach to async commands with loading and error handling."
+    description="Track pending and error state with useCommandStatus instead of state fields."
   />
   <Card
     title="Event-Driven Side Effects"
     href="/patterns/event-driven-side-effects"
-    description="Trigger notifications, navigation, and analytics from store events without coupling logic to views."
-  />
-  <Card
-    title="Real-Time Transports"
-    href="/patterns/real-time-transports"
-    description="Integrate WebSockets, Socket.IO, and Server-Sent Events with Commiq stores."
-  />
-  <Card
-    title="Testing Stores and Hooks"
-    href="/patterns/testing"
-    description="Unit test command handlers, event flows, React hooks, and effects."
-  />
-  <Card
-    title="Multi-Store Coordination"
-    href="/patterns/multi-store-coordination"
-    description="Coordinate independent stores through an event bus without coupling them directly."
-  />
-  <Card
-    title="Effects and Cancellation"
-    href="/patterns/effects-and-cancellation"
-    description="Structured side effects with lifecycle control using the effects plugin and interruptable commands."
+    description="Trigger notifications, navigation, and analytics from store events."
   />
   <Card
     title="Error Handling and Recovery"
     href="/patterns/error-handling"
-    description="Handle command errors, detect invalid commands, and implement retry patterns."
+    description="Observe failures through onError, command handles, and builtin error events."
+  />
+  <Card
+    title="Effects and Cancellation"
+    href="/patterns/effects-and-cancellation"
+    description="Concurrency modes, cancellation, and error reporting in the effects plugin."
+  />
+  <Card
+    title="Real-Time Transports"
+    href="/patterns/real-time-transports"
+    description="Bridge WebSockets, Socket.IO, and Server-Sent Events to a store."
+  />
+  <Card
+    title="Multi-Store Coordination"
+    href="/patterns/multi-store-coordination"
+    description="Route events between independent stores with a refcounted event bus."
   />
   <Card
     title="Optimistic Updates"
     href="/patterns/optimistic-updates"
-    description="Update state immediately for responsiveness and reconcile on async completion."
+    description="Apply state immediately, then confirm or roll back."
   />
   <Card
     title="State Normalization"
     href="/patterns/state-normalization"
-    description="Structure store state for collections to simplify lookups, selectors, and updates."
+    description="Structure collections for lookups, targeted updates, and per-entity selectors."
+  />
+  <Card
+    title="Testing Stores and Hooks"
+    href="/patterns/testing"
+    description="Test commands, events, failures, hooks, and effects deterministically."
   />
   <Card
     title="Composing Plugins"
     href="/patterns/composing-plugins"
-    description="Wire multiple plugins on the same store with correct initialization order and cleanup."
+    description="Attach devtools, effects, and OpenTelemetry to one store, and dispose them."
   />
   <Card
     title="Command Validation"
     href="/patterns/command-validation"
-    description="Validate command data with guards for business rules and assertions for developer invariants."
+    description="Guards for business rules, assertions for developer invariants."
   />
   <Card
     title="Dependency Injection"
     href="/patterns/dependency-injection"
-    description="Provide typed dependencies to command handlers for testability and environment flexibility."
+    description="Provide typed dependencies to handlers for testability and flexibility."
   />
   <Card
     title="Deferred Cleanup"
     href="/patterns/deferred-cleanup"
-    description="Guarantee resource cleanup in command handlers using ctx.defer, regardless of success or failure."
+    description="Guarantee resource cleanup with ctx.defer, on success and on failure."
   />
 </Cards>
