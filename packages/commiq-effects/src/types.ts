@@ -38,7 +38,7 @@ export type EffectConcurrencyMode = "parallel" | "switch" | "drop" | "queue";
 export type EffectOptions = {
   cancelOn?: EventDef<never>;
   mode?: EffectConcurrencyMode;
-  /** @deprecated Use `mode: "switch"` instead. */
+  /** @deprecated Use `mode` instead: `true` maps to `"switch"`, `false` maps to `"parallel"`. */
   restartOnNew?: boolean;
   debounce?: number;
   onError?: EffectErrorReporter;

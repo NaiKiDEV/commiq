@@ -200,7 +200,36 @@ describe("createEffects — triggering", () => {
 });
 
 describe("createEffects — concurrency modes", () => {
-  it("defaults to parallel mode and overlaps runs", async () => {
+  it("defaults to switch mode and aborts the in-flight run", async () => {
+    const { store, sealed } = setup();
+    const trigger = createEvent<number>("trigger");
+    const effects = createEffects(sealed);
+    const aborted: number[] = [];
+    const completed: number[] = [];
+    const gate = createGate();
+    const emit = publisher(store, trigger, "fire");
+
+    effects.on(trigger, async (data, ctx) => {
+      await gate.wait;
+      if (ctx.signal.aborted) {
+        aborted.push(data);
+        return;
+      }
+      completed.push(data);
+    });
+
+    await emit(1);
+    await emit(2);
+    gate.open();
+    await settle();
+
+    expect(aborted).toEqual([1]);
+    expect(completed).toEqual([2]);
+
+    effects.destroy();
+  });
+
+  it("mode parallel overlaps runs", async () => {
     const { store, sealed } = setup();
     const trigger = createEvent<number>("trigger");
     const effects = createEffects(sealed);
@@ -209,11 +238,15 @@ describe("createEffects — concurrency modes", () => {
     const gate = createGate();
     const emit = publisher(store, trigger, "fire");
 
-    effects.on(trigger, async (data) => {
-      started.push(data);
-      await gate.wait;
-      finished.push(data);
-    });
+    effects.on(
+      trigger,
+      async (data) => {
+        started.push(data);
+        await gate.wait;
+        finished.push(data);
+      },
+      { mode: "parallel" },
+    );
 
     await emit(1);
     await emit(2);
@@ -286,6 +319,39 @@ describe("createEffects — concurrency modes", () => {
     await settle();
 
     expect(completed).toEqual([2]);
+
+    effects.destroy();
+  });
+
+  it("restartOnNew: false maps onto parallel", async () => {
+    const { store, sealed } = setup();
+    const trigger = createEvent<number>("trigger");
+    const effects = createEffects(sealed);
+    const started: number[] = [];
+    const finished: number[] = [];
+    const gate = createGate();
+    const emit = publisher(store, trigger, "fire");
+
+    effects.on(
+      trigger,
+      async (data) => {
+        started.push(data);
+        await gate.wait;
+        finished.push(data);
+      },
+      { restartOnNew: false },
+    );
+
+    await emit(1);
+    await emit(2);
+
+    expect(started).toEqual([1, 2]);
+    expect(finished).toEqual([]);
+
+    gate.open();
+    await settle();
+
+    expect(finished).toEqual([1, 2]);
 
     effects.destroy();
   });
@@ -741,10 +807,14 @@ describe("createEffects — teardown", () => {
     const gate = createGate();
     const emit = publisher(store, trigger, "fire");
 
-    effects.on(trigger, async (data, ctx) => {
-      await gate.wait;
-      if (!ctx.signal.aborted) survived.push(data);
-    });
+    effects.on(
+      trigger,
+      async (data, ctx) => {
+        await gate.wait;
+        if (!ctx.signal.aborted) survived.push(data);
+      },
+      { mode: "parallel" },
+    );
 
     await emit(1);
     await emit(2);

@@ -63,18 +63,18 @@ effects.destroy(); // tear down the whole instance (idempotent)
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `mode` | `"parallel" \| "switch" \| "drop" \| "queue"` | `"parallel"` | Concurrency policy — see below |
+| `mode` | `"parallel" \| "switch" \| "drop" \| "queue"` | `"switch"` | Concurrency policy — see below |
 | `debounce` | `number` | — | Debounce in ms before running (last-wins). Cleared by `cancelOn` and `destroy()` |
 | `cancelOn` | `EventDef` | — | Aborts every in-flight run of *this* registration and clears its pending debounce |
 | `onError` | `(report: EffectErrorReport) => void` | instance `onError` | Per-registration error reporter |
-| `restartOnNew` | `boolean` | `false` | **Deprecated** — equivalent to `mode: "switch"`. `mode` wins when both are set |
+| `restartOnNew` | `boolean` | — | **Deprecated.** `mode` wins when both are set. `true` maps to `mode: "switch"` (already the default). `false` maps to `mode: "parallel"` — a v1 caller writing `restartOnNew: false` was asking for concurrent runs, so it keeps that meaning |
 
 ### Concurrency modes
 
 | Mode | Behaviour |
 |---|---|
-| `parallel` | **Default.** Every trigger starts another run. Ten keystrokes means ten live requests and last-response-wins — pick another mode for anything that writes state |
-| `switch` | Aborts in-flight runs, then starts the new one. The right default for search/autocomplete |
+| `switch` | **Default.** Aborts in-flight runs, then starts the new one. Correct for the common event-driven case — search-as-you-type, fetch-on-change — where only the latest trigger's result should ever apply |
+| `parallel` | Every trigger starts another run, all running concurrently with last-response-wins. Opt in explicitly when you actually want concurrency — parallel uploads, fan-out requests — since it is a footgun for anything that writes state from a stale response |
 | `drop` | Ignores the trigger while a non-aborted run is still active |
 | `queue` | Chains runs so each trigger waits for the previous run to settle |
 

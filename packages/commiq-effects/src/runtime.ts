@@ -50,7 +50,8 @@ export function resolveMode(
   options: EffectOptions | undefined,
 ): EffectConcurrencyMode {
   if (options?.mode !== undefined) return options.mode;
-  return options?.restartOnNew === true ? "switch" : "parallel";
+  if (options?.restartOnNew === false) return "parallel";
+  return "switch";
 }
 
 export function reportError<S>(
