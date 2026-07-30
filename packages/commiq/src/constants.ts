@@ -1,5 +1,10 @@
 import { createEvent } from "./types";
-import type { Command, StoreErrorReport, StoreEvent } from "./types";
+import type {
+  Command,
+  StateChangedData,
+  StoreErrorReport,
+  StoreEvent,
+} from "./types";
 
 export const BuiltinEventName = {
   StateChanged: "stateChanged",
@@ -14,7 +19,7 @@ export const BuiltinEventName = {
 } as const;
 
 export const BuiltinEvent = {
-  StateChanged: createEvent<{ prev: unknown; next: unknown }>(BuiltinEventName.StateChanged),
+  StateChanged: createEvent<StateChangedData<unknown>>(BuiltinEventName.StateChanged),
   CommandHandled: createEvent<{ command: Command }>(BuiltinEventName.CommandHandled),
   CommandStarted: createEvent<{ command: Command }>(BuiltinEventName.CommandStarted),
   InvalidCommand: createEvent<{ command: Command }>(BuiltinEventName.InvalidCommand),

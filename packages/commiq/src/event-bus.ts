@@ -1,25 +1,34 @@
 import { reportToConsole } from "./run-safe";
-import type { EventDef, StoreEvent, StreamListener } from "./types";
+import type { EventDef, StoreEvent, StreamListener, Unsubscribe } from "./types";
 
-type EventBusHandler<D = unknown> = (event: StoreEvent<D>) => void;
+export type EventBusHandler<D = unknown> = (event: StoreEvent<D>) => void;
 
-type Streamable = {
-  openStream: (listener: StreamListener) => void;
+export type Streamable = {
+  openStream: (listener: StreamListener) => Unsubscribe | void;
   closeStream: (listener: StreamListener) => void;
 }
 
-type Connection = {
-  store: Streamable;
-  listener: StreamListener;
+export type EventBus = {
+  connect: (store: Streamable) => Unsubscribe;
+  disconnect: (store: Streamable) => void;
+  on: <D>(eventDef: EventDef<D>, handler: EventBusHandler<D>) => Unsubscribe;
+  off: <D>(eventDef: EventDef<D>, handler: EventBusHandler<D>) => boolean;
+  destroy: () => void;
 }
 
-export function createEventBus() {
-  const connections: Connection[] = [];
+type Connection = {
+  unsubscribe: Unsubscribe;
+  refCount: number;
+}
+
+export function createEventBus(): EventBus {
+  const connections = new Map<Streamable, Connection>();
   const handlers = new Map<symbol, EventBusHandler[]>();
 
-  const busListener: StreamListener = (event) => {
+  const dispatch: StreamListener = (event) => {
     const eventHandlers = handlers.get(event.id);
     if (!eventHandlers) return;
+
     for (const handler of [...eventHandlers]) {
       try {
         handler(event);
@@ -32,24 +41,69 @@ export function createEventBus() {
     }
   };
 
-  return {
-    connect(store: Streamable): void {
-      store.openStream(busListener);
-      connections.push({ store, listener: busListener });
-    },
+  const disconnect = (store: Streamable): void => {
+    const connection = connections.get(store);
+    if (!connection) return;
 
-    disconnect(store: Streamable): void {
-      const idx = connections.findIndex((c) => c.store === store);
-      if (idx !== -1) {
-        store.closeStream(connections[idx].listener);
-        connections.splice(idx, 1);
-      }
-    },
+    connection.refCount -= 1;
+    if (connection.refCount > 0) return;
 
-    on<D>(eventDef: EventDef<D>, handler: EventBusHandler<D>): void {
-      const list = handlers.get(eventDef.id) ?? [];
-      list.push(handler as EventBusHandler);
-      handlers.set(eventDef.id, list);
-    },
+    connection.unsubscribe();
+    connections.delete(store);
   };
+
+  const connect = (store: Streamable): Unsubscribe => {
+    const existing = connections.get(store);
+    if (existing) {
+      existing.refCount += 1;
+      return () => disconnect(store);
+    }
+
+    const listener: StreamListener = (event) => dispatch(event);
+    const result = store.openStream(listener);
+    const unsubscribe =
+      typeof result === "function"
+        ? result
+        : () => store.closeStream(listener);
+
+    connections.set(store, { unsubscribe, refCount: 1 });
+    return () => disconnect(store);
+  };
+
+  const off = <D>(
+    eventDef: EventDef<D>,
+    handler: EventBusHandler<D>,
+  ): boolean => {
+    const list = handlers.get(eventDef.id);
+    if (!list) return false;
+
+    const index = list.indexOf(handler as EventBusHandler);
+    if (index === -1) return false;
+
+    list.splice(index, 1);
+    if (list.length === 0) handlers.delete(eventDef.id);
+    return true;
+  };
+
+  const on = <D>(
+    eventDef: EventDef<D>,
+    handler: EventBusHandler<D>,
+  ): Unsubscribe => {
+    const list = handlers.get(eventDef.id) ?? [];
+    list.push(handler as EventBusHandler);
+    handlers.set(eventDef.id, list);
+    return () => {
+      off(eventDef, handler);
+    };
+  };
+
+  const destroy = (): void => {
+    for (const connection of connections.values()) {
+      connection.unsubscribe();
+    }
+    connections.clear();
+    handlers.clear();
+  };
+
+  return { connect, disconnect, on, off, destroy };
 }

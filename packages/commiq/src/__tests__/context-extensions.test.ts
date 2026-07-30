@@ -135,10 +135,11 @@ describe("context extensions", () => {
         })
         .addCommandHandler("reaction", () => {
           handled.push("reaction");
-        })
-        .addEventHandler(TestEvent, (ctx) => {
-          ctx.enqueue("reaction");
         });
+
+      store.addEventHandler(TestEvent, (ctx) => {
+        ctx.enqueue("reaction");
+      });
 
       store.queue(createCommand("emit", undefined));
       await store.flush();
@@ -196,8 +197,9 @@ describe("context extensions", () => {
         .useExtension(ext)
         .addCommandHandler("fire", (ctx) => {
           ctx.emit(TestEvent, undefined);
-        })
-        .addEventHandler(TestEvent, () => {});
+        });
+
+      store.addEventHandler(TestEvent, () => {});
 
       store.openStream((event) => {
         if (matchEvent(event, BuiltinEvent.EventHandlingError)) {

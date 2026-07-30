@@ -2,28 +2,45 @@ import { nanoid } from "nanoid";
 import {
   Command,
   CommandContext,
+  CommandDef,
+  CommandHandle,
   CommandHandler,
   CommandHandlerOptions,
+  CommandResult,
+  CommandStatus,
   ContextExtensionDef,
+  DeepReadonly,
   ErrorReporter,
   EventContext,
   EventDef,
   EventHandler,
+  QueueFn,
   StateUpdater,
   StoreErrorReport,
   StoreEvent,
   StoreOptions,
   StreamListener,
-  createEvent,
+  Unsubscribe,
+  createCommand,
+  handledEvent,
+  isCommandDef,
 } from "./types";
 import {
   BuiltinEvent,
   RESERVED_COMMAND_CONTEXT_KEYS,
   RESERVED_EVENT_CONTEXT_KEYS,
 } from "./constants";
+import {
+  CommandSettler,
+  createPendingHandle,
+  createSettledHandle,
+} from "./command-handle";
+import { freezeState } from "./freeze";
 import { reportToConsole, runSafe } from "./run-safe";
 
 const _causalStack: string[] = [];
+
+const noop: Unsubscribe = () => {};
 
 type HandlerEntry<S> = {
   handler: CommandHandler<S>;
@@ -57,17 +74,28 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _interruptControllers = new Map<string, AbortController>();
   private _contextExtensions: ContextExtensionDef<S>[] = [];
   private _pendingEvents: StoreEvent[] = [];
+  private _settlers = new Map<string, CommandSettler>();
+  private _handlerDepth = 0;
   private _active = false;
+  private _destroyed = false;
   private _onError: ErrorReporter;
   private _isReporting = false;
 
   constructor(initialState: S, options?: StoreOptions) {
-    this._state = initialState;
+    this._state = freezeState(initialState);
     this._onError = options?.onError ?? defaultErrorReporter;
   }
 
-  get state(): S {
-    return this._state;
+  readonly queue: QueueFn = (
+    first: Command | CommandDef<string, never>,
+    ...args: unknown[]
+  ): CommandHandle =>
+    this._dispatch(
+      isCommandDef(first) ? createCommand(first.name, args[0]) : first,
+    );
+
+  get state(): DeepReadonly<S> {
+    return this._state as DeepReadonly<S>;
   }
 
   useExtension<T extends Record<string, unknown>>(
@@ -87,11 +115,37 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     this._schedule();
   }
 
+  addCommandHandler<N extends string, D>(
+    def: CommandDef<N, D>,
+    handler: CommandHandler<S, D, Ctx>,
+    options?: CommandHandlerOptions,
+  ): this;
   addCommandHandler<D = unknown>(
     name: string,
     handler: CommandHandler<S, D, Ctx>,
     options?: CommandHandlerOptions,
+  ): this;
+  addCommandHandler(
+    nameOrDef: string | CommandDef<string, never>,
+    handler: CommandHandler<S, never, Ctx>,
+    options?: CommandHandlerOptions,
   ): this {
+    const name = typeof nameOrDef === "string" ? nameOrDef : nameOrDef.name;
+
+    if (this._destroyed) {
+      this._reportDestroyed(`addCommandHandler("${name}")`);
+      return this;
+    }
+
+    if (this._commandHandlers.has(name)) {
+      this._report({
+        error: new Error(
+          `A command handler for "${name}" is already registered and will be replaced`,
+        ),
+        source: "duplicateHandler",
+      });
+    }
+
     this._commandHandlers.set(name, {
       handler: handler as CommandHandler<S>,
       options,
@@ -99,23 +153,51 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     return this;
   }
 
+  removeCommandHandler(nameOrDef: string | CommandDef<string, never>): boolean {
+    const name = typeof nameOrDef === "string" ? nameOrDef : nameOrDef.name;
+    return this._commandHandlers.delete(name);
+  }
+
   addEventHandler<D>(
     eventDef: EventDef<D>,
     handler: EventHandler<S, D, Ctx>,
-  ): this {
+  ): Unsubscribe {
+    if (this._destroyed) {
+      this._reportDestroyed(`addEventHandler("${eventDef.name}")`);
+      return noop;
+    }
+
     const handlers = this._eventHandlers.get(eventDef.id) ?? [];
     handlers.push(handler as EventHandler<S>);
     this._eventHandlers.set(eventDef.id, handlers);
-    return this;
+
+    return () => {
+      this.removeEventHandler(eventDef, handler);
+    };
   }
 
-  queue(command: Command): void {
-    this._active = true;
-    this._enqueue(command, _causalStack[_causalStack.length - 1] ?? null);
-    this._schedule();
+  removeEventHandler<D>(
+    eventDef: EventDef<D>,
+    handler: EventHandler<S, D, Ctx>,
+  ): boolean {
+    const handlers = this._eventHandlers.get(eventDef.id);
+    if (!handlers) return false;
+
+    const index = handlers.indexOf(handler as EventHandler<S>);
+    if (index === -1) return false;
+
+    handlers.splice(index, 1);
+    if (handlers.length === 0) this._eventHandlers.delete(eventDef.id);
+    return true;
   }
 
   flush(): Promise<void> {
+    if (this._handlerDepth > 0) {
+      throw new Error(
+        "flush() cannot be called from inside a command or event handler — await the handle returned by queue() instead",
+      );
+    }
+    if (this._destroyed) return Promise.resolve();
     if (!this._processing && !this._hasWork()) {
       return Promise.resolve();
     }
@@ -124,19 +206,70 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     });
   }
 
-  openStream(listener: StreamListener): void {
+  openStream(listener: StreamListener): Unsubscribe {
+    if (this._destroyed) {
+      this._reportDestroyed("openStream()");
+      return noop;
+    }
     this._streamListeners.add(listener);
+    return () => {
+      this._streamListeners.delete(listener);
+    };
   }
 
   closeStream(listener: StreamListener): void {
     this._streamListeners.delete(listener);
   }
 
+  destroy(): void {
+    if (this._destroyed) return;
+    this._destroyed = true;
+
+    for (const controller of this._interruptControllers.values()) {
+      controller.abort();
+    }
+    this._interruptControllers.clear();
+
+    this._queue.length = 0;
+    this._pendingEvents.length = 0;
+    this._streamListeners.clear();
+    this._eventHandlers.clear();
+    this._commandHandlers.clear();
+    this._contextExtensions.length = 0;
+
+    for (const settler of [...this._settlers.values()]) {
+      this._settleCommand(settler.command, "discarded");
+    }
+    this._settlers.clear();
+
+    for (const resolve of this._flushResolvers.splice(0)) {
+      resolve();
+    }
+  }
+
+  private _dispatch(command: Command): CommandHandle {
+    if (this._destroyed) {
+      this._reportDestroyed(`queue("${command.name}")`, command);
+      return createSettledHandle({ status: "discarded", command });
+    }
+
+    this._active = true;
+    const handle = this._enqueue(
+      command,
+      _causalStack[_causalStack.length - 1] ?? null,
+    );
+    this._schedule();
+    return handle;
+  }
+
   private _hasWork(): boolean {
     return this._queue.length > 0 || this._pendingEvents.length > 0;
   }
 
-  private _enqueue(command: Command, fallbackCausedBy: string | null): void {
+  private _enqueue(
+    command: Command,
+    fallbackCausedBy: string | null,
+  ): CommandHandle {
     const queued: Command = {
       ...command,
       correlationId: nanoid(),
@@ -150,6 +283,24 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     }
 
     this._queue.push(queued);
+
+    const { handle, settler } = createPendingHandle(queued);
+    this._settlers.set(queued.correlationId, settler);
+    return handle;
+  }
+
+  private _settleCommand(
+    command: Command,
+    status: CommandStatus,
+    error?: unknown,
+  ): void {
+    const settler = this._settlers.get(command.correlationId);
+    if (!settler) return;
+    this._settlers.delete(command.correlationId);
+
+    const result: CommandResult =
+      status === "failed" ? { status, command, error } : { status, command };
+    settler.settle(result);
   }
 
   private _interruptDuplicates(name: string): void {
@@ -167,13 +318,14 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
           phase: "queued" as const,
         }),
       );
+      this._settleCommand(command, "interrupted");
     }
 
     this._interruptControllers.get(name)?.abort();
   }
 
   private _schedule(): void {
-    if (this._processing) return;
+    if (this._processing || this._destroyed) return;
     void this._processQueue().catch((error: unknown) => {
       this._report({ error, source: "queueProcessor" });
     });
@@ -191,6 +343,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   }
 
   private _publish(event: StoreEvent): void {
+    if (this._destroyed) return;
     this._notifyStreamListeners(event);
     this._pendingEvents.push(event);
   }
@@ -198,9 +351,9 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _applyState(next: S): void {
     const prev = this._state;
     if (next === prev) return;
-    this._state = next;
+    this._state = freezeState(next);
     this._publish(
-      this._createEvent(BuiltinEvent.StateChanged, { prev, next }),
+      this._createEvent(BuiltinEvent.StateChanged, { prev, next: this._state }),
     );
   }
 
@@ -210,6 +363,14 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     } catch (error) {
       reportToConsole("[commiq] onError reporter threw", error);
     }
+  }
+
+  private _reportDestroyed(operation: string, command?: Command): void {
+    this._report({
+      error: new Error(`${operation} called after the store was destroyed`),
+      source: "destroyedStore",
+      command,
+    });
   }
 
   private _reportUnhandled(report: StoreErrorReport): void {
@@ -312,6 +473,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
       this._publish(
         this._createEvent(BuiltinEvent.InvalidCommand, { command }),
       );
+      this._settleCommand(command, "invalid");
       this._currentCorrelationId = null;
       await this._dispatchPending();
       return;
@@ -338,7 +500,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
     try {
       this._applyCommandExtensions(invocation.ctx, command);
-      await entry.handler(invocation.ctx, command);
+      await this._invokeCommandHandler(entry, invocation.ctx, command);
 
       if (controller?.signal.aborted) {
         this._finishInterrupted(entry, command, prevState);
@@ -361,16 +523,31 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     }
   }
 
+  private _invokeCommandHandler(
+    entry: HandlerEntry<S>,
+    ctx: CommandContext<S>,
+    command: Command,
+  ): void | Promise<void> {
+    this._handlerDepth += 1;
+    try {
+      return entry.handler(ctx, command);
+    } finally {
+      this._handlerDepth -= 1;
+    }
+  }
+
   private _finishHandled(entry: HandlerEntry<S>, command: Command): void {
     this._publish(
       this._createEvent(BuiltinEvent.CommandHandled, { command }),
     );
 
-    if (!entry.options?.notify) return;
-    const notifyEventDef = createEvent<{ command: Command }>(
-      `${command.name}:handled`,
-    );
-    this._publish(this._createEvent(notifyEventDef, { command }));
+    if (entry.options?.notify) {
+      this._publish(
+        this._createEvent(handledEvent(command.name), { command }),
+      );
+    }
+
+    this._settleCommand(command, "handled");
   }
 
   private _finishInterrupted(
@@ -387,6 +564,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
         phase: "running" as const,
       }),
     );
+    this._settleCommand(command, "interrupted");
   }
 
   private _failCommand(command: Command, error: unknown): void {
@@ -394,6 +572,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     this._publish(
       this._createEvent(BuiltinEvent.CommandHandlingError, { command, error }),
     );
+    this._settleCommand(command, "failed", error);
   }
 
   private _createInterruptController(name: string): AbortController {
@@ -423,12 +602,12 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     };
 
     const ctx: CommandContext<S> = {
-      get state(): S {
-        return store._state;
+      get state(): DeepReadonly<S> {
+        return store.state;
       },
       setState: (next: S | StateUpdater<S>) => {
         if (isUnusable("setState")) return;
-        store._applyState(isStateUpdater(next) ? next(store._state) : next);
+        store._applyState(isStateUpdater(next) ? next(store.state) : next);
       },
       emit: <D>(eventDef: EventDef<D>, data: D) => {
         if (isUnusable("emit")) return;
@@ -448,12 +627,10 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
   private _createEventContext(): EventContext<S> {
     const store = this;
     return {
-      get state(): S {
-        return store._state;
+      get state(): DeepReadonly<S> {
+        return store.state;
       },
-      queue: (command: Command) => {
-        store._enqueue(command, null);
-      },
+      queue: store.queue,
     };
   }
 
@@ -486,7 +663,7 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
 
       for (const handler of snapshot) {
         try {
-          await handler(eventCtx, event);
+          await this._invokeEventHandler(handler, eventCtx, event);
         } catch (error) {
           this._failEvent(event, error);
         }
@@ -496,6 +673,19 @@ export class StoreImpl<S, Ctx extends Record<string, unknown> = {}> {
     } finally {
       await this._runAfterHooks("afterEvent");
       this._currentCorrelationId = prevCorrelationId;
+    }
+  }
+
+  private _invokeEventHandler(
+    handler: EventHandler<S>,
+    ctx: EventContext<S>,
+    event: StoreEvent,
+  ): void | Promise<void> {
+    this._handlerDepth += 1;
+    try {
+      return handler(ctx, event);
+    } finally {
+      this._handlerDepth -= 1;
     }
   }
 
