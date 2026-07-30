@@ -83,7 +83,7 @@ describe("withDefer", () => {
     const order: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+    store.useExtension(withDefer<State>(store)).addCommandHandler("work", (ctx) => {
       ctx.defer(() => {
         order.push("deferred-1");
       });
@@ -105,7 +105,7 @@ describe("withDefer", () => {
     const cleanedUp = vi.fn();
 
     const store = createStore<State>({ value: 0 }, { onError: () => {} });
-    store.useExtension(withDefer<State>()).addCommandHandler("fail", (ctx) => {
+    store.useExtension(withDefer<State>(store)).addCommandHandler("fail", (ctx) => {
       ctx.defer(cleanedUp);
       throw new Error("handler error");
     });
@@ -123,7 +123,7 @@ describe("withDefer", () => {
       { value: 0 },
       { onError: (report) => reports.push(report) },
     );
-    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+    store.useExtension(withDefer<State>(store)).addCommandHandler("work", (ctx) => {
       ctx.defer(() => {
         throw new Error("deferred error");
       });
@@ -147,7 +147,7 @@ describe("withDefer", () => {
       { value: 0 },
       { onError: (report) => reports.push(report) },
     );
-    const extended = store.useExtension(withDefer<State>());
+    const extended = store.useExtension(withDefer<State>(store));
 
     extended.addCommandHandler("fire", (ctx) => {
       ctx.emit(TestEvent, undefined);
@@ -170,7 +170,7 @@ describe("withDefer", () => {
     const results: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    store.useExtension(withDefer<State>()).addCommandHandler("work", (ctx) => {
+    store.useExtension(withDefer<State>(store)).addCommandHandler("work", (ctx) => {
       ctx.defer(async () => {
         await Promise.resolve();
         results.push("async-cleanup");
@@ -188,7 +188,7 @@ describe("withDefer", () => {
     const calls: string[] = [];
 
     const store = createStore<State>({ value: 0 });
-    const extended = store.useExtension(withDefer<State>());
+    const extended = store.useExtension(withDefer<State>(store));
 
     extended.addCommandHandler("first", (ctx) => {
       ctx.defer(() => {
@@ -206,14 +206,13 @@ describe("withDefer", () => {
     expect(calls).toEqual(["first-defer", "second-handler"]);
   });
 
-  it("keeps deferred callbacks per store when one extension is shared", async () => {
-    const shared = withDefer<State>();
+  it("keeps deferred callbacks per store when a slower store is still in flight", async () => {
     const calls: string[] = [];
 
     const storeA = createStore<State>({ value: 0 });
     const storeB = createStore<State>({ value: 0 });
 
-    storeA.useExtension(shared).addCommandHandler("hold", (ctx) => {
+    storeA.useExtension(withDefer<State>(storeA)).addCommandHandler("hold", (ctx) => {
       ctx.defer(() => {
         calls.push("a-defer");
       });
@@ -222,7 +221,7 @@ describe("withDefer", () => {
       });
     });
 
-    storeB.useExtension(shared).addCommandHandler("quick", () => {
+    storeB.useExtension(withDefer<State>(storeB)).addCommandHandler("quick", () => {
       calls.push("b-handler");
     });
 
@@ -238,11 +237,76 @@ describe("withDefer", () => {
     expect(calls).toEqual(["b-handler", "a-defer"]);
   });
 
+  it("keeps deferred callbacks per store when commands complete in FIFO order", async () => {
+    const calls: string[] = [];
+
+    const storeA = createStore<State>({ value: 0 });
+    const storeB = createStore<State>({ value: 0 });
+
+    storeA.useExtension(withDefer<State>(storeA)).addCommandHandler("a", (ctx) => {
+      ctx.defer(() => {
+        calls.push("a-defer");
+      });
+      return new Promise<void>((resolve) => {
+        setTimeout(resolve, 5);
+      });
+    });
+
+    storeB.useExtension(withDefer<State>(storeB)).addCommandHandler("b", (ctx) => {
+      ctx.defer(() => {
+        calls.push("b-defer");
+      });
+      return new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
+    });
+
+    const first = storeA.queue(createCommand("a", undefined));
+    const second = storeB.queue(createCommand("b", undefined));
+
+    await first;
+    await storeA.flush();
+
+    expect(calls).toEqual(["a-defer"]);
+
+    await second;
+    await storeB.flush();
+
+    expect(calls).toEqual(["a-defer", "b-defer"]);
+  });
+
+  it("reports on the error channel when a bound extension is reused on another store", async () => {
+    const reports: StoreErrorReport[] = [];
+    const deferred = vi.fn();
+
+    const storeA = createStore<State>({ value: 0 });
+    const storeB = createStore<State>(
+      { value: 1 },
+      { onError: (report) => reports.push(report) },
+    );
+    const defer = withDefer<State>(storeA);
+
+    storeA.useExtension(defer);
+    storeB.useExtension(defer).addCommandHandler("work", (ctx) => {
+      ctx.defer(deferred);
+    });
+
+    storeB.queue(createCommand("work", undefined));
+    await storeB.flush();
+
+    expect(deferred).not.toHaveBeenCalled();
+    expect(reports).toHaveLength(1);
+    expect(reports[0].source).toBe("contextExtension");
+    expect((reports[0].error as Error).message).toContain(
+      "registered on more than one store",
+    );
+  });
+
   it("drops pending callbacks when the extension is removed", async () => {
     const deferred = vi.fn();
 
     const store = createStore<State>({ value: 0 });
-    const defer = withDefer<State>();
+    const defer = withDefer<State>(store);
 
     store.useExtension(defer).addCommandHandler("work", async (ctx) => {
       ctx.defer(deferred);

@@ -44,7 +44,7 @@ registered before the first command is queued.
 | `withPatch()` | `patch(partial)` | commands only | Shallow-merge partial state updates |
 | `withGuard(options?)` | `guard(condition, message)` | commands only | Precondition check — **throws `GuardError`** on failure, which aborts the handler and is reported as `commandHandlingError` |
 | `withAssert(options?)` | `assert(condition, message)` | commands + events | Invariant check — throws `AssertionError` (message prefixed with `Assertion failed:`); disable with `{ enabled: false }` |
-| `withDefer()` | `defer(fn)` | commands + events | Cleanup callbacks that run after the handler completes |
+| `withDefer(target)` | `defer(fn)` | commands + events | Cleanup callbacks that run after the handler completes |
 | `withInjector()(deps)` | `deps` | commands + events | Typed dependency injection via property access |
 | `withLogger(options?)` | `log(level, message)` | commands + events | Structured logging with configurable handler |
 | `withMeta()` | `meta` | commands + events | Command/event metadata (name, correlationId, causedBy, timestamp) |
@@ -72,15 +72,30 @@ Options: `maxEntries` (default `10`, minimum `1`). A command that never calls
 `setState` records nothing, so `previous` never degrades into a duplicate of
 `ctx.state`.
 
-`withHistory` opens a stream on the store it observes, so it takes that store (or any
-`ExtensionTarget<S>` — anything exposing `state` and `openStream`, including a
-`SealedStore`) as its first argument. One call binds one target, which keeps buffers
-per store:
+## Target-bound extensions
+
+`withDefer` and `withHistory` are the two extensions that retain per-store state —
+pending callbacks and recorded snapshots. Both take the store they belong to as their
+first argument, typed as `ExtensionTarget<S>` (anything exposing `state` and
+`openStream`, so a `StoreImpl` or a `SealedStore`). One call binds one store:
 
 ```ts
-storeA.useExtension(withHistory<State>(storeA));
-storeB.useExtension(withHistory<State>(storeB));
+storeA.useExtension(withDefer<State>(storeA)).useExtension(withHistory<State>(storeA));
+storeB.useExtension(withDefer<State>(storeB)).useExtension(withHistory<State>(storeB));
 ```
+
+Binding is what makes the state correct rather than merely likely. Stores process
+commands sequentially but *independently*, so two stores sharing one extension would
+interleave their invocations — and core's `afterCommand` / `afterEvent` hooks receive no
+argument identifying which store is closing. One extension per store removes the
+ambiguity entirely.
+
+Reusing a bound extension on a second store is therefore a mistake, and `withDefer`
+reports it instead of silently crossing queues: the offending store's context is given
+an inert `defer` that drops callbacks, and the error surfaces on that store's error
+channel with `source: "contextExtension"`. All stateless extensions
+(`withPatch`, `withGuard`, `withAssert`, `withInjector`, `withLogger`, `withMeta`) hold
+no per-store state and are safe to share across any number of stores.
 
 ## Cleanup
 
@@ -119,10 +134,12 @@ retains state or subscriptions should expose `destroy?()` and take its target
 explicitly, so one call yields one store's worth of state:
 
 ```ts
-const withCounter = <S>(): ContextExtensionDef<S, { count: () => number }> => {
+const withCounter = <S>(
+  target: ExtensionTarget<S>,
+): ContextExtensionDef<S, { count: () => number }> => {
   let calls = 0;
   return {
-    command: () => ({ count: () => (calls += 1) }),
+    command: (ctx) => ({ count: () => (ctx.state === target.state ? ++calls : 0) }),
     destroy: () => { calls = 0; },
   };
 };
